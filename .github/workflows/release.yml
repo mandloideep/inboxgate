@@ -1,0 +1,381 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Canonical pre-1.0 version, such as v0.1.0
+        required: true
+        type: string
+      expected_sha:
+        description: Full lowercase main commit SHA to release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  checks: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: inboxgate-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Verify and publish immutable release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      REPOSITORY: ${{ github.repository }}
+      WORKSPACE_PATH: ${{ github.workspace }}
+    steps:
+      - name: Reject an unauthorized or stale dispatch
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+        with:
+          script: |
+            const version = process.env.RELEASE_VERSION;
+            const expected = process.env.EXPECTED_SHA;
+            if (version.length > 32 || !/^v0\.[1-9][0-9]*\.(0|[1-9][0-9]*)$/.test(version)) {
+              core.setFailed("version must be canonical v0.<minor>.<patch> with a nonzero minor");
+              return;
+            }
+            if (!/^[0-9a-f]{40}$/.test(expected)) {
+              core.setFailed("expected_sha must be a full lowercase commit SHA");
+              return;
+            }
+            if (process.env.DISPATCH_ACTOR !== process.env.REPOSITORY_OWNER) {
+              core.setFailed("only the repository owner may dispatch a release");
+              return;
+            }
+            if (process.env.TRIGGERING_ACTOR !== process.env.REPOSITORY_OWNER) {
+              core.setFailed("only the repository owner may trigger or rerun a release");
+              return;
+            }
+            if (process.env.RUN_ATTEMPT !== "1") {
+              core.setFailed("release workflow reruns are forbidden");
+              return;
+            }
+            if (process.env.DISPATCH_REF !== "refs/heads/main") {
+              core.setFailed("releases must be dispatched from refs/heads/main");
+              return;
+            }
+            if (process.env.DISPATCH_SHA !== expected) {
+              core.setFailed("the workflow SHA does not match expected_sha");
+              return;
+            }
+            const {owner, repo} = context.repo;
+            const main = await github.rest.git.getRef({owner, repo, ref: "heads/main"});
+            if (main.data.object.sha !== expected) {
+              core.setFailed("expected_sha is no longer the current main head");
+              return;
+            }
+            const checks = await github.rest.checks.listForRef({
+              owner,
+              repo,
+              ref: expected,
+              check_name: "ci-required",
+              status: "completed",
+              filter: "latest",
+              per_page: 100,
+            });
+            const completed = checks.data.check_runs
+              .filter((check) => check.status === "completed")
+              .sort((a, b) => Date.parse(b.completed_at) - Date.parse(a.completed_at));
+            if (completed.length === 0 || completed[0].conclusion !== "success") {
+              core.setFailed("the latest completed ci-required check for expected_sha is not successful");
+              return;
+            }
+            const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
+            if (releases.some((release) => release.tag_name === version)) {
+              core.setFailed("a draft, published release, or immutable release reservation already uses this version");
+              return;
+            }
+            try {
+              await github.rest.git.getRef({owner, repo, ref: `tags/${version}`});
+              core.setFailed("a tag already uses this version");
+              return;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+      - name: Check out the exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up exact Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+          check-latest: false
+          cache: false
+
+      - name: Verify source before building
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/release validate-metadata --version "$RELEASE_VERSION" --commit "$EXPECTED_SHA"
+          test "$(go env GOVERSION)" = "go1.26.6"
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          remote_main="$(git ls-remote --exit-code "https://github.com/${REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
+          test "$remote_main" = "$EXPECTED_SHA"
+
+      - name: Run repository checks from fresh source
+        run: make check
+
+      - name: Confirm checks left the tracked tree unchanged
+        run: git diff --exit-code
+
+      - name: Build every platform twice with isolated caches
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOCACHE="${WORKSPACE_PATH}/.release/cache-first" go run ./cmd/release build-binaries --root . --output .release/first --version "$RELEASE_VERSION" --commit "$EXPECTED_SHA"
+          GOCACHE="${WORKSPACE_PATH}/.release/cache-second" go run ./cmd/release build-binaries --root . --output .release/second --version "$RELEASE_VERSION" --commit "$EXPECTED_SHA"
+
+      - name: Execute native release binary before packaging
+        run: go run ./cmd/release validate-native --output .release/first --version "$RELEASE_VERSION" --commit "$EXPECTED_SHA"
+
+      - name: Package and compare deterministic archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/release package --root . --output .release/first --version "$RELEASE_VERSION" --commit "$EXPECTED_SHA"
+          go run ./cmd/release package --root . --output .release/second --version "$RELEASE_VERSION" --commit "$EXPECTED_SHA"
+          go run ./cmd/release compare --first .release/first --second .release/second
+
+      - name: Acquire authenticated Syft release binary
+        run: go run ./cmd/release acquire-syft --output .release/tools/syft
+
+      - name: Generate and validate SPDX SBOM
+        id: sbom
+        shell: bash
+        env:
+          SYFT_COMMAND: .release/tools/syft
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+          SYFT_CACHE_DIR: ${{ runner.temp }}/syft-cache
+        run: |
+          set -euo pipefail
+          version_number="${RELEASE_VERSION#v}"
+          sbom_path=".release/first/assets/inboxgate_${version_number}_sbom.spdx.json"
+          test "$("$SYFT_COMMAND" version | awk '/^Version:/ {print $2}')" = "1.51.0"
+          "$SYFT_COMMAND" scan "dir:${WORKSPACE_PATH}/.release/first/binaries" \
+            --source-name InboxGate \
+            --source-version "$RELEASE_VERSION" \
+            --config .github/syft.yaml \
+            --output "spdx-json=${sbom_path}"
+          printf 'path=%s\n' "$sbom_path" >> "$GITHUB_OUTPUT"
+          go run ./cmd/release validate-sbom --path "$sbom_path" --version "$RELEASE_VERSION" --workspace "$WORKSPACE_PATH"
+          go run ./cmd/release checksums --assets .release/first/assets
+          go run ./cmd/release validate-assets --assets .release/first/assets --version "$RELEASE_VERSION" --workspace "$WORKSPACE_PATH"
+
+      - name: Attest release payload provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: .release/first/assets/*
+
+      - name: Attest archive SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            .release/first/assets/*.tar.gz
+            .release/first/assets/*.zip
+          sbom-path: ${{ steps.sbom.outputs.path }}
+
+      - name: Recheck source and version before creating draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/release validate-metadata --version "$RELEASE_VERSION" --commit "$EXPECTED_SHA"
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          remote_main="$(git ls-remote --exit-code "https://github.com/${REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
+          test "$remote_main" = "$EXPECTED_SHA"
+          git diff --exit-code
+
+      - name: Create verified release draft
+        id: draft
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+            const crypto = require("crypto");
+            const {owner, repo} = context.repo;
+            const version = process.env.RELEASE_VERSION;
+            const expected = process.env.EXPECTED_SHA;
+            const main = await github.rest.git.getRef({owner, repo, ref: "heads/main"});
+            if (main.data.object.sha !== expected) throw new Error("main changed before draft creation");
+            const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
+            if (releases.some((release) => release.tag_name === version)) throw new Error("release version already exists");
+            try {
+              await github.rest.git.getRef({owner, repo, ref: `tags/${version}`});
+              throw new Error("release tag already exists");
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            await github.rest.git.createRef({owner, repo, ref: `refs/tags/${version}`, sha: expected});
+            const reservedTag = await github.rest.git.getRef({owner, repo, ref: `tags/${version}`});
+            if (reservedTag.data.object.type !== "commit" || reservedTag.data.object.sha !== expected) {
+              throw new Error("reserved release tag does not target expected_sha");
+            }
+            const release = await github.rest.repos.createRelease({
+              owner,
+              repo,
+              tag_name: version,
+              target_commitish: expected,
+              name: version,
+              draft: true,
+              prerelease: false,
+              generate_release_notes: true,
+            });
+            const assetsDir = path.join(process.env.GITHUB_WORKSPACE, ".release", "first", "assets");
+            const names = fs.readdirSync(assetsDir).sort();
+            if (names.length !== 8) throw new Error(`local asset count ${names.length}, want 8`);
+            const local = {};
+            for (const name of names) {
+              const filePath = path.join(assetsDir, name);
+              const data = fs.readFileSync(filePath);
+              local[name] = {size: data.length, digest: crypto.createHash("sha256").update(data).digest("hex")};
+              await github.request("POST /repos/{owner}/{repo}/releases/{release_id}/assets{?name,label}", {
+                owner,
+                repo,
+                release_id: release.data.id,
+                name,
+                headers: {"content-type": "application/octet-stream", "content-length": data.length},
+                data,
+              });
+            }
+            const remote = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner,
+              repo,
+              release_id: release.data.id,
+              per_page: 100,
+            });
+            if (remote.length !== 8) throw new Error(`remote asset count ${remote.length}, want 8`);
+            for (const asset of remote) {
+              const expectedAsset = local[asset.name];
+              if (!expectedAsset || asset.size !== expectedAsset.size) throw new Error(`remote metadata mismatch for ${asset.name}`);
+              const response = await github.request("GET /repos/{owner}/{repo}/releases/assets/{asset_id}", {
+                owner,
+                repo,
+                asset_id: asset.id,
+                headers: {accept: "application/octet-stream"},
+              });
+              const downloaded = Buffer.from(response.data);
+              const digest = crypto.createHash("sha256").update(downloaded).digest("hex");
+              if (downloaded.length !== expectedAsset.size || digest !== expectedAsset.digest) {
+                throw new Error(`downloaded asset mismatch for ${asset.name}`);
+              }
+            }
+            core.setOutput("release_id", String(release.data.id));
+
+      - name: Recheck source immediately before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          remote_main="$(git ls-remote --exit-code "https://github.com/${REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
+          test "$remote_main" = "$EXPECTED_SHA"
+          git diff --exit-code
+
+      - name: Publish once and verify immutable state
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+            const crypto = require("crypto");
+            const {owner, repo} = context.repo;
+            const releaseId = Number(process.env.RELEASE_ID);
+            const version = process.env.RELEASE_VERSION;
+            const expected = process.env.EXPECTED_SHA;
+            const versionNumber = version.slice(1);
+            const expectedNames = [
+              `inboxgate_${versionNumber}_darwin_amd64.tar.gz`,
+              `inboxgate_${versionNumber}_darwin_arm64.tar.gz`,
+              `inboxgate_${versionNumber}_linux_amd64.tar.gz`,
+              `inboxgate_${versionNumber}_linux_arm64.tar.gz`,
+              `inboxgate_${versionNumber}_windows_amd64.zip`,
+              `inboxgate_${versionNumber}_windows_arm64.zip`,
+              `inboxgate_${versionNumber}_sbom.spdx.json`,
+              "SHA256SUMS",
+            ].sort();
+            if (!Number.isSafeInteger(releaseId)) throw new Error("invalid release id");
+            const assetsDir = path.join(process.env.GITHUB_WORKSPACE, ".release", "first", "assets");
+            const local = {};
+            for (const name of fs.readdirSync(assetsDir).sort()) {
+              const data = fs.readFileSync(path.join(assetsDir, name));
+              local[name] = {size: data.length, digest: crypto.createHash("sha256").update(data).digest("hex")};
+            }
+            if (Object.keys(local).sort().join("\n") !== expectedNames.join("\n")) throw new Error("local asset set changed before publication");
+            const downloadAndVerify = async (asset) => {
+              const expectedAsset = local[asset.name];
+              if (!expectedAsset || asset.size !== expectedAsset.size) throw new Error(`remote metadata mismatch for ${asset.name}`);
+              const response = await github.request("GET /repos/{owner}/{repo}/releases/assets/{asset_id}", {
+                owner,
+                repo,
+                asset_id: asset.id,
+                headers: {accept: "application/octet-stream"},
+              });
+              const downloaded = Buffer.from(response.data);
+              const digest = crypto.createHash("sha256").update(downloaded).digest("hex");
+              if (downloaded.length !== expectedAsset.size || digest !== expectedAsset.digest) {
+                throw new Error(`downloaded asset mismatch for ${asset.name}`);
+              }
+            };
+            const draftAssets = await github.paginate(github.rest.repos.listReleaseAssets, {owner, repo, release_id: releaseId, per_page: 100});
+            if (draftAssets.map((asset) => asset.name).sort().join("\n") !== expectedNames.join("\n")) throw new Error("draft asset set changed before publication");
+            for (const asset of draftAssets) await downloadAndVerify(asset);
+
+            const main = await github.rest.git.getRef({owner, repo, ref: "heads/main"});
+            if (main.data.object.sha !== expected) throw new Error("main changed before publication");
+            const tag = await github.rest.git.getRef({owner, repo, ref: `tags/${version}`});
+            let target = tag.data.object;
+            if (target.type === "tag") {
+              const annotated = await github.rest.git.getTag({owner, repo, tag_sha: target.sha});
+              target = annotated.data.object;
+            }
+            if (target.type !== "commit" || target.sha !== expected) throw new Error("reserved release tag target changed before publication");
+            const draft = await github.rest.repos.getRelease({owner, repo, release_id: releaseId});
+            if (!draft.data.draft || draft.data.tag_name !== version || draft.data.target_commitish !== expected) throw new Error("draft identity changed before publication");
+            await github.rest.repos.updateRelease({owner, repo, release_id: releaseId, draft: false});
+            let published;
+            for (let attempt = 0; attempt < 12; attempt++) {
+              published = await github.rest.repos.getRelease({owner, repo, release_id: releaseId});
+              if (!published.data.draft && published.data.immutable === true) break;
+              await new Promise((resolve) => setTimeout(resolve, 5000));
+            }
+            if (published.data.draft || published.data.immutable !== true || published.data.tag_name !== version) {
+              throw new Error("published release is not immutable with the requested version");
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {owner, repo, release_id: releaseId, per_page: 100});
+            if (assets.map((asset) => asset.name).sort().join("\n") !== expectedNames.join("\n")) {
+              throw new Error("published asset set is incomplete");
+            }
+            for (const asset of assets) await downloadAndVerify(asset);
+            const publishedTag = await github.rest.git.getRef({owner, repo, ref: `tags/${version}`});
+            target = publishedTag.data.object;
+            if (target.type === "tag") {
+              const annotated = await github.rest.git.getTag({owner, repo, tag_sha: target.sha});
+              target = annotated.data.object;
+            }
+            if (target.type !== "commit" || target.sha !== expected) throw new Error("release tag target does not match expected_sha");

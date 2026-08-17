@@ -2,12 +2,14 @@ GO ?= go
 GOVULNCHECK_VERSION := v1.7.0
 TOOLS_BIN := $(CURDIR)/.tools/govulncheck-$(GOVULNCHECK_VERSION)/bin
 GOVULNCHECK := $(TOOLS_BIN)/govulncheck
+ACTIONLINT_VERSION := v1.7.12
+ACTIONLINT_BIN := $(CURDIR)/.tools/actionlint-$(ACTIONLINT_VERSION)/bin
+ACTIONLINT := $(ACTIONLINT_BIN)/actionlint
 BUILD_DIR := $(CURDIR)/.build
 
 export GOCACHE := $(CURDIR)/.cache/go-build
-export GOBIN := $(TOOLS_BIN)
 
-.PHONY: build check fmt-check help test test-race tidy-check verify vet vuln
+.PHONY: actionlint build check fmt-check help release-contract test test-race tidy-check verify vet vuln
 
 help:
 	@printf '%s\n' 'Targets:'
@@ -16,6 +18,8 @@ help:
 	@printf '%s\n' '  test        Run unit and integration tests'
 	@printf '%s\n' '  test-race   Run tests with the race detector'
 	@printf '%s\n' '  vuln        Scan reachable Go code for known vulnerabilities'
+	@printf '%s\n' '  actionlint  Validate every GitHub Actions workflow'
+	@printf '%s\n' '  release-contract  Exercise pinned release construction and SBOM generation on Linux amd64'
 
 fmt-check:
 	@unformatted="$$(gofmt -l $$(find . -type f -name '*.go' -not -path './.git/*' -not -path './.cache/*' -not -path './.tools/*'))"; \
@@ -46,13 +50,42 @@ test-race:
 
 $(GOVULNCHECK):
 	mkdir -p $(TOOLS_BIN)
-	$(GO) install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	GOBIN=$(TOOLS_BIN) $(GO) install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 vuln: $(GOVULNCHECK)
 	$(GOVULNCHECK) ./...
+
+$(ACTIONLINT):
+	mkdir -p $(ACTIONLINT_BIN)
+	GOBIN=$(ACTIONLINT_BIN) $(GO) install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+
+actionlint: $(ACTIONLINT)
+	$(ACTIONLINT) $$(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
+
+release-contract:
+	@set -eu; \
+	if [ "$$($(GO) env GOOS)/$$($(GO) env GOARCH)" != "linux/amd64" ]; then \
+		printf '%s\n' 'Real Syft release contract runs on canonical Linux amd64 CI; synthetic acquisition tests run on this host.'; \
+		exit 0; \
+	fi; \
+	contract_dir="$$(mktemp -d /tmp/inboxgate-release-contract.XXXXXX)"; \
+	trap 'rm -rf "$$contract_dir"' EXIT INT TERM; \
+	contract_version='v0.1.0'; \
+	contract_commit='0000000000000000000000000000000000000000'; \
+	$(GO) run ./cmd/release acquire-syft --output "$$contract_dir/tools/syft"; \
+	GOCACHE="$$contract_dir/cache-first" $(GO) run ./cmd/release build-binaries --root . --output "$$contract_dir/first" --version "$$contract_version" --commit "$$contract_commit"; \
+	GOCACHE="$$contract_dir/cache-second" $(GO) run ./cmd/release build-binaries --root . --output "$$contract_dir/second" --version "$$contract_version" --commit "$$contract_commit"; \
+	$(GO) run ./cmd/release validate-native --output "$$contract_dir/first" --version "$$contract_version" --commit "$$contract_commit"; \
+	$(GO) run ./cmd/release package --root . --output "$$contract_dir/first" --version "$$contract_version" --commit "$$contract_commit"; \
+	$(GO) run ./cmd/release package --root . --output "$$contract_dir/second" --version "$$contract_version" --commit "$$contract_commit"; \
+	$(GO) run ./cmd/release compare --first "$$contract_dir/first" --second "$$contract_dir/second"; \
+	SYFT_CHECK_FOR_APP_UPDATE=false SYFT_CACHE_DIR="$$contract_dir/syft-cache" "$$contract_dir/tools/syft" scan "dir:$$contract_dir/first/binaries" --source-name InboxGate --source-version "$$contract_version" --config .github/syft.yaml --output "spdx-json=$$contract_dir/first/assets/inboxgate_0.1.0_sbom.spdx.json"; \
+	$(GO) run ./cmd/release validate-sbom --path "$$contract_dir/first/assets/inboxgate_0.1.0_sbom.spdx.json" --version "$$contract_version" --workspace "$$contract_dir"; \
+	$(GO) run ./cmd/release checksums --assets "$$contract_dir/first/assets"; \
+	$(GO) run ./cmd/release validate-assets --assets "$$contract_dir/first/assets" --version "$$contract_version" --workspace "$$contract_dir"
 
 build:
 	mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(BUILD_DIR)/inboxgate ./cmd/inboxgate
 
-check: fmt-check tidy-check verify vet test test-race vuln build
+check: fmt-check tidy-check verify vet test test-race vuln actionlint release-contract build

@@ -8,7 +8,7 @@ Email synchronization, persistence, MCP, OAuth, and deployment are intentionally
 
 ## Quick start
 
-InboxGate requires Go 1.26.5.
+InboxGate requires Go 1.26.6.
 
 ```sh
 make check
@@ -17,6 +17,7 @@ go run ./cmd/inboxgate help
 ```
 
 Development builds print `inboxgate dev`.
+Release builds print the canonical version and full source commit.
 
 ## Product boundaries
 
@@ -40,6 +41,7 @@ Future web work may use `web/apps/console`, `web/apps/site`, and `web/packages/u
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the issue-first workflow and required checks.
 Use [SUPPORT.md](SUPPORT.md) for help and [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Release operators and consumers should follow [docs/releases.md](docs/releases.md) for publication gates, checksums, and provenance verification.
 
 ## License
 
