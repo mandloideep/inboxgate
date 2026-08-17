@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: release supply-chain update for issue #4.
+Status: configuration parser update for issue #6.
 
 ## Security objectives
 
@@ -36,6 +36,21 @@ Secrets could leak through committed files, examples, logs, errors, process argu
 Configuration may name secret-bearing environment variables but may not contain their values.
 Tests use synthetic values, provider credentials are stored with versioned authenticated encryption, and all operator-visible output is redacted.
 
+Configuration schema v1 accepts environment-variable names only in fields ending in `_env`.
+The validation path checks the name grammar but never looks up the named value, never substitutes environment data into YAML, and never reports a rejected scalar or list value.
+
+### Malicious or mistaken configuration
+
+An operator-provided YAML file could exploit parser complexity, hide a duplicate or misspelled limit, target a non-file object, or place secret data in a name-only field.
+Validation opens the requested target and requires the resolved object to be a regular file, so a symlink to a regular file is permitted while directories, devices, sockets, and FIFOs are rejected.
+The reader consumes at most 65,537 bytes and rejects content above 65,536 bytes.
+Before typed decoding, the parser requires one UTF-8 mapping document and rejects document-end markers, directives, anchors, aliases, merge keys, custom tags, nulls, non-string keys, duplicate keys, unknown keys, decoded scalar controls, and noncanonical scalar forms.
+Mappings and sequences are limited to depth 8 and the YAML tree is limited to 4,096 nodes.
+Typed validation then applies explicit field bounds and cross-field relationships in stable field-path order.
+Diagnostics contain locations and generic reasons but no rejected scalar value, list content, file content, or named environment-variable value.
+The parser has no network client, arbitrary unmarshalling hook, include, template, substitution, capability activation, or filesystem-write path.
+The release command embeds the Go standard library timezone database so IANA validation remains available without a host zoneinfo installation or another dependency.
+
 ### Excess Gmail authority
 
 An overbroad OAuth scope or a generic Gmail proxy could permit destructive mailbox actions.
@@ -70,6 +85,9 @@ Historical backfill yields to current-mail synchronization and resumes from dura
 
 Dependencies, Actions, tools, and future images could execute attacker-controlled code.
 The project minimizes direct dependencies, pins versions and Action SHAs, verifies module checksums, runs vulnerability scanning, and requires an architecture decision record for each direct dependency.
+
+Configuration parsing adds only `go.yaml.in/yaml/v3` v3.0.5, which has no declared transitive modules.
+Repository code treats its syntax tree as untrusted, applies independent structure and complexity limits before typed decoding, pins and verifies the module checksum, scans reachable code with `govulncheck`, and retains the upstream license notice in release archives.
 
 The release workflow grants narrow write authority to create one immutable GitHub release.
 The original actor and triggering actor must both be the repository owner, the run attempt must be one, and the dispatch must come from `main`.

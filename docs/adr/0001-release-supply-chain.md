@@ -129,7 +129,7 @@ If the setting drifts after the owner's manual check, the post-publication failu
 It verifies downloaded draft assets byte for byte immediately before the single publish operation and repeats digest verification after publication.
 Immutable releases prevent later tag or asset replacement after publication.
 
-Release assets contain only compiled binaries, `LICENSE`, `README.md`, the SPDX SBOM, and checksums.
+Release assets contain only compiled binaries, `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.md`, the SPDX SBOM, and checksums.
 Validation rejects workspace paths in the SBOM.
 The workflow uses no Gmail, OAuth, Turso, Hermes, Vikunja, deployment, production secret, or live account data.
 

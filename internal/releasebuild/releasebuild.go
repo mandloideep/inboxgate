@@ -27,6 +27,9 @@ import (
 
 const modulePath = "github.com/mandloideep/inboxgate"
 const goVersion = "go1.26.6"
+const yamlModulePath = "go.yaml.in/yaml/v3"
+const yamlModuleVersion = "v3.0.5"
+const yamlModuleSum = "h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw="
 
 // ArchiveTime is the fixed timestamp stored in every release archive.
 // The ZIP format cannot represent dates before 1980.
@@ -176,6 +179,7 @@ func Package(options BuildOptions, binaries []Binary) ([]string, error) {
 			{Name: binaryName, Path: binary.Path, Mode: 0o755},
 			{Name: "LICENSE", Path: filepath.Join(root, "LICENSE"), Mode: 0o644},
 			{Name: "README.md", Path: filepath.Join(root, "README.md"), Mode: 0o644},
+			{Name: "THIRD_PARTY_NOTICES.md", Path: filepath.Join(root, "THIRD_PARTY_NOTICES.md"), Mode: 0o644},
 		}
 		if err := writeArchive(archivePath, base, entries); err != nil {
 			return nil, fmt.Errorf("write %s: %w", filepath.Base(archivePath), err)
@@ -229,8 +233,12 @@ func ValidateBinary(path, goos, goarch string) error {
 	if info.GoVersion != goVersion {
 		return fmt.Errorf("Go version = %q, want %q", info.GoVersion, goVersion)
 	}
-	if len(info.Deps) != 0 {
-		return fmt.Errorf("release binary has %d module dependencies, want none", len(info.Deps))
+	if len(info.Deps) != 1 {
+		return fmt.Errorf("release binary has %d module dependencies, want one", len(info.Deps))
+	}
+	dependency := info.Deps[0]
+	if dependency.Path != yamlModulePath || dependency.Version != yamlModuleVersion || dependency.Sum != yamlModuleSum || dependency.Replace != nil {
+		return fmt.Errorf("release binary dependency does not match the pinned YAML module")
 	}
 	settings := make(map[string]string, len(info.Settings))
 	for _, setting := range info.Settings {
