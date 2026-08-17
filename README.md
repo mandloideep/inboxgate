@@ -47,6 +47,7 @@ Read the [product specification](docs/product-specification.md) and [threat mode
 InboxGate is pre-release software under active development.
 The roadmap is delivered as one focused GitHub issue and pull request at a time.
 Future web work may use `web/apps/console`, `web/apps/site`, and `web/packages/ui`, but those applications are not approved or created yet.
+Owners should use the [readiness and blocker guide](docs/owner-readiness.md) before preparing provider access, runtime secrets, private deployment, or a manual release.
 
 ## Contributing and support
 
