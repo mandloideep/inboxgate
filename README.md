@@ -3,7 +3,8 @@
 InboxGate is a small Go service that keeps high-volume email behind a deterministic review gate before an AI agent sees it.
 The first release will connect multiple Gmail and Google Workspace accounts with read-only access and expose a bounded MCP surface to Hermes.
 
-The repository currently contains the contributor foundation, a minimal command-line binary, and strict configuration schema v1 validation.
+The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, and a typed capability registry.
+Only local capability inspection is implemented.
 Email synchronization, persistence, MCP, OAuth, and deployment are intentionally not implemented yet.
 
 ## Quick start
@@ -16,12 +17,15 @@ go run ./cmd/inboxgate version
 go run ./cmd/inboxgate help
 go run ./cmd/inboxgate --config config.example.yaml config validate
 go run ./cmd/inboxgate --config config.example.yaml config effective
+go run ./cmd/inboxgate --config config.example.yaml capabilities
 ```
 
 Development builds print `inboxgate dev`.
 Release builds print the canonical version and full source commit.
 The validation command checks strict configuration schema v1 without credentials or network access.
 The effective command prints the complete normalized policy and field provenance without reading named secret values or exposing the selected path.
+The capabilities command prints compile-time implementation, validated configuration, effective enablement, prerequisite names, migration requirements, and security classification as deterministic JSON.
+Environment-variable names in capability output may be sensitive even though their values are never read.
 See the [configuration guide](docs/configuration.md) and [complete example](config.example.yaml).
 
 ## Product boundaries

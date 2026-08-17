@@ -51,6 +51,10 @@ var scalar = &schemaNode{}
 
 var schema = mapping(map[string]*schemaNode{
 	"version": scalar,
+	"capabilities": mapping(map[string]*schemaNode{
+		"gmail.read": scalar, "gmail.current_sync": scalar, "gmail.backfill": scalar,
+		"mail.review_read": scalar, "mail.review_write": scalar,
+	}),
 	"server": mapping(map[string]*schemaNode{
 		"listen": scalar, "read_header_timeout": scalar, "read_timeout": scalar, "write_timeout": scalar,
 		"idle_timeout": scalar, "max_request_bytes": scalar,
@@ -373,6 +377,9 @@ func decodeConfig(root *yaml.Node, config *Config, problems *[]Problem) {
 		config.Version = readUint(node, "version", problems)
 	} else {
 		*problems = append(*problems, Problem{Path: "version", Reason: "is required"})
+	}
+	if node := values["capabilities"]; node != nil {
+		decodeCapabilities(node, &config.Capabilities, problems)
 	}
 	if node := values["server"]; node != nil {
 		decodeServer(node, &config.Server, problems)

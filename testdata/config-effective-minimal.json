@@ -1,8 +1,15 @@
 {
-  "output_version": 1,
+  "output_version": 2,
   "path_source": "flag",
   "configuration": {
     "version": 1,
+    "capabilities": {
+      "gmail.read": false,
+      "gmail.current_sync": false,
+      "gmail.backfill": false,
+      "mail.review_read": false,
+      "mail.review_write": false
+    },
     "server": {
       "listen": "0.0.0.0:8080",
       "read_header_timeout": "5s",
@@ -87,6 +94,13 @@
   },
   "sources": {
     "version": "file",
+    "capabilities": {
+      "gmail.read": "compiled_default",
+      "gmail.current_sync": "compiled_default",
+      "gmail.backfill": "compiled_default",
+      "mail.review_read": "compiled_default",
+      "mail.review_write": "compiled_default"
+    },
     "server": {
       "listen": "compiled_default",
       "read_header_timeout": "compiled_default",

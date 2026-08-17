@@ -2,6 +2,25 @@ package config
 
 import "go.yaml.in/yaml/v3"
 
+func decodeCapabilities(node *yaml.Node, target *Capabilities, problems *[]Problem) {
+	values := mappingValues(node)
+	if child := values["gmail.read"]; child != nil {
+		target.GmailRead = readBool(child, "capabilities.gmail.read", problems)
+	}
+	if child := values["gmail.current_sync"]; child != nil {
+		target.GmailCurrentSync = readBool(child, "capabilities.gmail.current_sync", problems)
+	}
+	if child := values["gmail.backfill"]; child != nil {
+		target.GmailBackfill = readBool(child, "capabilities.gmail.backfill", problems)
+	}
+	if child := values["mail.review_read"]; child != nil {
+		target.MailReviewRead = readBool(child, "capabilities.mail.review_read", problems)
+	}
+	if child := values["mail.review_write"]; child != nil {
+		target.MailReviewWrite = readBool(child, "capabilities.mail.review_write", problems)
+	}
+}
+
 func decodeServer(node *yaml.Node, target *Server, problems *[]Problem) {
 	v := mappingValues(node)
 	if n := v["listen"]; n != nil {

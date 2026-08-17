@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: effective configuration inspection update for issue #8.
+Status: typed capability inspection update for issue #10.
 
 ## Security objectives
 
@@ -18,7 +18,7 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 
 | Boundary | Untrusted input | Required control |
 | --- | --- | --- |
-| Operator to CLI and configuration | Arguments, paths, YAML, environment names | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output |
+| Operator to CLI and configuration | Arguments, paths, YAML, environment names, capability policy | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output, fail-closed capability validation |
 | Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
 | InboxGate to Turso | Queries, records, credentials | Parameterized fixed queries, encrypted provider credentials, least privilege, migration integrity |
@@ -51,6 +51,24 @@ The output contains no timestamps, process identifiers, hostnames, secret presen
 Invalid configuration produces no partial normalized output, and write failures use a generic diagnostic.
 Existing file, YAML node, depth, list, string, and schema limits continue to bound rendering.
 The command has no network client, filesystem-write path, provider activation, database activation, or MCP exposure.
+
+### Capability inspection and authority confusion
+
+Configuration policy could appear to grant behavior that the binary does not implement, or an invented capability name could be mistaken for supported authority.
+The typed registry separates compile-time implementation status, validated configuration status, and derived enablement.
+Unknown names fail closed, true values for not-implemented configurable capabilities fail validation, and a not-implemented entry can never be enabled.
+Gmail mutation is always prohibited and cannot be configured.
+Zoho and direct Vikunja behavior remain visible as excluded entries but cannot be configured or activated.
+
+The local `capabilities` command loads and validates inert policy only.
+It does not start a service, check credential presence, contact a provider or database, expose MCP, or grant runtime authority.
+The selected configuration path and its source class are omitted.
+Output contains no timestamps, hostnames, process identifiers, service health, connectivity, migration state, account state, or secret presence.
+
+Required secret names can reveal operational naming conventions.
+They are validated environment-variable names only and are sorted before serialization.
+The command never reads, substitutes, hashes, measures, or derives information from the named values.
+Operators are warned to review capability output before sharing it publicly.
 
 ### Malicious or mistaken configuration
 
