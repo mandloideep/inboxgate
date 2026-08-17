@@ -61,7 +61,7 @@ func TestParseRejectsStrictYAMLFeatures(t *testing.T) {
 		{name: "null value", yaml: "version: 1\nlogging: null\n", want: "null values"},
 		{name: "non-string key", yaml: "version: 1\n1: value\n", want: "mapping keys must be strings"},
 		{name: "unknown root key", yaml: "version: 1\nunknown: true\n", want: "unknown key"},
-		{name: "generic capabilities", yaml: "version: 1\ncapabilities: {}\n", want: "unknown key"},
+		{name: "unknown capability", yaml: "version: 1\ncapabilities: {arbitrary.name: false}\n", want: "unknown key"},
 		{name: "unknown nested key", yaml: "version: 1\nserver:\n  typo: 1\n", want: "unknown key"},
 		{name: "duplicate unknown key", yaml: "version: 1\nunknown: true\nunknown: false\n", want: "duplicate key"},
 		{name: "duplicate root", yaml: "version: 1\nversion: 1\n", want: "duplicate key"},

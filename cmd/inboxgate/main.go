@@ -52,9 +52,41 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "config":
 		return runConfig(args[1:], configPath, explicitConfig, stdout, stderr)
+	case "capabilities":
+		return runCapabilities(args[1:], configPath, explicitConfig, stdout, stderr)
 	default:
 		return printUsageError(stderr, fmt.Sprintf("unknown command %q", args[0]), printHelp)
 	}
+}
+
+func runCapabilities(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		printCapabilitiesHelp(stdout)
+		return 0
+	}
+	if len(args) != 0 {
+		return printUsageError(stderr, "capabilities does not accept arguments", printCapabilitiesHelp)
+	}
+	selection, selectionError := selectConfig(configPath, explicitConfig)
+	if selectionError != "" {
+		fmt.Fprintf(stderr, "configuration invalid: %s\n", selectionError)
+		return 1
+	}
+	configuration, err := config.Load(selection.path)
+	if err != nil {
+		return printConfigValidationError(stderr, err)
+	}
+	data, err := config.CapabilitiesJSON(configuration)
+	if err != nil {
+		fmt.Fprintln(stderr, "cannot render capabilities")
+		return 1
+	}
+	written, err := stdout.Write(data)
+	if err != nil || written != len(data) {
+		fmt.Fprintln(stderr, "cannot write capabilities")
+		return 1
+	}
+	return 0
 }
 
 func parseGlobalFlags(args []string) (string, bool, []string, string) {
@@ -207,9 +239,18 @@ func printHelp(output io.Writer) {
 	fmt.Fprintln(output, "  inboxgate [--config PATH] <command>")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Commands:")
-	fmt.Fprintln(output, "  config   Validate and inspect InboxGate configuration")
-	fmt.Fprintln(output, "  version  Print the InboxGate version")
-	fmt.Fprintln(output, "  help     Show this help")
+	fmt.Fprintln(output, "  capabilities  Inspect compile-time and configured capability status as JSON")
+	fmt.Fprintln(output, "  config        Validate and inspect InboxGate configuration")
+	fmt.Fprintln(output, "  version       Print the InboxGate version")
+	fmt.Fprintln(output, "  help          Show this help")
+}
+
+func printCapabilitiesHelp(output io.Writer) {
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  inboxgate [--config PATH] capabilities")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Prints the typed capability registry after strict schema v1 validation.")
+	fmt.Fprintln(output, "Named secret values are never read, but environment-variable names in the output can be sensitive.")
 }
 
 func printConfigHelp(output io.Writer) {

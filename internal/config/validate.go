@@ -22,6 +22,7 @@ var (
 
 func validateConfig(config Config, problems *[]Problem) {
 	equalUint("version", config.Version, 1, problems)
+	validateCapabilityDefinitions(config, capabilityDefinitions, problems)
 	validateServer(config.Server, problems)
 	validateDatabase(config.Database, problems)
 	validateGmail(config.Gmail, problems)

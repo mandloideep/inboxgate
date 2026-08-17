@@ -10,17 +10,26 @@ const (
 )
 
 type Config struct {
-	Version    uint64
-	Server     Server
-	Database   Database
-	Gmail      Gmail
-	Backfill   Backfill
-	Gate       Gate
-	Review     Review
-	Retention  Retention
-	MCP        MCP
-	Encryption Encryption
-	Logging    Logging
+	Version      uint64
+	Capabilities Capabilities
+	Server       Server
+	Database     Database
+	Gmail        Gmail
+	Backfill     Backfill
+	Gate         Gate
+	Review       Review
+	Retention    Retention
+	MCP          MCP
+	Encryption   Encryption
+	Logging      Logging
+}
+
+type Capabilities struct {
+	GmailRead        bool
+	GmailCurrentSync bool
+	GmailBackfill    bool
+	MailReviewRead   bool
+	MailReviewWrite  bool
 }
 
 type Server struct {
@@ -112,16 +121,17 @@ type Logging struct {
 
 func Defaults() Config {
 	return Config{
-		Version:    1,
-		Server:     Server{Listen: "0.0.0.0:8080", ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxRequestBytes: 1_048_576},
-		Database:   Database{Engine: "turso", URLEnv: "TURSO_DATABASE_URL", AuthTokenEnv: "TURSO_AUTH_TOKEN", MaxOpenConnections: 8, MaxIdleConnections: 2, ConnectionMaxLifetime: 30 * time.Minute},
-		Gmail:      Gmail{OAuthClientIDEnv: "GOOGLE_OAUTH_CLIENT_ID", OAuthClientSecretEnv: "GOOGLE_OAUTH_CLIENT_SECRET", OAuthRedirectURLEnv: "GOOGLE_OAUTH_REDIRECT_URL", Scope: "gmail.readonly", PollInterval: 5 * time.Minute, PollJitter: 30 * time.Second, PageSize: 100, MaxAccountsInFlight: 2, BodyExcerptBytes: 32_768, ThreadMaxMessages: 50},
-		Backfill:   Backfill{Enabled: true, DefaultLookbackDays: 365, MaximumLookbackDays: 3_650, PageSize: 100, CurrentMailHasPriority: true, RunWindow: RunWindow{Timezone: "America/Chicago", Start: "22:00", End: "06:00"}},
-		Gate:       Gate{Version: 1, ExcludedLabels: []string{"SPAM", "TRASH"}, SuppressGmailCategories: []string{"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"}, DirectRecipientIsCandidate: true, MailingListIsBulkSignal: true, SenderAllowDomains: []string{}, SenderBlockDomains: []string{}, SubjectCandidateTerms: []string{}, SubjectUrgentTerms: []string{}},
-		Review:     Review{DefaultPageSize: 25, MaximumPageSize: 100, AutomaticTaskCreation: false},
-		Retention:  Retention{MetadataDays: 0, ExcerptDays: 365, AuditDays: 730},
-		MCP:        MCP{Enabled: true, Path: "/mcp", BearerTokenEnv: "INBOXGATE_MCP_TOKEN", EnableReviewWrites: true, EnableOperatorTools: false},
-		Encryption: Encryption{MasterKeyEnv: "INBOXGATE_MASTER_KEY"},
-		Logging:    Logging{Level: "info", Format: "json"},
+		Version:      1,
+		Capabilities: Capabilities{},
+		Server:       Server{Listen: "0.0.0.0:8080", ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxRequestBytes: 1_048_576},
+		Database:     Database{Engine: "turso", URLEnv: "TURSO_DATABASE_URL", AuthTokenEnv: "TURSO_AUTH_TOKEN", MaxOpenConnections: 8, MaxIdleConnections: 2, ConnectionMaxLifetime: 30 * time.Minute},
+		Gmail:        Gmail{OAuthClientIDEnv: "GOOGLE_OAUTH_CLIENT_ID", OAuthClientSecretEnv: "GOOGLE_OAUTH_CLIENT_SECRET", OAuthRedirectURLEnv: "GOOGLE_OAUTH_REDIRECT_URL", Scope: "gmail.readonly", PollInterval: 5 * time.Minute, PollJitter: 30 * time.Second, PageSize: 100, MaxAccountsInFlight: 2, BodyExcerptBytes: 32_768, ThreadMaxMessages: 50},
+		Backfill:     Backfill{Enabled: true, DefaultLookbackDays: 365, MaximumLookbackDays: 3_650, PageSize: 100, CurrentMailHasPriority: true, RunWindow: RunWindow{Timezone: "America/Chicago", Start: "22:00", End: "06:00"}},
+		Gate:         Gate{Version: 1, ExcludedLabels: []string{"SPAM", "TRASH"}, SuppressGmailCategories: []string{"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"}, DirectRecipientIsCandidate: true, MailingListIsBulkSignal: true, SenderAllowDomains: []string{}, SenderBlockDomains: []string{}, SubjectCandidateTerms: []string{}, SubjectUrgentTerms: []string{}},
+		Review:       Review{DefaultPageSize: 25, MaximumPageSize: 100, AutomaticTaskCreation: false},
+		Retention:    Retention{MetadataDays: 0, ExcerptDays: 365, AuditDays: 730},
+		MCP:          MCP{Enabled: true, Path: "/mcp", BearerTokenEnv: "INBOXGATE_MCP_TOKEN", EnableReviewWrites: true, EnableOperatorTools: false},
+		Encryption:   Encryption{MasterKeyEnv: "INBOXGATE_MASTER_KEY"},
+		Logging:      Logging{Level: "info", Format: "json"},
 	}
 }

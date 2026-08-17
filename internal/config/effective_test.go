@@ -29,7 +29,7 @@ func TestEffectiveMinimalExpandsDefaultsWithCompleteProvenance(t *testing.T) {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		t.Fatalf("unmarshal effective JSON: %v", err)
 	}
-	if envelope["output_version"] != float64(1) || envelope["path_source"] != "flag" {
+	if envelope["output_version"] != float64(2) || envelope["path_source"] != "flag" {
 		t.Errorf("envelope metadata = %#v", envelope)
 	}
 	configuration := envelope["configuration"].(map[string]any)
@@ -171,7 +171,7 @@ func TestEffectiveOutputOrderingAndDeterminism(t *testing.T) {
 		t.Fatal("effective output has no sources object")
 	}
 	configurationKeys := []string{
-		`"version"`, `"server"`, `"listen"`, `"read_header_timeout"`, `"read_timeout"`, `"write_timeout"`, `"idle_timeout"`, `"max_request_bytes"`,
+		`"version"`, `"capabilities"`, `"gmail.read"`, `"gmail.current_sync"`, `"gmail.backfill"`, `"mail.review_read"`, `"mail.review_write"`, `"server"`, `"listen"`, `"read_header_timeout"`, `"read_timeout"`, `"write_timeout"`, `"idle_timeout"`, `"max_request_bytes"`,
 		`"database"`, `"engine"`, `"url_env"`, `"auth_token_env"`, `"max_open_connections"`, `"max_idle_connections"`, `"connection_max_lifetime"`,
 		`"gmail"`, `"oauth_client_id_env"`, `"oauth_client_secret_env"`, `"oauth_redirect_url_env"`, `"scope"`, `"poll_interval"`, `"poll_jitter"`, `"page_size"`, `"max_accounts_in_flight"`, `"body_excerpt_bytes"`, `"thread_max_messages"`,
 		`"backfill"`, `"enabled"`, `"default_lookback_days"`, `"maximum_lookback_days"`, `"page_size"`, `"current_mail_has_priority"`, `"run_window"`, `"timezone"`, `"start"`, `"end"`,
@@ -192,6 +192,11 @@ func TestEffectiveProvenanceOneLeafAtATime(t *testing.T) {
 		yaml string
 	}{
 		{path: "version"},
+		{path: "capabilities.gmail.read", yaml: "capabilities: {gmail.read: false}\n"},
+		{path: "capabilities.gmail.current_sync", yaml: "capabilities: {gmail.current_sync: false}\n"},
+		{path: "capabilities.gmail.backfill", yaml: "capabilities: {gmail.backfill: false}\n"},
+		{path: "capabilities.mail.review_read", yaml: "capabilities: {mail.review_read: false}\n"},
+		{path: "capabilities.mail.review_write", yaml: "capabilities: {mail.review_write: false}\n"},
 		{path: "server.listen", yaml: "server: {listen: 'localhost:8080'}\n"},
 		{path: "server.read_header_timeout", yaml: "server: {read_header_timeout: 5s}\n"},
 		{path: "server.read_timeout", yaml: "server: {read_timeout: 30s}\n"},

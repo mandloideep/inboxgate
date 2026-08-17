@@ -41,7 +41,7 @@ A stdout write failure exits 1 with a generic error that does not include config
 
 The versioned JSON envelope has these top-level fields in this exact order:
 
-1. `output_version`, which is integer `1`.
+1. `output_version`, which is integer `2`.
 2. `path_source`, which is `flag`, `environment`, or `default`.
 3. `configuration`, which contains every schema v1 field in example-schema order.
 4. `sources`, which mirrors the complete configuration hierarchy.
@@ -67,6 +67,40 @@ The only environment lookup is `INBOXGATE_CONFIG` for file selection.
 Effective output can still reveal operationally sensitive policy such as sender domains, subject terms, bind addresses, schedules, retention choices, and environment-variable names.
 Review it before pasting it into public issues, logs, or chat systems.
 The command is a local read-only inspection surface and does not start Gmail, OAuth, Turso, MCP, HTTP, backfill, review, logging, encryption, or task behavior.
+
+Output version 2 adds the typed `capabilities` section immediately after `version` in both `configuration` and `sources`.
+The section has the same complete five-field shape whether its values came from YAML or compiled defaults.
+
+## Inspect capabilities
+
+Use `capabilities` with the same global path selection rules:
+
+```sh
+inboxgate --config /path/to/config.yaml capabilities
+```
+
+The command strictly validates the configuration before it prints one deterministic indented JSON document followed by exactly one newline.
+The envelope orders `output_version`, `configuration_schema_version`, and `capabilities`.
+Capability entries are sorted by bytewise name and order `name`, `implementation_status`, `configuration_status`, `enabled`, `required_secret_names`, `required_database_migration`, and `security_classification`.
+
+`implementation_status` is compile-time truth and is either `implemented` or `not_implemented`.
+`configuration_status` is validated policy and is `enabled`, `disabled`, or `not_configurable`.
+`enabled` is true only when behavior is implemented and its configuration status is `enabled` or `not_configurable`.
+A not-implemented capability can never be enabled.
+
+Schema v1 allows only `gmail.read`, `gmail.current_sync`, `gmail.backfill`, `mail.review_read`, and `mail.review_write` under the top-level `capabilities` mapping.
+Each field defaults to `false`.
+An explicit `false` is accepted and remains file-sourced in effective output.
+An explicit `true` fails closed until that behavior is implemented by the binary.
+Prohibited, excluded, misspelled, and arbitrary capability keys are rejected.
+Subordinate policy such as `backfill.enabled` and `mcp.enabled` cannot bypass a disabled top-level capability gate.
+
+`required_secret_names` contains sorted validated environment-variable names only.
+The command never reads, checks, hashes, measures, or derives information from the named values.
+`required_database_migration` is null until a capability that needs durable state registers an exact migration identifier.
+The selected configuration path, path-source class, timestamps, host state, service connectivity, secret presence, and account state are omitted.
+Review capability output before sharing it because environment-variable names can reveal operational naming conventions.
+The command starts no service and grants no Gmail, OAuth, database, MCP, review, or provider authority.
 
 ## Secret boundary
 
@@ -101,6 +135,7 @@ Durations use Go duration syntax and must also satisfy the documented field boun
 - The MCP path is a clean absolute ASCII HTTP path using unescaped RFC 3986 `pchar` characters and `/` separators, without whitespace, controls, backslashes, percent escapes, queries, fragments, repeated slashes, or dot segments.
 - Logging level and format use fixed enumerations.
 - Policy booleans are parsed only as policy in this slice and do not activate MCP, Gmail, database, review, or task behavior.
-- A generic `capabilities` mapping is rejected until the typed capability registry is implemented.
+- The `capabilities` mapping accepts only the five false-by-default gates documented above.
+- A true value is rejected until the corresponding binary behavior is implemented.
 
 See [product specification section 7](product-specification.md#7-configuration-model) for the complete schema defaults and validation contract.

@@ -187,6 +187,8 @@ inboxgate migrate
 
 `serve` runs the private MCP endpoint, health endpoints, OAuth callback endpoint, and internal poll scheduler.
 The other subcommands are operator surfaces and reuse the same application use cases.
+The local `capabilities` command is available before `serve` and loads inert validated policy without starting any runtime component.
+The future MCP `system_capabilities` tool adapts the same typed registry.
 
 Do not create separate server and worker binaries in the first release.
 Do not add a distributed worker until current synchronization and backfill cannot meet measured requirements inside one process.
@@ -234,6 +236,13 @@ The committed `config.example.yaml` has this shape and its values are the compil
 
 ```yaml
 version: 1
+
+capabilities:
+  gmail.read: false
+  gmail.current_sync: false
+  gmail.backfill: false
+  mail.review_read: false
+  mail.review_write: false
 
 server:
   listen: "0.0.0.0:8080"
@@ -363,7 +372,10 @@ Metadata retention is 0 or 1 through 36,500 days, excerpt and audit retention ar
 The MCP path is a clean absolute ASCII HTTP path of 2 through 128 bytes using unescaped RFC 3986 `pchar` characters and `/` separators, and cannot be `/`, contain whitespace, controls, backslashes, repeated slashes, dot segments, percent escapes, a query, or a fragment.
 Logging level is `debug`, `info`, `warn`, or `error`, and logging format is `json` or `text`.
 Every field ending in `_env` stores only a name matching `[A-Z_][A-Z0-9_]{0,127}`.
-Policy booleans do not activate runtime behavior during validation, and a generic `capabilities` mapping is rejected until the typed registry is implemented.
+The top-level `capabilities` mapping accepts only `gmail.read`, `gmail.current_sync`, `gmail.backfill`, `mail.review_read`, and `mail.review_write`.
+All five defaults are false, an explicit false remains file-sourced, and a true value is rejected until that behavior is implemented by the binary.
+Unknown, prohibited, excluded, misspelled, and arbitrary capability keys are fatal validation errors.
+Other policy booleans do not activate runtime behavior during validation and cannot bypass a disabled capability gate.
 
 Do not support regular expressions in the first gate configuration.
 Use normalized exact addresses, domain suffixes, header signals, and case-insensitive literal terms.
@@ -382,7 +394,8 @@ It never contacts a service, activates runtime behavior, reads an environment va
 Invalid input produces the same value-safe diagnostics as `config validate` and no partial JSON.
 
 The versioned JSON envelope orders `output_version`, `path_source`, `configuration`, and `sources` exactly.
-Output version 1 uses `flag`, `environment`, or `default` as the path-selection class without disclosing path data.
+Output version 2 uses `flag`, `environment`, or `default` as the path-selection class without disclosing path data.
+Version 2 adds `capabilities` immediately after `version` in both the normalized configuration and provenance objects.
 The `configuration` object contains every schema v1 field in section 7.2 order after defaults are applied.
 Durations use `time.Duration.String()`, integers and booleans retain their JSON types, empty lists are never null, and accepted string spelling and list order are preserved.
 Standard `encoding/json` escaping, `json.MarshalIndent` with two spaces, and one final newline define the serialization.
@@ -407,13 +420,27 @@ A configuration file cannot activate code that the binary does not implement.
 
 The binary contains a typed capability registry with capability name, implementation status, configuration status, required secret names, required database migration, and security classification.
 `inboxgate capabilities` prints that registry as JSON.
-Hermes receives the same safe information through a read-only `system_capabilities` MCP tool.
+The future read-only `system_capabilities` MCP tool must adapt the same registry rather than create another capability model.
 
-Examples include `gmail.read`, `gmail.current_sync`, `gmail.backfill`, `mail.review_read`, `mail.review_write`, `gmail.modify`, `zoho.read`, and `vikunja.write`.
-The first release reports `gmail.modify`, `zoho.read`, and `vikunja.write` as not implemented even if a user invents similarly named YAML keys.
+The registry contains `gmail.backfill`, `gmail.current_sync`, `gmail.modify`, `gmail.read`, `mail.review_read`, `mail.review_write`, `system.capabilities`, `vikunja.write`, and `zoho.read` in bytewise lexical order.
+The local inspection behavior makes only `system.capabilities` implemented in the current binary slice.
+Every other entry is not implemented.
+`gmail.modify` is prohibited, while `zoho.read` and `vikunja.write` remain visible but not configurable.
+
+Implementation status is compile-time truth and is `implemented` or `not_implemented`.
+Configuration status is validated policy and is `enabled`, `disabled`, or `not_configurable`.
+Derived enablement is true only for implemented behavior whose configuration status is enabled or not configurable.
+It is never true for a not-implemented capability.
+
+The version 1 capability JSON envelope orders `output_version`, `configuration_schema_version`, and `capabilities`.
+Each capability orders `name`, `implementation_status`, `configuration_status`, `enabled`, `required_secret_names`, `required_database_migration`, and `security_classification`.
+Required secret names are sorted validated environment-variable names only, and their values are never acquired.
+Required database migration is null until an exact durable-state migration exists.
+The output contains no path data, runtime state, secret presence, provider connectivity, database connectivity, account state, or health state.
 
 Unknown capability keys are validation errors.
-Hermes can inspect capabilities but cannot edit configuration through MCP.
+Capability inspection loads inert policy only and does not start or grant Gmail, OAuth, Turso, MCP, HTTP, backfill, review, encryption, logging, or provider behavior.
+Hermes will be able to inspect capabilities but cannot edit configuration through MCP.
 
 ## 8. Package layout
 
@@ -786,6 +813,20 @@ For every new capability, the implementation agent must review this matrix.
 Not every use case must be exposed on every surface.
 The review must explicitly record `implemented` or `not applicable` for each surface.
 This prevents accidental omissions without creating unnecessary APIs.
+
+The initial registry slice has these surface decisions.
+
+| Surface | Decision |
+| --- | --- |
+| Domain and application | One typed read-only registry with fail-closed derived enablement |
+| Configuration | Five false-by-default gates and strict rejection of unknown or unimplemented enablement |
+| Storage and migration | Not applicable |
+| Gmail and OAuth | Not applicable |
+| MCP | Not implemented in this slice |
+| Operator CLI | Local deterministic JSON inspection only |
+| Audit, metrics, and health | Not applicable |
+| Tests | Unit, parser, renderer, and real-process coverage |
+| Documentation and threat model | Required and updated |
 
 ## 15. Turso persistence
 

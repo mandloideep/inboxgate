@@ -2,6 +2,13 @@
 # This complete example uses synthetic environment-variable names only.
 version: 1
 
+capabilities:
+  gmail.read: false
+  gmail.current_sync: false
+  gmail.backfill: false
+  mail.review_read: false
+  mail.review_write: false
+
 server:
   listen: "0.0.0.0:8080" # hostname, IPv4, or bracketed IPv6 plus port 1..65535; at most 263 bytes
   read_header_timeout: 5s # 1s..30s, not above read_timeout

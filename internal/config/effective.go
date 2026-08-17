@@ -25,17 +25,26 @@ type effectiveEnvelope struct {
 }
 
 type outputConfig struct {
-	Version    uint64           `json:"version"`
-	Server     outputServer     `json:"server"`
-	Database   outputDatabase   `json:"database"`
-	Gmail      outputGmail      `json:"gmail"`
-	Backfill   outputBackfill   `json:"backfill"`
-	Gate       outputGate       `json:"gate"`
-	Review     outputReview     `json:"review"`
-	Retention  outputRetention  `json:"retention"`
-	MCP        outputMCP        `json:"mcp"`
-	Encryption outputEncryption `json:"encryption"`
-	Logging    outputLogging    `json:"logging"`
+	Version      uint64             `json:"version"`
+	Capabilities outputCapabilities `json:"capabilities"`
+	Server       outputServer       `json:"server"`
+	Database     outputDatabase     `json:"database"`
+	Gmail        outputGmail        `json:"gmail"`
+	Backfill     outputBackfill     `json:"backfill"`
+	Gate         outputGate         `json:"gate"`
+	Review       outputReview       `json:"review"`
+	Retention    outputRetention    `json:"retention"`
+	MCP          outputMCP          `json:"mcp"`
+	Encryption   outputEncryption   `json:"encryption"`
+	Logging      outputLogging      `json:"logging"`
+}
+
+type outputCapabilities struct {
+	GmailRead        bool `json:"gmail.read"`
+	GmailCurrentSync bool `json:"gmail.current_sync"`
+	GmailBackfill    bool `json:"gmail.backfill"`
+	MailReviewRead   bool `json:"mail.review_read"`
+	MailReviewWrite  bool `json:"mail.review_write"`
 }
 
 type outputServer struct {
@@ -126,17 +135,26 @@ type outputLogging struct {
 }
 
 type Sources struct {
-	Version    string                 `json:"version"`
-	Server     sourceServerOutput     `json:"server"`
-	Database   sourceDatabaseOutput   `json:"database"`
-	Gmail      sourceGmailOutput      `json:"gmail"`
-	Backfill   sourceBackfillOutput   `json:"backfill"`
-	Gate       sourceGateOutput       `json:"gate"`
-	Review     sourceReviewOutput     `json:"review"`
-	Retention  sourceRetentionOutput  `json:"retention"`
-	MCP        sourceMCPOutput        `json:"mcp"`
-	Encryption sourceEncryptionOutput `json:"encryption"`
-	Logging    sourceLoggingOutput    `json:"logging"`
+	Version      string                   `json:"version"`
+	Capabilities sourceCapabilitiesOutput `json:"capabilities"`
+	Server       sourceServerOutput       `json:"server"`
+	Database     sourceDatabaseOutput     `json:"database"`
+	Gmail        sourceGmailOutput        `json:"gmail"`
+	Backfill     sourceBackfillOutput     `json:"backfill"`
+	Gate         sourceGateOutput         `json:"gate"`
+	Review       sourceReviewOutput       `json:"review"`
+	Retention    sourceRetentionOutput    `json:"retention"`
+	MCP          sourceMCPOutput          `json:"mcp"`
+	Encryption   sourceEncryptionOutput   `json:"encryption"`
+	Logging      sourceLoggingOutput      `json:"logging"`
+}
+
+type sourceCapabilitiesOutput struct {
+	GmailRead        string `json:"gmail.read"`
+	GmailCurrentSync string `json:"gmail.current_sync"`
+	GmailBackfill    string `json:"gmail.backfill"`
+	MailReviewRead   string `json:"mail.review_read"`
+	MailReviewWrite  string `json:"mail.review_write"`
 }
 
 type sourceServerOutput struct {
@@ -239,7 +257,7 @@ func (effective Effective) JSON(pathSource string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid path source")
 	}
 	payload := effectiveEnvelope{
-		OutputVersion: 1,
+		OutputVersion: 2,
 		PathSource:    pathSource,
 		Configuration: outputConfiguration(effective.Configuration),
 		Sources:       effective.Sources,
@@ -253,6 +271,7 @@ func (effective Effective) JSON(pathSource string) ([]byte, error) {
 
 func collectSources(root *yaml.Node) Sources {
 	rootValues := mappingValues(root)
+	capabilities := childValues(rootValues, "capabilities")
 	server := childValues(rootValues, "server")
 	database := childValues(rootValues, "database")
 	gmail := childValues(rootValues, "gmail")
@@ -266,6 +285,11 @@ func collectSources(root *yaml.Node) Sources {
 	logging := childValues(rootValues, "logging")
 	return Sources{
 		Version: presentSource(rootValues, "version"),
+		Capabilities: sourceCapabilitiesOutput{
+			GmailRead: presentSource(capabilities, "gmail.read"), GmailCurrentSync: presentSource(capabilities, "gmail.current_sync"),
+			GmailBackfill: presentSource(capabilities, "gmail.backfill"), MailReviewRead: presentSource(capabilities, "mail.review_read"),
+			MailReviewWrite: presentSource(capabilities, "mail.review_write"),
+		},
 		Server: sourceServerOutput{
 			Listen: presentSource(server, "listen"), ReadHeaderTimeout: presentSource(server, "read_header_timeout"),
 			ReadTimeout: presentSource(server, "read_timeout"), WriteTimeout: presentSource(server, "write_timeout"),
@@ -331,6 +355,11 @@ func presentSource(values map[string]*yaml.Node, key string) string {
 func outputConfiguration(value Config) outputConfig {
 	return outputConfig{
 		Version: value.Version,
+		Capabilities: outputCapabilities{
+			GmailRead: value.Capabilities.GmailRead, GmailCurrentSync: value.Capabilities.GmailCurrentSync,
+			GmailBackfill: value.Capabilities.GmailBackfill, MailReviewRead: value.Capabilities.MailReviewRead,
+			MailReviewWrite: value.Capabilities.MailReviewWrite,
+		},
 		Server: outputServer{
 			Listen: value.Server.Listen, ReadHeaderTimeout: value.Server.ReadHeaderTimeout.String(), ReadTimeout: value.Server.ReadTimeout.String(),
 			WriteTimeout: value.Server.WriteTimeout.String(), IdleTimeout: value.Server.IdleTimeout.String(), MaxRequestBytes: value.Server.MaxRequestBytes,

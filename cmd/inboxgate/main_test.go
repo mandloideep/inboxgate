@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -199,6 +201,244 @@ func TestConfigEffectiveCommandProcess(t *testing.T) {
 	if got := stdout.String(); got != string(exampleWant) || stderr.String() != "" {
 		t.Errorf("example process output differs: stdout = %q, stderr = %q", got, stderr.String())
 	}
+}
+
+func TestCapabilitiesCommandProcess(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "minimal.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binaryName := "inboxgate"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(directory, binaryName)
+	build := exec.Command("go", "build", "-trimpath", "-o", binaryPath, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build InboxGate binary: %v\n%s", err, output)
+	}
+
+	runCommand := func() ([]byte, []byte) {
+		t.Helper()
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		command := exec.Command(binaryPath, "--config", configPath, "capabilities")
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		if err := command.Run(); err != nil {
+			t.Fatalf("run InboxGate capabilities process: %v; stdout = %q; stderr = %q", err, stdout.String(), stderr.String())
+		}
+		return stdout.Bytes(), stderr.Bytes()
+	}
+	first, firstStderr := runCommand()
+	second, secondStderr := runCommand()
+	want, err := os.ReadFile(filepath.Join(repositoryRoot(t), "testdata", "capabilities-default.json"))
+	if err != nil {
+		t.Fatalf("read independently reviewed capabilities golden: %v", err)
+	}
+	if !bytes.Equal(first, want) || !bytes.Equal(second, want) {
+		t.Errorf("capabilities process output differs from exact golden:\nfirst:\n%s\nsecond:\n%s\nwant:\n%s", first, second, want)
+	}
+	if len(firstStderr) != 0 || len(secondStderr) != 0 {
+		t.Errorf("capabilities stderr must be empty: first=%q second=%q", firstStderr, secondStderr)
+	}
+}
+
+func TestCapabilitiesPathPrecedencePrivacyAndSecretBoundary(t *testing.T) {
+	directory := t.TempDir()
+	flagPath := filepath.Join(directory, "private-flag-path.yaml")
+	environmentPath := filepath.Join(directory, "private-environment-path.yaml")
+	flagDocument := "version: 1\ngmail: {oauth_client_id_env: FLAG_CLIENT_ID}\n"
+	environmentDocument := "version: 1\ngmail: {oauth_client_id_env: ENVIRONMENT_CLIENT_ID}\n"
+	if err := os.WriteFile(flagPath, []byte(flagDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environmentPath, []byte(environmentDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "SYNTHETIC_SECRET_VALUE_MUST_NOT_APPEAR"
+	t.Setenv("INBOXGATE_CONFIG", environmentPath)
+	t.Setenv("FLAG_CLIENT_ID", secret+"FLAG")
+	t.Setenv("ENVIRONMENT_CLIENT_ID", secret+"ENVIRONMENT")
+
+	for _, test := range []struct {
+		name     string
+		args     []string
+		wantName string
+	}{
+		{name: "flag", args: []string{"--config", flagPath, "capabilities"}, wantName: "FLAG_CLIENT_ID"},
+		{name: "environment", args: []string{"capabilities"}, wantName: "ENVIRONMENT_CLIENT_ID"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(test.args, &stdout, &stderr)
+			if exitCode != 0 || stderr.String() != "" || !strings.Contains(stdout.String(), `"`+test.wantName+`"`) {
+				t.Fatalf("run() exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+			}
+			for _, forbidden := range []string{directory, flagPath, environmentPath, secret} {
+				if strings.Contains(stdout.String()+stderr.String(), forbidden) {
+					t.Errorf("output disclosed forbidden value %q", forbidden)
+				}
+			}
+		})
+	}
+}
+
+func TestCapabilitiesCommandDoesNotLookUpYAMLDerivedEnvironmentNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	document := `version: 1
+database: {url_env: COMMAND_DATABASE_URL, auth_token_env: COMMAND_DATABASE_TOKEN}
+gmail: {oauth_client_id_env: COMMAND_CLIENT_ID, oauth_client_secret_env: COMMAND_CLIENT_SECRET, oauth_redirect_url_env: COMMAND_REDIRECT_URL}
+encryption: {master_key_env: COMMAND_MASTER_KEY}
+`
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"COMMAND_DATABASE_URL", "COMMAND_DATABASE_TOKEN", "COMMAND_CLIENT_ID", "COMMAND_CLIENT_SECRET", "COMMAND_REDIRECT_URL", "COMMAND_MASTER_KEY"}
+	for _, name := range names {
+		previous, existed := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+		name := name
+		t.Cleanup(func() {
+			if existed {
+				_ = os.Setenv(name, previous)
+			} else {
+				_ = os.Unsetenv(name)
+			}
+		})
+	}
+	render := func() []byte {
+		t.Helper()
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if exitCode := run([]string{"--config", path, "capabilities"}, &stdout, &stderr); exitCode != 0 || stderr.String() != "" {
+			t.Fatalf("capabilities exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+		}
+		return append([]byte(nil), stdout.Bytes()...)
+	}
+	withoutValues := render()
+	for index, name := range names {
+		if err := os.Setenv(name, fmt.Sprintf("SYNTHETIC_COMMAND_VALUE_%d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withValues := render()
+	if !bytes.Equal(withoutValues, withValues) {
+		t.Fatalf("command output changed after setting YAML-derived environment names:\nunset:\n%s\nset:\n%s", withoutValues, withValues)
+	}
+	if strings.Contains(string(withValues), "SYNTHETIC_COMMAND_VALUE") {
+		t.Fatalf("command output disclosed a YAML-derived environment value: %s", withValues)
+	}
+}
+
+func TestCapabilitiesUnreadableRegularFileHasNoPartialOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission enforcement is unavailable")
+	}
+	path := filepath.Join(t.TempDir(), "private-unreadable.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stat unreadable regular file: %v", err)
+	}
+	if file, err := os.Open(path); err == nil {
+		_ = file.Close()
+		t.Skip("current user can bypass file permission bits")
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--config", path, "capabilities"}, &stdout, &stderr)
+	if exitCode != 1 || stdout.String() != "" || stderr.String() != "configuration invalid: file: cannot open configuration file\n" {
+		t.Fatalf("unreadable file exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), path) || strings.Contains(stdout.String()+stderr.String(), filepath.Dir(path)) {
+		t.Errorf("unreadable-file diagnostic disclosed path: %q", stderr.String())
+	}
+}
+
+func TestCapabilitiesHelpAndUsageErrors(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"capabilities", "--help"}, &stdout, &stderr)
+	if exitCode != 0 || stderr.String() != "" || !strings.Contains(stdout.String(), "inboxgate [--config PATH] capabilities") || !strings.Contains(stdout.String(), "environment-variable names") || !strings.Contains(stdout.String(), "sensitive") {
+		t.Fatalf("help exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+
+	for _, args := range [][]string{{"capabilities", "extra"}, {"capabilities", "--config=x"}, {"capabilities", "--json"}} {
+		stdout.Reset()
+		stderr.Reset()
+		exitCode = run(args, &stdout, &stderr)
+		if exitCode != 2 || stdout.String() != "" || !strings.Contains(stderr.String(), "capabilities does not accept arguments") || !strings.Contains(stderr.String(), "Usage:") {
+			t.Errorf("run(%q) exit = %d, stdout = %q, stderr = %q", args, exitCode, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestCapabilitiesInvalidInputHasNoPartialOutput(t *testing.T) {
+	directory := t.TempDir()
+	invalidPath := filepath.Join(directory, "private-invalid.yaml")
+	if err := os.WriteFile(invalidPath, []byte("version: 1\ncapabilities: {gmail.read: true}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	malformedPath := filepath.Join(directory, "private-malformed.yaml")
+	if err := os.WriteFile(malformedPath, []byte("version: [SYNTHETIC_PRIVATE_VALUE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oversizedPath := filepath.Join(directory, "private-oversized.yaml")
+	oversized := append([]byte("version: 1\n#"), bytes.Repeat([]byte{'x'}, config.MaxFileBytes)...)
+	if err := os.WriteFile(oversizedPath, oversized, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{invalidPath, malformedPath, oversizedPath, filepath.Join(directory, "private-missing.yaml"), directory} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run([]string{"--config", path, "capabilities"}, &stdout, &stderr)
+		if exitCode != 1 || stdout.String() != "" || !strings.HasPrefix(stderr.String(), "configuration invalid: ") {
+			t.Errorf("path %q exit = %d, stdout = %q, stderr = %q", path, exitCode, stdout.String(), stderr.String())
+		}
+		for _, forbidden := range []string{path, directory, "SYNTHETIC_PRIVATE_VALUE"} {
+			if strings.Contains(stdout.String()+stderr.String(), forbidden) {
+				t.Errorf("invalid diagnostic disclosed forbidden value %q: %q", forbidden, stderr.String())
+			}
+		}
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--config", invalidPath, "capabilities"}, &stdout, &stderr)
+	if exitCode != 1 || stdout.String() != "" || stderr.String() != "configuration invalid: capabilities.gmail.read: cannot enable a capability not implemented by this binary\n" {
+		t.Errorf("unimplemented diagnostic exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+}
+
+func TestCapabilitiesWriteFailuresAreGeneric(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "valid.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, writer := range []io.Writer{&failingWriter{}, shortWriter{}} {
+		var stderr bytes.Buffer
+		exitCode := run([]string{"--config", path, "capabilities"}, writer, &stderr)
+		if exitCode != 1 || stderr.String() != "cannot write capabilities\n" || strings.Contains(stderr.String(), path) {
+			t.Errorf("write failure exit = %d, stderr = %q", exitCode, stderr.String())
+		}
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(data []byte) (int, error) {
+	return len(data) - 1, nil
 }
 
 func readEffectiveGolden(t *testing.T, name string) []byte {

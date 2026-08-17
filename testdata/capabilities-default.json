@@ -1,0 +1,114 @@
+{
+  "output_version": 1,
+  "configuration_schema_version": 1,
+  "capabilities": [
+    {
+      "name": "gmail.backfill",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "required_secret_names": [
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_OAUTH_REDIRECT_URL",
+        "INBOXGATE_MASTER_KEY",
+        "TURSO_AUTH_TOKEN",
+        "TURSO_DATABASE_URL"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    },
+    {
+      "name": "gmail.current_sync",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "required_secret_names": [
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_OAUTH_REDIRECT_URL",
+        "INBOXGATE_MASTER_KEY",
+        "TURSO_AUTH_TOKEN",
+        "TURSO_DATABASE_URL"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    },
+    {
+      "name": "gmail.modify",
+      "implementation_status": "not_implemented",
+      "configuration_status": "not_configurable",
+      "enabled": false,
+      "required_secret_names": [],
+      "required_database_migration": null,
+      "security_classification": "prohibited"
+    },
+    {
+      "name": "gmail.read",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "required_secret_names": [
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_OAUTH_REDIRECT_URL",
+        "INBOXGATE_MASTER_KEY",
+        "TURSO_AUTH_TOKEN",
+        "TURSO_DATABASE_URL"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    },
+    {
+      "name": "mail.review_read",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "required_secret_names": [
+        "TURSO_AUTH_TOKEN",
+        "TURSO_DATABASE_URL"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    },
+    {
+      "name": "mail.review_write",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "required_secret_names": [
+        "TURSO_AUTH_TOKEN",
+        "TURSO_DATABASE_URL"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_write"
+    },
+    {
+      "name": "system.capabilities",
+      "implementation_status": "implemented",
+      "configuration_status": "not_configurable",
+      "enabled": true,
+      "required_secret_names": [],
+      "required_database_migration": null,
+      "security_classification": "operational_metadata"
+    },
+    {
+      "name": "vikunja.write",
+      "implementation_status": "not_implemented",
+      "configuration_status": "not_configurable",
+      "enabled": false,
+      "required_secret_names": [],
+      "required_database_migration": null,
+      "security_classification": "sensitive_write"
+    },
+    {
+      "name": "zoho.read",
+      "implementation_status": "not_implemented",
+      "configuration_status": "not_configurable",
+      "enabled": false,
+      "required_secret_names": [],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    }
+  ]
+}
