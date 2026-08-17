@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: typed capability inspection update for issue #10.
+Status: process-health runtime update for issue #12.
 
 ## Security objectives
 
@@ -69,6 +69,30 @@ Required secret names can reveal operational naming conventions.
 They are validated environment-variable names only and are sorted before serialization.
 The command never reads, substitutes, hashes, measures, or derives information from the named values.
 Operators are warned to review capability output before sharing it publicly.
+
+### Process-health listener and runtime logs
+
+The process-health runtime introduces the first inbound network listener and operational log stream.
+The listener registers only exact liveness and process-readiness paths with fixed bounded JSON documents.
+It has no Gmail, OAuth, database, scheduler, MCP, provider, mutation, operator, URL-fetching, SQL, shell, or static-content route.
+Unknown paths, unsupported methods, and request bodies receive fixed errors that never echo request data.
+Percent-encoded alternate spellings of a health path remain unmatched and are logged only as the bounded `unmatched` operation.
+Configured timeouts, a compiled 16 KiB header limit, a compiled limit of 128 concurrently accepted connections, and the configured request-body bound constrain the standard-library server.
+The listener acquires admission before the underlying accept, blocks further application acceptance until a permit is released exactly once by connection close, and unblocks permit waiters during shutdown.
+
+The health routes are unauthenticated because schema v1 has no separate probe credential and the future MCP bearer token belongs to another trust boundary.
+They reveal only `live`, `ready`, or `not_ready` and must bind only to an approved private interface or private reverse-proxy path.
+The default all-interface listener is not authorization for public exposure.
+Detailed database, migration, scheduler, account, provider, secret, or connectivity diagnostics remain absent.
+
+Structured lifecycle and request logs use only bounded event names, allowlisted operations and methods, numeric status and duration, bounded outcomes, and bounded failure reasons.
+The implementation omits raw errors and suppresses the standard-library server error logger so request data and listener addresses cannot bypass the allowlist.
+It never logs raw paths, queries, hosts, remote addresses, headers, bodies, user agents, configuration paths, listener addresses, YAML-named environment variables, secret presence, account identifiers, provider data, or message data.
+
+Readiness becomes false before graceful shutdown begins.
+The first termination signal stops new connections and gives active work a compiled 10-second drain deadline.
+A second signal cannot restart or extend that deadline, and an expired deadline forces the server closed with a bounded failure record.
+The local `doctor` command constructs the runtime without binding a socket, reading YAML-named environment values, or activating a provider.
 
 ### Malicious or mistaken configuration
 
@@ -158,7 +182,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has no network service, OAuth flow, database, MCP endpoint, or provider integration.
+- The current foundation has a process-health network service intended only for private deployment but no OAuth flow, database, MCP endpoint, scheduler, or provider integration.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 

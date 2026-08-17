@@ -102,6 +102,51 @@ The selected configuration path, path-source class, timestamps, host state, serv
 Review capability output before sharing it because environment-variable names can reveal operational naming conventions.
 The command starts no service and grants no Gmail, OAuth, database, MCP, review, or provider authority.
 
+## Check local service construction
+
+Use `doctor` with the same global configuration path rules:
+
+```sh
+inboxgate --config /path/to/config.yaml doctor
+```
+
+The command strictly validates the selected file and constructs the configured logger, readiness state, bounded health handler, and HTTP server without binding a socket.
+It does not perform a bind feasibility check, read any YAML-named environment variable, contact a provider or database, or start Gmail, OAuth, MCP, scheduler, review, or backfill behavior.
+Success exits 0, leaves stderr empty, and prints a deterministic versioned JSON result with passing `configuration` and `service_runtime` checks.
+Invalid configuration exits 1 with the same value-safe diagnostics as `config validate` and no partial JSON.
+Command misuse exits 2 with focused usage.
+
+## Run process-health serving
+
+Start the bounded process-health service with:
+
+```sh
+inboxgate --config /path/to/config.yaml serve
+```
+
+The command validates configuration before making one attempt to bind `server.listen`.
+It writes no normal output to stdout.
+Lifecycle and request records go to stderr through the configured `log/slog` JSON or text handler at the configured minimum level.
+Logs use bounded event, operation, method, outcome, status, and duration fields and omit paths, queries, listener addresses, configuration paths, headers, bodies, remote addresses, host values, secret names and values, account data, and provider data.
+
+The service exposes only `GET` and `HEAD` on `/health/live` and `/health/ready`.
+Only those literal escaped paths are accepted, so percent-encoded alternate spellings receive the fixed `404` response.
+Liveness reports fixed process health.
+Readiness is true only while the configured logger and server are constructed, the TCP listener exists, the serving lifecycle is active, and shutdown has not begun.
+Readiness does not claim database, migration, scheduler, account, Gmail, OAuth, provider, or MCP availability.
+Every response is fixed and bounded, disables caching and content-type sniffing, and uses JSON representation headers.
+Other methods receive `405`, unknown paths receive `404`, declared oversized health bodies receive `413`, and every other declared or transfer-encoded health body receives `400` without being read.
+
+The configured `server` timeouts and request limit apply to this runtime.
+HTTP headers have a compiled 16 KiB limit.
+The listener admits at most a compiled 128 accepted connections concurrently, and it does not accept another connection into application work until an existing accepted connection closes.
+The first `SIGINT` or `SIGTERM` makes readiness false and gives active requests up to a compiled 10 seconds to drain.
+A second signal does not restart or extend that deadline.
+
+The default `0.0.0.0:8080` listener covers every host interface and is not authorization for public exposure.
+Bind only to an approved private interface, protect the listener with an appropriate firewall, or publish the probes through an approved private reverse-proxy path.
+This repository does not yet provide TLS termination, deployment configuration, authenticated diagnostics, MCP transport, or any public REST API.
+
 ## Secret boundary
 
 Fields ending in `_env` contain only an environment-variable name matching `[A-Z_][A-Z0-9_]{0,127}`.

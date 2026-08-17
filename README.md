@@ -3,8 +3,8 @@
 InboxGate is a small Go service that keeps high-volume email behind a deterministic review gate before an AI agent sees it.
 The first release will connect multiple Gmail and Google Workspace accounts with read-only access and expose a bounded MCP surface to Hermes.
 
-The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, and a typed capability registry.
-Only local capability inspection is implemented.
+The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, and bounded process-health serving.
+Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, and local service preflight are implemented.
 Email synchronization, persistence, MCP, OAuth, and deployment are intentionally not implemented yet.
 
 ## Quick start
@@ -18,6 +18,7 @@ go run ./cmd/inboxgate help
 go run ./cmd/inboxgate --config config.example.yaml config validate
 go run ./cmd/inboxgate --config config.example.yaml config effective
 go run ./cmd/inboxgate --config config.example.yaml capabilities
+go run ./cmd/inboxgate --config config.example.yaml doctor
 ```
 
 Development builds print `inboxgate dev`.
@@ -26,6 +27,8 @@ The validation command checks strict configuration schema v1 without credentials
 The effective command prints the complete normalized policy and field provenance without reading named secret values or exposing the selected path.
 The capabilities command prints compile-time implementation, validated configuration, effective enablement, prerequisite names, migration requirements, and security classification as deterministic JSON.
 Environment-variable names in capability output may be sensitive even though their values are never read.
+The doctor command validates local service construction without opening a listener.
+The serve command exposes only fixed liveness and process-readiness probes and must bind only to an approved private interface or private reverse-proxy path.
 See the [configuration guide](docs/configuration.md) and [complete example](config.example.yaml).
 
 ## Product boundaries

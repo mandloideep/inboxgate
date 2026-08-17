@@ -2,15 +2,19 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mandloideep/inboxgate/internal/config"
 )
@@ -596,6 +600,363 @@ func TestConfigEffectiveWriteFailureIsGeneric(t *testing.T) {
 	if exitCode != 1 || writer.attempts != 1 || stderr.String() != "cannot write effective configuration\n" {
 		t.Errorf("write failure exit = %d, attempts = %d, stderr = %q", exitCode, writer.attempts, stderr.String())
 	}
+}
+
+func TestDoctorSuccessIsDeterministicAndDoesNotReadNamedSecrets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "doctor.yaml")
+	document := `version: 1
+database: {url_env: DOCTOR_DATABASE_URL, auth_token_env: DOCTOR_DATABASE_TOKEN}
+gmail: {oauth_client_id_env: DOCTOR_CLIENT_ID, oauth_client_secret_env: DOCTOR_CLIENT_SECRET, oauth_redirect_url_env: DOCTOR_REDIRECT_URL}
+encryption: {master_key_env: DOCTOR_MASTER_KEY}
+logging: {format: text, level: error}
+`
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "SYNTHETIC_DOCTOR_SECRET_MUST_NOT_APPEAR"
+	for _, name := range []string{"DOCTOR_DATABASE_URL", "DOCTOR_DATABASE_TOKEN", "DOCTOR_CLIENT_ID", "DOCTOR_CLIENT_SECRET", "DOCTOR_REDIRECT_URL", "DOCTOR_MASTER_KEY"} {
+		t.Setenv(name, secret+name)
+	}
+
+	want := "{\n  \"output_version\": 1,\n  \"status\": \"ok\",\n  \"checks\": [\n    {\n      \"name\": \"configuration\",\n      \"status\": \"pass\"\n    },\n    {\n      \"name\": \"service_runtime\",\n      \"status\": \"pass\"\n    }\n  ]\n}\n"
+	for iteration := 0; iteration < 2; iteration++ {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run([]string{"--config", path, "doctor"}, &stdout, &stderr)
+		if exitCode != 0 || stdout.String() != want || stderr.String() != "" {
+			t.Fatalf("doctor iteration %d exit = %d, stdout = %q, stderr = %q", iteration, exitCode, stdout.String(), stderr.String())
+		}
+		if strings.Contains(stdout.String()+stderr.String(), secret) || strings.Contains(stdout.String()+stderr.String(), path) {
+			t.Errorf("doctor disclosed sensitive input")
+		}
+	}
+}
+
+func TestDoctorInvalidConfigurationAndWriteFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid-private-config.yaml")
+	if err := os.WriteFile(path, []byte("version: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := run([]string{"--config", path, "doctor"}, &stdout, &stderr); exitCode != 1 || stdout.String() != "" || !strings.Contains(stderr.String(), "configuration invalid: version") || strings.Contains(stderr.String(), path) {
+		t.Fatalf("invalid doctor exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+
+	validPath := filepath.Join(t.TempDir(), "valid.yaml")
+	if err := os.WriteFile(validPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer := &failingWriter{}
+	stderr.Reset()
+	if exitCode := run([]string{"--config", validPath, "doctor"}, writer, &stderr); exitCode != 1 || writer.attempts != 1 || stderr.String() != "cannot write doctor result\n" {
+		t.Errorf("doctor write failure exit = %d, attempts = %d, stderr = %q", exitCode, writer.attempts, stderr.String())
+	}
+}
+
+func TestServeAndDoctorHelpAndMisuse(t *testing.T) {
+	for _, command := range []string{"serve", "doctor"} {
+		t.Run(command+" help", func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run([]string{"--config", "/path/that/must/not/be/loaded", command, "--help"}, &stdout, &stderr)
+			if exitCode != 0 || stderr.String() != "" || !strings.Contains(stdout.String(), "inboxgate [--config PATH] "+command) {
+				t.Fatalf("help exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+			}
+		})
+		for _, arguments := range [][]string{{command, "extra"}, {command, "--local-flag"}} {
+			t.Run(strings.Join(arguments, " "), func(t *testing.T) {
+				var stdout bytes.Buffer
+				var stderr bytes.Buffer
+				exitCode := run(append([]string{"--config", "/path/that/must/not/be/loaded"}, arguments...), &stdout, &stderr)
+				if exitCode != 2 || stdout.String() != "" || !strings.Contains(stderr.String(), command+" does not accept arguments") || !strings.Contains(stderr.String(), "Usage:") {
+					t.Fatalf("misuse exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+				}
+			})
+		}
+	}
+}
+
+func TestServeInvalidConfigurationStartsNoListener(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid.yaml")
+	if err := os.WriteFile(path, []byte("version: 2\nserver: {listen: '127.0.0.1:1'}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--config", path, "serve"}, &stdout, &stderr)
+	if exitCode != 1 || stdout.String() != "" || !strings.Contains(stderr.String(), "configuration invalid: version") {
+		t.Fatalf("serve invalid exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+}
+
+func TestServeAndDoctorHelpMisuseAndInvalidConfigurationProcesses(t *testing.T) {
+	directory := t.TempDir()
+	binaryName := "inboxgate"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(directory, binaryName)
+	build := exec.Command("go", "build", "-trimpath", "-o", binaryPath, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build InboxGate binary: %v\n%s", err, output)
+	}
+	privateMissingPath := filepath.Join(directory, "private-missing-config.yaml")
+	invalidPath := filepath.Join(directory, "private-invalid-config.yaml")
+	if err := os.WriteFile(invalidPath, []byte("version: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []struct {
+		name string
+		help string
+	}{
+		{
+			name: "serve",
+			help: "Usage:\n  inboxgate [--config PATH] serve\n\nRuns bounded liveness and process-readiness endpoints until SIGINT or SIGTERM.\nBind only to an approved private interface or private reverse-proxy path.\n",
+		},
+		{
+			name: "doctor",
+			help: "Usage:\n  inboxgate [--config PATH] doctor\n\nValidates configuration and local service construction without binding a listener.\n",
+		},
+	}
+	for _, command := range commands {
+		t.Run(command.name+" help", func(t *testing.T) {
+			exitCode, stdout, stderr := runBuiltProcess(t, binaryPath, "--config", privateMissingPath, command.name, "--help")
+			if exitCode != 0 || stdout != command.help || stderr != "" {
+				t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+		})
+		t.Run(command.name+" misuse", func(t *testing.T) {
+			exitCode, stdout, stderr := runBuiltProcess(t, binaryPath, "--config", privateMissingPath, command.name, "--unsupported")
+			wantStderr := command.name + " does not accept arguments\n\n" + command.help
+			if exitCode != 2 || stdout != "" || stderr != wantStderr {
+				t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+		})
+		t.Run(command.name+" invalid configuration", func(t *testing.T) {
+			exitCode, stdout, stderr := runBuiltProcess(t, binaryPath, "--config", invalidPath, command.name)
+			if exitCode != 1 || stdout != "" || stderr != "configuration invalid: version: unsupported schema version\n" {
+				t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
+			}
+			for _, forbidden := range []string{directory, invalidPath, privateMissingPath, "server_started", "listen_failed"} {
+				if strings.Contains(stderr, forbidden) {
+					t.Errorf("invalid configuration diagnostic contains %q: %q", forbidden, stderr)
+				}
+			}
+		})
+	}
+}
+
+func TestServeAndDoctorCommandProcesses(t *testing.T) {
+	directory := t.TempDir()
+	binaryName := "inboxgate"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(directory, binaryName)
+	build := exec.Command("go", "build", "-trimpath", "-o", binaryPath, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build InboxGate binary: %v\n%s", err, output)
+	}
+
+	reservation, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reservation.Close() })
+	address := reservation.Addr().String()
+	configPath := filepath.Join(directory, "synthetic-process-config.yaml")
+	document := "version: 1\nserver: {listen: '" + address + "'}\nlogging: {level: info, format: json}\n"
+	if err := os.WriteFile(configPath, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var doctorStdout bytes.Buffer
+	var doctorStderr bytes.Buffer
+	doctor := exec.Command(binaryPath, "--config", configPath, "doctor")
+	doctor.Stdout = &doctorStdout
+	doctor.Stderr = &doctorStderr
+	if err := doctor.Run(); err != nil {
+		t.Fatalf("run doctor process: %v; stdout = %q; stderr = %q", err, doctorStdout.String(), doctorStderr.String())
+	}
+	if !bytes.Equal(doctorStdout.Bytes(), doctorResult) || doctorStderr.Len() != 0 {
+		t.Fatalf("doctor process stdout = %q, stderr = %q", doctorStdout.String(), doctorStderr.String())
+	}
+	if err := reservation.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if runtime.GOOS == "windows" {
+		t.Skip("portable signal delivery is unavailable on Windows")
+	}
+	var serveStdout bytes.Buffer
+	var serveStderr bytes.Buffer
+	serve := exec.Command(binaryPath, "--config", configPath, "serve")
+	serve.Stdout = &serveStdout
+	serve.Stderr = &serveStderr
+	if err := serve.Start(); err != nil {
+		t.Fatal(err)
+	}
+	processExited := false
+	t.Cleanup(func() {
+		if !processExited {
+			_ = serve.Process.Kill()
+			_ = serve.Wait()
+		}
+	})
+
+	client := &http.Client{
+		Timeout: 200 * time.Millisecond,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
+	defer client.CloseIdleConnections()
+	for _, probe := range []struct {
+		path string
+		body string
+	}{
+		{path: "/health/live", body: "{\"status\":\"live\"}\n"},
+		{path: "/health/ready", body: "{\"status\":\"ready\"}\n"},
+	} {
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			response, requestErr := client.Get("http://" + address + probe.path)
+			if requestErr == nil {
+				body, readErr := io.ReadAll(response.Body)
+				_ = response.Body.Close()
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if response.StatusCode != http.StatusOK || string(body) != probe.body {
+					t.Fatalf("probe %s status = %d, body = %q", probe.path, response.StatusCode, body)
+				}
+				for name, want := range map[string]string{
+					"Content-Type":           "application/json; charset=utf-8",
+					"Cache-Control":          "no-store",
+					"X-Content-Type-Options": "nosniff",
+					"Content-Length":         fmt.Sprint(len(probe.body)),
+				} {
+					if got := response.Header.Get(name); got != want {
+						t.Errorf("probe %s header %s = %q, want %q", probe.path, name, got, want)
+					}
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("probe %s did not become available: %v; stderr = %q", probe.path, requestErr, serveStderr.String())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	encodedResponse, err := client.Get("http://" + address + "/health%2Flive?private=wire-query")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedBody, err := io.ReadAll(encodedResponse.Body)
+	_ = encodedResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encodedResponse.StatusCode != http.StatusNotFound || string(encodedBody) != "{\"error\":\"not_found\"}\n" {
+		t.Errorf("encoded GET status = %d, body = %q", encodedResponse.StatusCode, encodedBody)
+	}
+	for name, want := range map[string]string{
+		"Content-Type":           "application/json; charset=utf-8",
+		"Cache-Control":          "no-store",
+		"X-Content-Type-Options": "nosniff",
+		"Content-Length":         "22",
+	} {
+		if got := encodedResponse.Header.Get(name); got != want {
+			t.Errorf("encoded GET header %s = %q, want %q", name, got, want)
+		}
+	}
+	encodedHead, err := http.NewRequest(http.MethodHead, "http://"+address+"/%68ealth/live?private=head-query", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedHeadResponse, err := client.Do(encodedHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedHeadBody, err := io.ReadAll(encodedHeadResponse.Body)
+	_ = encodedHeadResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encodedHeadResponse.StatusCode != http.StatusNotFound || len(encodedHeadBody) != 0 || encodedHeadResponse.Header.Get("Content-Length") != "22" {
+		t.Errorf("encoded HEAD status = %d, body = %q, Content-Length = %q", encodedHeadResponse.StatusCode, encodedHeadBody, encodedHeadResponse.Header.Get("Content-Length"))
+	}
+	for name, want := range map[string]string{
+		"Content-Type":           "application/json; charset=utf-8",
+		"Cache-Control":          "no-store",
+		"X-Content-Type-Options": "nosniff",
+		"Content-Length":         "22",
+	} {
+		if got := encodedHeadResponse.Header.Get(name); got != want {
+			t.Errorf("encoded HEAD header %s = %q, want %q", name, got, want)
+		}
+	}
+	if err := serve.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- serve.Wait() }()
+	select {
+	case err := <-wait:
+		processExited = true
+		if err != nil {
+			t.Fatalf("serve process shutdown: %v; stderr = %q", err, serveStderr.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve process did not stop after SIGINT")
+	}
+	if serveStdout.Len() != 0 {
+		t.Errorf("serve stdout = %q, want empty", serveStdout.String())
+	}
+	logs := serveStderr.String()
+	for _, forbidden := range []string{configPath, directory, address, "127.0.0.1"} {
+		if strings.Contains(logs, forbidden) {
+			t.Errorf("serve logs disclosed %q: %s", forbidden, logs)
+		}
+	}
+	for _, forbidden := range []string{"health%2Flive", "%68ealth", "wire-query", "head-query", "/health/live"} {
+		if strings.Contains(logs, forbidden) {
+			t.Errorf("serve logs disclosed raw encoded path data %q: %s", forbidden, logs)
+		}
+	}
+	for _, event := range []string{"server_started", "health.live", "health.ready", "shutdown_started", "shutdown_completed"} {
+		if !strings.Contains(logs, event) {
+			t.Errorf("serve logs missing %q: %s", event, logs)
+		}
+	}
+	if !strings.Contains(logs, `"operation":"unmatched","method":"GET","status":404`) || !strings.Contains(logs, `"operation":"unmatched","method":"HEAD","status":404`) {
+		t.Errorf("serve logs missing bounded unmatched encoded-path records: %s", logs)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		if !json.Valid([]byte(line)) {
+			t.Errorf("serve emitted invalid JSON log: %q", line)
+		}
+	}
+}
+
+func runBuiltProcess(t *testing.T, binaryPath string, arguments ...string) (int, string, string) {
+	t.Helper()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command := exec.Command(binaryPath, arguments...)
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if err == nil {
+		return 0, stdout.String(), stderr.String()
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) {
+		t.Fatalf("run built process: %v", err)
+	}
+	return exitError.ExitCode(), stdout.String(), stderr.String()
 }
 
 type failingWriter struct {
