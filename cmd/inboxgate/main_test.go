@@ -10,8 +10,6 @@ import (
 )
 
 func TestVersionCommand(t *testing.T) {
-	t.Parallel()
-
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -28,9 +26,57 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-func TestVersionCommandProcess(t *testing.T) {
-	t.Parallel()
+func TestReleaseVersionCommand(t *testing.T) {
+	originalVersion := version
+	originalCommit := commit
+	t.Cleanup(func() {
+		version = originalVersion
+		commit = originalCommit
+	})
+	version = "v0.1.0"
+	commit = "0123456789abcdef0123456789abcdef01234567"
 
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"version"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("run(version) exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
+	}
+	if got, want := stdout.String(), "inboxgate v0.1.0 (0123456789abcdef0123456789abcdef01234567)\n"; got != want {
+		t.Errorf("run(version) stdout = %q, want %q", got, want)
+	}
+	if got := stderr.String(); got != "" {
+		t.Errorf("run(version) stderr = %q, want empty", got)
+	}
+}
+
+func TestVersionCommandRejectsIncompleteReleaseMetadata(t *testing.T) {
+	originalVersion := version
+	originalCommit := commit
+	t.Cleanup(func() {
+		version = originalVersion
+		commit = originalCommit
+	})
+	version = "v0.1.0"
+	commit = ""
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"version"}, &stdout, &stderr)
+
+	if exitCode != 1 {
+		t.Fatalf("run(version) exit code = %d, want 1", exitCode)
+	}
+	if got := stdout.String(); got != "" {
+		t.Errorf("run(version) stdout = %q, want empty", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "invalid release metadata") {
+		t.Errorf("run(version) stderr = %q, want invalid release metadata error", got)
+	}
+}
+
+func TestVersionCommandProcess(t *testing.T) {
 	binaryName := "inboxgate"
 	if runtime.GOOS == "windows" {
 		binaryName += ".exe"
@@ -60,8 +106,6 @@ func TestVersionCommandProcess(t *testing.T) {
 }
 
 func TestHelpCommand(t *testing.T) {
-	t.Parallel()
-
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -81,8 +125,6 @@ func TestHelpCommand(t *testing.T) {
 }
 
 func TestUnknownCommand(t *testing.T) {
-	t.Parallel()
-
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 

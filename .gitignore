@@ -1,6 +1,7 @@
 /.build/
 /.cache/
 /.tools/
+/.release/
 /inboxgate
 /plan.md
 

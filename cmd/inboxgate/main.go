@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/mandloideep/inboxgate/internal/buildmeta"
 )
 
 var version = "dev"
+var commit string
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -20,7 +23,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	switch args[0] {
 	case "version":
-		fmt.Fprintf(stdout, "inboxgate %s\n", version)
+		metadata, err := buildmeta.Format(version, commit)
+		if err != nil {
+			fmt.Fprintf(stderr, "invalid release metadata: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "inboxgate %s\n", metadata)
 		return 0
 	case "help", "-h", "--help":
 		printHelp(stdout)

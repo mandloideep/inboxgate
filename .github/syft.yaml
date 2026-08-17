@@ -1,0 +1,2 @@
+# An explicit empty config prevents ambient runner configuration from changing the SBOM.
+{}
