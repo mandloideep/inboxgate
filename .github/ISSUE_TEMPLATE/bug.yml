@@ -1,0 +1,66 @@
+name: Bug report
+description: Report reproducible behavior that does not match the specification.
+title: "bug: "
+labels:
+  - "type:bug"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private email, account identifiers, or security vulnerabilities.
+        Report vulnerabilities through private vulnerability reporting.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What did an end user or operator experience, and why does it matter?
+      placeholder: Describe the observed behavior in plain language.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest end-to-end steps using synthetic data.
+      placeholder: |
+        1. Run ...
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the InboxGate revision, Go version, operating system, and relevant non-secret settings.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Acceptance and validation
+      description: What regression test proves the failure and the fix?
+    validations:
+      required: true
+  - type: dropdown
+    id: security
+    attributes:
+      label: Security impact
+      options:
+        - No known security impact
+        - Possible security impact reported privately
+    validations:
+      required: true
+  - type: textarea
+    id: deletion
+    attributes:
+      label: Deletion requests
+      description: List owner-only removal requests or write None.
+    validations:
+      required: true
