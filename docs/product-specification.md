@@ -111,11 +111,13 @@ The initial direct dependency budget is limited to four packages.
 
 - `golang.org/x/oauth2` for standards-compliant OAuth token handling.
 - The official Model Context Protocol Go SDK for MCP protocol handling.
-- `turso.tech/database/tursogo-serverless` for remote access to a new Turso Database through `database/sql`.
+- One future production database driver selected through an accepted architecture decision for remote access to Turso through `database/sql`.
 - `go.yaml.in/yaml/v3` for the human-editable configuration file until YAML v4 has a stable release.
 
 Pin exact released versions in `go.mod` and commit `go.sum`.
 The implementation agent must verify the selected versions, licenses, checksums, advisories, and complete transitive dependency graph before the first merge.
+`turso.tech/database/tursogo-serverless` v0.0.0-20260817073220-04ff3de5e1a8 was evaluated and rejected by [ADR 0003](adr/0003-turso-serverless-driver-contract.md).
+Do not add it or begin persistence work unless a separate architecture issue accepts a safe upstream release, maintained replacement, or explicitly owned protocol boundary.
 
 Do not use `github.com/tursodatabase/libsql-client-go` for a new database.
 That repository now carries a deprecation notice even though some Turso documentation still describes it for remote legacy libSQL databases.
@@ -838,9 +840,9 @@ Gmail remains the source of truth for raw email.
 Create a new Turso Database rather than a legacy libSQL database.
 The operator should use the Turso database-engine creation option documented at implementation time and record the resulting engine type in the deployment runbook.
 
-Use `turso.tech/database/tursogo-serverless` for remote access from the Hetzner container.
-The current Turso Go documentation describes it as a pure-Go remote driver with no CGO or native libraries and a standard `database/sql` interface.
-This is one required runtime dependency, not an optional abstraction.
+Persistence is blocked because the evaluated `tursogo-serverless` version failed the production security and cancellation contract in [ADR 0003](adr/0003-turso-serverless-driver-contract.md).
+Its server-controlled `base_url` can replace the request authority before later bearer-bearing requests, valid remote error text is reflected raw, and transaction completion and connection close use unbounded background HTTP.
+Do not add a database driver, migration, schema, credential store, account store, or synchronization cursor until a separate architecture issue selects and validates a safe database boundary.
 
 Do not use local Turso Sync or an embedded replica in the first release.
 The service already runs continuously in the cloud, and remote access keeps the process and container simpler.
@@ -854,8 +856,12 @@ Use foreign keys where supported.
 Create unique constraints for all provider identifiers and idempotency keys.
 
 Set conservative connection limits from the validated configuration.
-Verify transaction behavior, isolation expectations, parameter binding, error codes, and migration locking with driver contract tests before storing production credentials.
+The rejected credential-free experiment proved a conservative SQL subset against a local libSQL engine but did not establish a safe production driver.
+A future accepted production boundary must require HTTPS with standard TLS certificate and hostname verification and must reject cleartext remote URLs before any request or credential use.
+Plain HTTP may be used only with a literal loopback endpoint in credential-free tests, with no bearer token or production-derived secret attached.
+A future accepted contract must verify authority handling, redirect behavior, bounded typed errors, owned successful-response limits for body bytes, cursor-line bytes, row count and individual value bytes or equivalent streaming controls, caller-controlled commit, rollback and close cancellation, transaction semantics, parameter binding, error classification, migration locking, and restart durability before storing production credentials.
 Do not assume every SQLite pragma or extension is available remotely.
+Do not automatically replay a statement after a transport failure because its server-side outcome may be uncertain.
 
 Migrations are append-only numbered SQL files.
 The migration runner records the migration number and checksum.
@@ -937,8 +943,9 @@ Do not add a metrics dependency until a concrete monitoring consumer exists.
 
 Use `httptest.Server` for OAuth token, Google identity, and Gmail API behavior.
 Use synthetic fixtures for messages and history pages.
-Use a pinned local Turso server or an officially supported disposable local test mode for storage integration tests.
-The test harness must exercise the same `tursogo-serverless` driver used in production without requiring cloud credentials.
+No storage driver or storage harness is currently accepted.
+A future architecture issue must define a credential-free contract that exercises the selected production boundary, requires verified HTTPS and rejects cleartext remote URLs, permits plain HTTP only on literal loopback without credentials, prevents cross-authority credential forwarding, sanitizes remote errors, bounds successful response bodies, cursor lines, row counts and values or proves equivalent streaming controls, bounds every HTTP and process operation with real cancellation, and proves container cleanup through injected lifecycle failures.
+A local libSQL server may prove shared protocol behavior but cannot prove Turso Database engine or Cloud availability, quota, latency, recovery, or engine-specific behavior.
 Do not mock SQL with a third-party SQL-mocking library.
 
 Create a small fake clock only when time-dependent tests require it.
@@ -972,7 +979,7 @@ Create deterministic random sources only where OAuth state or jitter tests requi
 - MCP authentication.
 - MCP tools/list and tools/call contracts.
 - Graceful shutdown while synchronization is active.
-- Turso driver transaction, rollback, constraint, and concurrent-access behavior.
+- Accepted database driver authority, error, cancellation, transaction, rollback, constraint, and concurrent-access behavior.
 - Configuration validation without external network access.
 
 ### 19.4 Required end-to-end tests
@@ -1007,7 +1014,9 @@ The YAML package is the only runtime dependency approved in this phase.
 
 ### Phase 2: Storage and migrations
 
-Test and implement the `tursogo-serverless` Turso connection, driver contract suite, migration runner, migration checksum protection, and the minimum account and synchronization tables.
+This phase is blocked by [ADR 0003](adr/0003-turso-serverless-driver-contract.md).
+First accept a separate database architecture issue and a credential-free production driver contract.
+Only then test and implement the connection, migration runner, migration checksum protection, and minimum account and synchronization tables.
 Do not add email or review tables until their vertical slices require them.
 
 ### Phase 3: OAuth enrollment
@@ -1094,7 +1103,7 @@ The first release is complete when all of the following statements are true.
 - No web UI, Zoho adapter, local model worker, direct Vikunja client, or direct A2A server has been added.
 - The example configuration validates, contains no secret values, and documents every supported setting.
 - Unknown configuration and attempts to enable unimplemented capabilities fail closed.
-- The production database uses the documented Turso Database engine and the pinned `tursogo-serverless` driver.
+- The production database uses the documented Turso Database engine and a pinned driver accepted by a separate architecture decision after ADR 0003.
 - A Turso point-in-time recovery drill has been documented and successfully tested before production sign-off.
 
 ## 23. Future candidates that are not approved yet
