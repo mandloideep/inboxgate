@@ -19,8 +19,8 @@ func TestEmbeddedCatalogIsCanonicalAndExactByteChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Catalog() error = %v", err)
 	}
-	if len(catalog) != 1 {
-		t.Fatalf("Catalog() count = %d, want 1", len(catalog))
+	if len(catalog) != 2 {
+		t.Fatalf("Catalog() count = %d, want 2", len(catalog))
 	}
 	migration := catalog[0]
 	if migration.Number != 1 || migration.Name != "0001_migration_ledger.sql" {
@@ -36,6 +36,44 @@ func TestEmbeddedCatalogIsCanonicalAndExactByteChecksummed(t *testing.T) {
 	}
 	if migration.SQL != string(raw) {
 		t.Fatal("catalog SQL differs from embedded bytes")
+	}
+	accountSchema := catalog[1]
+	if accountSchema.Number != 2 || accountSchema.Name != "0002_accounts_and_sync_cursors.sql" {
+		t.Fatalf("Catalog()[1] = %#v, want canonical migration 2", accountSchema)
+	}
+	raw, err = fs.ReadFile(embedded, accountSchema.Name)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	sum = sha256.Sum256(raw)
+	if got := hex.EncodeToString(sum[:]); accountSchema.Checksum != got {
+		t.Fatalf("checksum = %q, want exact-byte checksum %q", accountSchema.Checksum, got)
+	}
+	if accountSchema.SQL != string(raw) {
+		t.Fatal("account schema SQL differs from embedded bytes")
+	}
+	for _, required := range []string{
+		"CREATE TABLE inboxgate_accounts",
+		"length(CAST(account_id AS BLOB)) = 32",
+		"instr(CAST(account_id AS BLOB), x'00') = 0",
+		"provider = 'gmail'",
+		"provider_subject TEXT COLLATE BINARY",
+		"length(CAST(provider_subject AS BLOB)) BETWEEN 1 AND 255",
+		"instr(CAST(provider_subject AS BLOB), x'00') = 0",
+		"provider_subject NOT GLOB '*[^!-~]*'",
+		"UNIQUE (provider, provider_subject)",
+		"CREATE TABLE inboxgate_synchronization_cursors",
+		"history_id TEXT COLLATE BINARY",
+		"length(CAST(history_id AS BLOB)) BETWEEN 1 AND 20",
+		"instr(CAST(history_id AS BLOB), x'00') = 0",
+		"history_id NOT GLOB '*[^0-9]*'",
+		"substr(history_id, 1, 1) BETWEEN '1' AND '9'",
+		"history_id <= '18446744073709551615'",
+		"FOREIGN KEY (account_id) REFERENCES inboxgate_accounts (account_id) ON DELETE RESTRICT",
+	} {
+		if !strings.Contains(accountSchema.SQL, required) {
+			t.Fatalf("account schema does not contain %q", required)
+		}
 	}
 }
 

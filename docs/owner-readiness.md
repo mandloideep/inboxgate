@@ -6,9 +6,10 @@ Complete a provider step only after the corresponding implementation issue is ac
 
 ## Current blocker
 
-No owner credential or provider setup is blocking the next account-persistence implementation issue.
+No owner credential or provider setup is blocking the next authenticated-encryption implementation issue.
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official `turso.tech/database/tursogo-serverless` remote driver behind a narrow inert adapter.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner restricted to credential-free literal-loopback tests.
+[ADR 0006](adr/0006-minimum-account-cursor-persistence.md) adds minimum Gmail identity and synchronization-cursor persistence under the same credential-free literal-loopback restriction.
 The adapter is not connected to configuration, commands, service startup, repositories, remote endpoints, or production credentials.
 
 The owner accepts five unresolved driver risks for the exact selected version.
@@ -21,7 +22,8 @@ The owner accepts five unresolved driver risks for the exact selected version.
 - Successful pipeline bodies, cursor lines, rows, and individual values lack repository-owned total limits.
 
 These items remain open in the [known-risk register](known-risks.md) and are not fixed by the adapter.
-The next code issue can implement minimum account and synchronization-cursor persistence through synthetic stores without owner credentials.
+The minimum account-cursor slice uses synthetic identities only and requires no owner action.
+The next code issue can define and implement versioned authenticated encryption with synthetic keys without owner credentials.
 Production setup, credential creation, live connectivity, and database writes remain blocked until a separate approved issue requests them and the owner explicitly authorizes them.
 
 ## What you can decide now
@@ -49,7 +51,7 @@ Use these status meanings throughout this runbook.
 
 | Area | Status | What the owner should do now | What unblocks it |
 | --- | --- | --- | --- |
-| Turso architecture | `Resolved for synthetic migrations` | Review ADR 0004, ADR 0005, and the known-risk register | A later superseding decision only if the driver or architecture changes |
+| Turso architecture | `Resolved for synthetic migrations and account cursors` | Review ADR 0004, ADR 0005, ADR 0006, and the known-risk register | A later superseding decision only if the driver or architecture changes |
 | Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | An approved production-readiness issue with explicit owner authorization |
 | Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | OAuth enrollment implementation and explicit owner approval |
 | Encryption key | `Not yet actionable` | Do not generate or provide a key | An accepted key format, rotation design, and encrypted credential store |

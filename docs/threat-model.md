@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: accepted credential-free loopback migration runner with known upstream risks for issue #20.
+Status: accepted credential-free loopback minimum account-cursor persistence with known upstream risks for issue #22.
 
 ## Security objectives
 
@@ -21,7 +21,7 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 | Operator to CLI and configuration | Arguments, paths, YAML, environment names, capability policy | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output, fail-closed capability validation |
 | Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
-| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, credentials, uncertain transport outcomes | Repository-owned interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration execution only, fixed outer diagnostics, bounded context-aware requests, embedded exact-byte migration checksums, parameterized ledger inspection, one exact atomic transaction sequence with bounded internal literals, no automatic sequence replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
+| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, credentials, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration and account-cursor execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, cursor compare-and-swap, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
 | Hermes to MCP | Authentication, tool inputs, pagination | Authentication, explicit schemas, bounds, allowlisted capabilities, audit events |
 | Runtime to logs and health endpoints | Errors, state, identifiers | Redaction, minimal readiness detail, private binding, no credentials or message bodies |
 | Owner to release workflow | Version, expected commit, dispatch identity, immutable-release setting | Exact input syntax, owner-only manual dispatch, immediate manual settings check, current-main and successful-CI gates |
@@ -130,12 +130,13 @@ Retries, duplicate Gmail history, concurrent work, or a crash could skip mail or
 Durable writes and cursor movement must be transactional.
 External and review operations require stable idempotency keys, valid state transitions, bounded retries, and restart tests.
 
-### Accepted database adapter and synthetic migration boundary
+### Accepted database adapter, synthetic migration, and account-cursor boundary
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
 The adapter is present in code but is not reachable from configuration, commands, service startup, health endpoints, capabilities, Gmail, OAuth, or MCP.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner that can execute only against a credential-free literal-loopback endpoint.
-No product-state schema, repository, production URL, live token, account record, or email record is introduced by the decision.
+[ADR 0006](adr/0006-minimum-account-cursor-persistence.md) appends minimum account identity and synchronization-cursor tables and exposes only typed account and cursor operations under the same restriction.
+No production URL, live token, real account record, email record, account lifecycle state, display metadata, or credential material is introduced by these decisions.
 
 The adapter validates the initial endpoint before driver construction.
 It keeps URL and token values separate, normalizes `turso` to HTTPS, requires standard verified HTTPS for remote endpoints, rejects credentials in URLs, and limits cleartext HTTP to credential-free literal IPv4 or IPv6 loopback tests.
@@ -151,7 +152,7 @@ An unproven apply session is rollback-attempted and forcibly discarded from the 
 A marker ahead of the ledger is rejected as drift.
 Every failed sequence attempts rollback but returns unknown because the driver cannot confirm rollback completion even when the rollback call returns nil.
 The runner revalidates the exact expected ledger prefix through a separate physical connection after every purported commit.
-Returned ping, migration, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
+Returned ping, migration, account, cursor, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
 
 These controls do not fix the driver properties reproduced during the earlier evaluation.
 The driver can still trust an arbitrary scheme and authority from a protocol-provided `base_url` and send the bearer token to a changed authority or over cleartext HTTP after an HTTPS-to-HTTP downgrade.
@@ -166,6 +167,14 @@ Every future storage issue must list the risks it reaches and must not treat the
 Credential-free contracts reproduce protocol-provided authority changes, redirect following, dropped-commit reconciliation, and post-buffer oversized-value rejection.
 Those contracts document the remaining attack and failure surface and do not close `TURSO-001` through `TURSO-005`.
 Later persistence code must use fixed parameterized SQL, durable uniqueness or idempotency keys, and outcome reconciliation where a write can be ambiguous.
+
+Account IDs are exactly 32 lowercase hexadecimal ASCII characters, provider subjects are opaque case-sensitive visible ASCII values of at most 255 bytes, and Gmail history IDs are canonical positive uint64 decimal text.
+The schema enforces those forms with byte counts and explicit embedded-NUL rejection, fixes the provider to `gmail`, makes provider identity binary-unique, and restricts cursor rows to existing accounts.
+The application validates every input and decoded database value again.
+Account creation never updates identity and attempts at most one fixed parameterized insert after a sentinel-row preflight.
+Cursor mutation is available only through one fixed parameterized implicit-transaction compare-and-swap statement that explicitly checks account existence and cannot lower a cursor.
+The mutation connection remains reserved while a separate physical connection verifies the exact durable account or next cursor.
+An unproven outcome discards the mutation session, returns a bounded unknown category, and is never replayed in the same invocation.
 
 ### Resource exhaustion
 
@@ -223,7 +232,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a process-health network service intended only for private deployment and an embedded migration runner restricted to credential-free literal-loopback tests, but no runtime database activation, remote migration, OAuth flow, MCP endpoint, scheduler, or provider integration.
+- The current foundation has a process-health network service intended only for private deployment plus embedded migrations and minimum account-cursor persistence restricted to credential-free literal-loopback tests, but no runtime database activation, remote migration, OAuth flow, MCP endpoint, scheduler, or provider integration.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 
