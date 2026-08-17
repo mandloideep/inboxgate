@@ -118,7 +118,7 @@ Pin exact versions in `go.mod` and commit `go.sum`.
 The implementation agent must verify the selected versions, licenses, checksums, advisories, and complete transitive dependency graph before the first merge.
 `turso.tech/database/tursogo-serverless` v0.0.0-20260817073220-04ff3de5e1a8 was evaluated and rejected by [ADR 0003](adr/0003-turso-serverless-driver-contract.md).
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the newer exact version v0.0.0-20260817122138-24adc316cdc4 behind the repository-owned adapter with the unresolved risks in the [known-risk register](known-risks.md).
-The adapter decision does not claim that those risks are fixed or that migrations, schemas, runtime activation, credentials, or production use are ready.
+The adapter decision does not claim that those risks are fixed or that runtime activation, credentials, remote execution, or production use are ready.
 
 Do not use `github.com/tursodatabase/libsql-client-go` for a new database.
 The current Turso documentation assigns it to remote legacy libSQL databases rather than new databases using the Turso rewrite.
@@ -472,7 +472,7 @@ docs/adr/
 `internal/config` owns strict YAML decoding, defaults, validation, redacted effective output, and the capability registry.
 `internal/gmail` owns Gmail HTTP requests, Gmail response decoding, OAuth provider details, and Gmail cursor behavior.
 `internal/gate` owns pure deterministic classification.
-`internal/store` owns SQL persistence and transactions.
+`internal/storage` owns typed persistence boundaries and keeps `database/sql`, driver types, and SQL inside replaceable implementations.
 `internal/mcp` adapts application use cases to MCP tools.
 `internal/operator` adapts application use cases to CLI subcommands.
 `internal/httpserver` owns health, readiness, OAuth callback, and MCP transport registration.
@@ -504,10 +504,19 @@ An account record contains the following information.
 
 Valid account states are `pending`, `active`, `reauthorization_required`, `paused`, and `revoked`.
 
+Migration `0002_accounts_and_sync_cursors.sql` intentionally persists only the internal account ID, fixed `gmail` provider, opaque provider subject, and optional committed Gmail history ID.
+All broader account fields and states remain future schema work owned by their vertical slices.
+The minimum account ID is exactly 32 lowercase hexadecimal ASCII characters and is generated before storage receives it.
+The provider subject is opaque, case-sensitive visible ASCII from 1 through 255 bytes and is never trimmed, case-folded, parsed, logged, or used as the primary key.
+
 ### 9.2 Synchronization cursors
 
 Each account has an incremental Gmail history cursor.
 Store the last committed `historyId`, the most recent mailbox time observed, the current synchronization lease, and retry metadata.
+
+The minimum cursor slice stores only a canonical positive uint64 Gmail `historyId` as decimal text.
+An absent row means uninitialized, and zero, empty, signed, padded, or out-of-range values are invalid.
+Mailbox times, leases, retry metadata, stale-cursor state, and message-coupled advancement remain future work.
 
 Advance a cursor only in the same transaction that commits the discovered message metadata.
 Never advance a cursor after a partial failed page.
@@ -842,8 +851,8 @@ Create a new Turso Database rather than a legacy libSQL database.
 The operator should use the Turso database-engine creation option documented at implementation time and record the resulting engine type in the deployment runbook.
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official remote `tursogo-serverless` driver behind the narrow repository-owned storage adapter.
-The adapter provides open, bounded ping, idempotent close, and a narrow embedded migration operation.
-Migration execution is restricted to credential-free literal-loopback endpoints and is not connected to configuration, commands, service startup, capabilities, repositories, or production credentials.
+The adapter provides open, bounded ping, idempotent close, narrow embedded migration, and typed minimum account-cursor operations.
+Migration and account-cursor execution are restricted to credential-free literal-loopback endpoints and are not connected to configuration, commands, service startup, capabilities, OAuth, providers, or production credentials.
 
 The owner accepts the unresolved `base_url` authority, raw remote diagnostic, transaction completion, close context, terminal acknowledgement, private HTTP client and redirect policy, and successful-response bound risks recorded in the [known-risk register](known-risks.md).
 That acceptance permits focused storage implementation to continue but does not describe the risks as fixed.
@@ -863,7 +872,7 @@ Create unique constraints for all provider identifiers and idempotency keys.
 Set conservative connection limits from the validated configuration.
 The accepted adapter requires HTTPS with standard TLS certificate and hostname verification and rejects cleartext remote URLs before driver construction.
 Plain HTTP may be used only with a literal loopback endpoint in credential-free tests, with no bearer token or production-derived secret attached.
-The current adapter maps ping, migration, and returned close failures to fixed diagnostics and bounds ping and context-aware migration statements with owned deadlines.
+The current adapter maps ping, migration, account, cursor, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
 Authority handling, redirect behavior, successful-response body, cursor-line, row and value limits, and caller-controlled commit, rollback and close cancellation remain accepted unresolved risks.
 The credential-free migration contract verifies parameterized ledger inspection, an exact bounded atomic pipeline sequence, `BEGIN IMMEDIATE` locking, transaction-local validation of the exact row total and every expected pair with null rejection, internally rendered numeric and lowercase-hex catalog metadata, exact checksum drift rejection, bounded rollback attempts with unknown outcomes, no same-invocation replay, and fresh-run reconciliation after an uncertain sequence.
 Every purportedly successful migration commit requires a same-session savepoint sequence that acquires main-database writer serialization through a bounded ledger self-assignment, revalidates the same exact null-rejecting ledger prefix, and refuses to regress a concurrently advanced code-owned `PRAGMA user_version` marker, followed by separate-connection visibility of both the exact ledger and marker while the apply connection remains reserved.
@@ -875,12 +884,23 @@ Do not automatically replay a statement after a transport failure because its se
 Migrations are append-only numbered SQL files.
 The migration runner records the migration number and checksum.
 It must refuse to run if an already applied migration has a different checksum.
-The embedded catalog starts with `0001_migration_ledger.sql`, contains no product-state tables, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
+The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
 The runner inspects current state outside a transaction, sends pending work as one bounded no-argument `BEGIN IMMEDIATE` through `COMMIT` pipeline sequence, verifies the exact prefix row total and every expected pair under the writer lock while rejecting nulls, proves terminal session state without marker regression through the code-owned `user_version` marker and a separate physical connection, and applies at most one pending migration per transaction.
 The sequence accepts no caller data and renders only a bounded code-derived migration number and validated lowercase-hex checksum as SQL literals because the driver's sequence request cannot carry arguments.
 The prefix guard renders only bounded catalog numbers and validated lowercase-hex checksums, and none of those literals come from users, providers, configuration, or database rows.
 A durable ledger with a missing marker is reconciled by marker repair without schema replay, while a marker ahead of the ledger is drift.
 Credentialed and non-loopback migration execution is rejected before any migration request.
+
+The storage contract accepts a pre-generated validated account ID and an opaque validated provider subject while fixing the provider to `gmail` internally.
+The durable schema measures these text forms as bytes and explicitly rejects embedded NUL bytes rather than relying on SQLite text length or glob behavior.
+Account creation is idempotent by binary `(provider, provider_subject)` uniqueness, never updates identity, and attempts at most one fixed parameterized insertion per invocation.
+The cursor mutation contract accepts only an account ID, optional exact expected history ID, and required greater next history ID.
+It uses one fixed parameterized implicit-transaction compare-and-swap statement that explicitly checks account existence, initializes only from an absent cursor, advances only from the exact expected cursor, never regresses, and performs no delete or reset.
+Account and cursor lookups require exactly one semantic sentinel row, validate all decoded columns and values, and reject a clean end of stream as inspection failure rather than absence.
+Every attempted product-state mutation keeps its connection reserved until a separate physical connection observes the exact durable account identity or next cursor.
+Successful-looking responses without visible state and uncertain failures without visible state return a bounded unknown outcome, discard the mutation session, and never trigger same-invocation replay.
+A fresh explicit invocation may reconcile a state that became durable after an uncertain response.
+These operations use only fixed parameterized SQL and bounded validated values and expose no raw SQL, generic executor, transaction callback, or driver type.
 
 Test restoration by creating a fresh service instance from only the repository, runtime secrets, and Turso database.
 Do not treat Turso as the only place OAuth encryption keys exist.
@@ -958,8 +978,8 @@ Do not add a metrics dependency until a concrete monitoring consumer exists.
 
 Use `httptest.Server` for OAuth token, Google identity, and Gmail API behavior.
 Use synthetic fixtures for messages and history pages.
-The accepted Turso adapter contract uses fake replacements and a credential-free literal-loopback SQL over HTTP server.
-It verifies initial endpoint policy, URL and token separation, bounded ping cancellation, fixed ping and close diagnostics, and idempotent close.
+The accepted Turso adapter contract uses a no-SQL fake replacement and a credential-free literal-loopback SQL over HTTP server.
+It verifies initial endpoint policy, URL and token separation, bounded operation cancellation, fixed diagnostics, idempotent close, exact fixed parameterized account-cursor statements, durable uniqueness, cursor compare-and-swap, separate physical visibility, uncertain outcomes, session discard, no replay, and fresh reconciliation.
 It does not prove Turso Cloud availability, quota, latency, recovery, engine-specific behavior, same-authority handling after `base_url`, redirect rejection, successful-response limits, or bounded transaction and stream close.
 Those gaps remain in the [known-risk register](known-risks.md) and must be exercised when a later issue reaches the affected behavior.
 Do not mock SQL with a third-party SQL-mocking library.
@@ -1031,7 +1051,9 @@ The YAML package is the only runtime dependency approved in this phase.
 ### Phase 2: Storage and migrations
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) resolves the driver-selection gate with an inert repository-owned adapter and explicitly accepted unresolved risks.
-Next, test and implement the migration runner, migration checksum protection, and minimum account and synchronization tables through focused sequential issues.
+[ADR 0005](adr/0005-append-only-migration-protocol.md) implements the credential-free append-only migration runner and checksum protection.
+[ADR 0006](adr/0006-minimum-account-cursor-persistence.md) implements minimum Gmail account identity and synchronization-cursor persistence with synthetic fixtures only.
+Next, define and implement versioned authenticated encryption before any provider credential can be persisted.
 Do not activate live credentials or production database writes without a separately approved issue and explicit owner approval.
 Do not add email or review tables until their vertical slices require them.
 

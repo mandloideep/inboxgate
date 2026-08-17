@@ -24,6 +24,9 @@ type Adapter interface {
 type Handle interface {
 	Ping(context.Context) error
 	Migrate(context.Context) (MigrationResult, error)
+	EnsureAccount(context.Context, AccountSeed) (Account, error)
+	GetSynchronizationCursor(context.Context, AccountID) (SynchronizationCursor, error)
+	CommitSynchronization(context.Context, SynchronizationCommit) error
 	Close() error
 }
 

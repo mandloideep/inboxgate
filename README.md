@@ -5,8 +5,9 @@ The first release will connect multiple Gmail and Google Workspace accounts with
 
 The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, and bounded process-health serving.
 Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, and local service preflight are implemented.
-A replaceable Turso adapter and embedded append-only migration ledger are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md), but migration execution is restricted to credential-free literal-loopback tests and is not reachable from the runtime.
-Account persistence, email synchronization, MCP, OAuth, remote database activation, and deployment are intentionally not implemented yet.
+A replaceable Turso adapter, embedded append-only migrations, and minimum Gmail account identity and synchronization-cursor persistence are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md).
+Migration and account-cursor execution are restricted to credential-free literal-loopback tests and are not reachable from the runtime.
+Account lifecycle state, email synchronization, MCP, OAuth, remote database activation, and deployment are intentionally not implemented yet.
 
 ## Quick start
 

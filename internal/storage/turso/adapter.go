@@ -20,12 +20,14 @@ import (
 )
 
 const (
-	defaultPingTimeout      = 5 * time.Second
-	maximumPingTimeout      = 30 * time.Second
-	defaultMigrationTimeout = 30 * time.Second
-	maximumMigrationTimeout = 2 * time.Minute
-	defaultCleanupTimeout   = 2 * time.Second
-	maximumCleanupTimeout   = 10 * time.Second
+	defaultPingTimeout        = 5 * time.Second
+	maximumPingTimeout        = 30 * time.Second
+	defaultMigrationTimeout   = 30 * time.Second
+	maximumMigrationTimeout   = 2 * time.Minute
+	defaultCleanupTimeout     = 2 * time.Second
+	maximumCleanupTimeout     = 10 * time.Second
+	defaultPersistenceTimeout = 30 * time.Second
+	maximumPersistenceTimeout = 2 * time.Minute
 )
 
 var (
@@ -47,18 +49,20 @@ var (
 
 // Options controls adapter-owned operation bounds.
 type Options struct {
-	PingTimeout      time.Duration
-	MigrationTimeout time.Duration
-	CleanupTimeout   time.Duration
+	PingTimeout        time.Duration
+	MigrationTimeout   time.Duration
+	CleanupTimeout     time.Duration
+	PersistenceTimeout time.Duration
 }
 
 // Adapter opens remote Turso Database handles behind the repository-owned
 // storage contract.
 type Adapter struct {
-	pingTimeout      time.Duration
-	migrationTimeout time.Duration
-	cleanupTimeout   time.Duration
-	open             databaseFactory
+	pingTimeout        time.Duration
+	migrationTimeout   time.Duration
+	cleanupTimeout     time.Duration
+	persistenceTimeout time.Duration
+	open               databaseFactory
 }
 
 // New creates an inert adapter.
@@ -85,16 +89,22 @@ func newAdapter(options Options, open databaseFactory) (*Adapter, error) {
 	if cleanupTimeout == 0 {
 		cleanupTimeout = defaultCleanupTimeout
 	}
+	persistenceTimeout := options.PersistenceTimeout
+	if persistenceTimeout == 0 {
+		persistenceTimeout = defaultPersistenceTimeout
+	}
 	if pingTimeout < 0 || pingTimeout > maximumPingTimeout ||
 		migrationTimeout < 0 || migrationTimeout > maximumMigrationTimeout ||
-		cleanupTimeout < 0 || cleanupTimeout > maximumCleanupTimeout || open == nil {
+		cleanupTimeout < 0 || cleanupTimeout > maximumCleanupTimeout ||
+		persistenceTimeout < 0 || persistenceTimeout > maximumPersistenceTimeout || open == nil {
 		return nil, ErrInvalidOptions
 	}
 	return &Adapter{
-		pingTimeout:      pingTimeout,
-		migrationTimeout: migrationTimeout,
-		cleanupTimeout:   cleanupTimeout,
-		open:             open,
+		pingTimeout:        pingTimeout,
+		migrationTimeout:   migrationTimeout,
+		cleanupTimeout:     cleanupTimeout,
+		persistenceTimeout: persistenceTimeout,
+		open:               open,
 	}, nil
 }
 
@@ -116,11 +126,12 @@ func (a *Adapter) Open(ctx context.Context, endpoint storage.Endpoint) (storage.
 		return nil, ErrOpenFailed
 	}
 	return &handle{
-		database:         database,
-		pingTimeout:      a.pingTimeout,
-		migrationTimeout: a.migrationTimeout,
-		cleanupTimeout:   a.cleanupTimeout,
-		migrationAllowed: migrationEndpointAllowed(endpoint),
+		database:           database,
+		pingTimeout:        a.pingTimeout,
+		migrationTimeout:   a.migrationTimeout,
+		cleanupTimeout:     a.cleanupTimeout,
+		persistenceTimeout: a.persistenceTimeout,
+		migrationAllowed:   migrationEndpointAllowed(endpoint),
 	}, nil
 }
 
@@ -181,13 +192,14 @@ type databaseHandle interface {
 type databaseFactory func(databaseURL, token string) databaseHandle
 
 type handle struct {
-	database         databaseHandle
-	pingTimeout      time.Duration
-	migrationTimeout time.Duration
-	cleanupTimeout   time.Duration
-	migrationAllowed bool
-	closeOnce        sync.Once
-	closeErr         error
+	database           databaseHandle
+	pingTimeout        time.Duration
+	migrationTimeout   time.Duration
+	cleanupTimeout     time.Duration
+	persistenceTimeout time.Duration
+	migrationAllowed   bool
+	closeOnce          sync.Once
+	closeErr           error
 }
 
 func (h *handle) Ping(ctx context.Context) error {
