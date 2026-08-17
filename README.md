@@ -5,6 +5,7 @@ The first release will connect multiple Gmail and Google Workspace accounts with
 
 The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, and bounded process-health serving.
 Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, and local service preflight are implemented.
+An inert, replaceable Turso connection adapter is present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md), but it is not reachable from the runtime.
 Email synchronization, persistence, MCP, OAuth, and deployment are intentionally not implemented yet.
 
 ## Quick start
