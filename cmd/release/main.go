@@ -6,6 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,6 +31,11 @@ func run(args []string) error {
 	switch args[0] {
 	case "acquire-syft":
 		return acquireSyft(args[1:])
+	case "list-targets":
+		if len(args) != 1 {
+			return fmt.Errorf("list-targets accepts no arguments")
+		}
+		return writeTargets(os.Stdout)
 	case "validate-metadata":
 		values, err := parseCommon(args[1:])
 		if err != nil {
@@ -55,6 +61,15 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown subcommand %q", args[0])
 	}
+}
+
+func writeTargets(output io.Writer) error {
+	for _, target := range releasebuild.Targets {
+		if _, err := fmt.Fprintf(output, "%s/%s\n", target.GOOS, target.GOARCH); err != nil {
+			return fmt.Errorf("write release target: %w", err)
+		}
+	}
+	return nil
 }
 
 func acquireSyft(args []string) error {

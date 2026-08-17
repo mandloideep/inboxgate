@@ -9,7 +9,7 @@ BUILD_DIR := $(CURDIR)/.build
 
 export GOCACHE := $(CURDIR)/.cache/go-build
 
-.PHONY: actionlint build check fmt-check help release-contract test test-race tidy-check verify vet vuln
+.PHONY: actionlint build check fmt-check help release-contract storage-cross-build test test-race tidy-check verify vet vuln
 
 help:
 	@printf '%s\n' 'Targets:'
@@ -19,6 +19,7 @@ help:
 	@printf '%s\n' '  test-race   Run tests with the race detector'
 	@printf '%s\n' '  vuln        Scan reachable Go code for known vulnerabilities'
 	@printf '%s\n' '  actionlint  Validate every GitHub Actions workflow'
+	@printf '%s\n' '  storage-cross-build  Compile the Turso adapter for every release target with CGO disabled'
 	@printf '%s\n' '  release-contract  Exercise pinned release construction and SBOM generation on Linux amd64'
 
 fmt-check:
@@ -62,6 +63,21 @@ $(ACTIONLINT):
 actionlint: $(ACTIONLINT)
 	$(ACTIONLINT) $$(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
 
+storage-cross-build:
+	@set -eu; \
+	target_count=0; \
+	for target in $$($(GO) run ./cmd/release list-targets); do \
+		target_os=$${target%/*}; \
+		target_arch=$${target#*/}; \
+		printf '%s\n' "Compiling Turso adapter for $$target"; \
+		CGO_ENABLED=0 GOOS="$$target_os" GOARCH="$$target_arch" $(GO) build -mod=readonly -buildvcs=false ./internal/storage/turso; \
+		target_count=$$((target_count + 1)); \
+	done; \
+	if [ "$$target_count" -ne 6 ]; then \
+		printf '%s\n' "Turso adapter target count = $$target_count, want 6" >&2; \
+		exit 1; \
+	fi
+
 release-contract:
 	@set -eu; \
 	if [ "$$($(GO) env GOOS)/$$($(GO) env GOARCH)" != "linux/amd64" ]; then \
@@ -88,4 +104,4 @@ build:
 	mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(BUILD_DIR)/inboxgate ./cmd/inboxgate
 
-check: fmt-check tidy-check verify vet test test-race vuln actionlint release-contract build
+check: fmt-check tidy-check verify vet test test-race vuln actionlint storage-cross-build release-contract build

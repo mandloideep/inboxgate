@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestModuleGraphContainsOnlyPinnedYAML(t *testing.T) {
+func TestModuleGraphContainsOnlyReviewedDirectDependencies(t *testing.T) {
 	command := exec.Command("go", "list", "-mod=readonly", "-m", "all")
 	command.Dir = repositoryRoot(t)
 	output, err := command.CombinedOutput()
@@ -18,6 +18,7 @@ func TestModuleGraphContainsOnlyPinnedYAML(t *testing.T) {
 	want := []string{
 		"github.com/mandloideep/inboxgate",
 		"go.yaml.in/yaml/v3 v3.0.5",
+		"turso.tech/database/tursogo-serverless v0.0.0-20260817122138-24adc316cdc4",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("module graph = %q, want %q", got, want)

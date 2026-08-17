@@ -6,28 +6,31 @@ Complete a provider step only after the corresponding implementation issue is ac
 
 ## Current blocker
 
-Persistence is currently blocked by the database client architecture, not by a missing Turso account, database, URL, or token.
-[ADR 0003](adr/0003-turso-serverless-driver-contract.md) rejects the evaluated `turso.tech/database/tursogo-serverless` version because the repository could not enforce three required properties.
+No owner credential or provider setup is blocking the next storage implementation issue.
+[ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official `turso.tech/database/tursogo-serverless` remote driver behind a narrow inert adapter.
+The adapter is not connected to configuration, commands, service startup, migrations, schemas, repositories, or production credentials.
 
-- A server-provided `base_url` could change authority before a later request carried the bearer token.
-- Valid remote error text could cross the boundary into diagnostics without safe typing and redaction.
-- Transaction completion and connection close used background requests that the caller could not cancel or bound truthfully.
+The owner accepts five unresolved driver risks for the exact selected version.
 
-Creating a Turso token or sharing credentials cannot resolve these defects.
-Do not create or provide a Turso credential for InboxGate while this blocker remains open.
-The next storage task must select and validate a driver, maintained fork, or explicitly approved protocol boundary that satisfies every acceptance property in ADR 0003.
-Migrations, credential persistence, account storage, and synchronization cursors must remain disabled until that architecture decision is accepted.
+- A server-provided `base_url` can change authority before a later request carries the bearer token.
+- Valid remote error text can be reflected by the driver.
+- Commit, rollback, and stream close use background requests that the caller cannot cancel truthfully.
+- The driver owns a private HTTP client without an injectable redirect, transport, or timeout policy.
+- Successful pipeline bodies, cursor lines, rows, and individual values lack repository-owned total limits.
+
+These items remain open in the [known-risk register](known-risks.md) and are not fixed by the adapter.
+The next code issue can implement append-only migrations through the repository-owned boundary without owner credentials.
+Production setup, credential creation, live connectivity, and database writes remain blocked until a separate approved issue requests them and the owner explicitly authorizes them.
 
 ## What you can decide now
 
-The owner can provide the following non-secret architecture decisions before a replacement storage issue is planned.
+The owner can provide the following non-secret operating decisions before production-readiness work is planned.
 
-1. Decide whether Turso remains a mandatory production requirement or whether another durable remote database may be evaluated.
-2. Decide whether InboxGate may depend on a maintained fork when the upstream driver cannot provide the required security and cancellation controls.
-3. Decide whether a separately operated protocol proxy is acceptable as a new security-critical service boundary.
-4. State the required deployment and network constraints, such as outbound policy, private routing, TLS termination ownership, and whether an additional service can be operated.
-5. State the required region, availability, recovery window, and recovery-drill expectations without naming an account or database.
-6. If a database already exists, state only whether it is a new Turso Database or a legacy libSQL database.
+1. State the required deployment and network constraints, such as outbound policy, private routing, TLS termination ownership, and whether an additional service can be operated.
+2. State the required region, availability, recovery window, and recovery-drill expectations without naming an account or database.
+3. If a database already exists, state only whether it is a new Turso Database or a legacy libSQL database.
+4. Decide whether a maintained fork or separately operated protocol proxy may be evaluated later to close accepted risks.
+5. State which operator role may approve the first production migration and recovery drill.
 
 Provide only decisions and non-identifying status.
 Do not provide an organization name, database name, endpoint, account identifier, token, connection string, or other credential.
@@ -37,14 +40,15 @@ Do not provide an organization name, database name, endpoint, account identifier
 Use these status meanings throughout this runbook.
 
 - `Blocking now` means work cannot safely proceed until the stated architecture problem is resolved.
+- `Resolved for the inert adapter` means the code-level architecture decision is accepted but no production setup or activation follows automatically.
 - `Future owner action` means the owner will need to act after an implementation issue defines and requests the exact prerequisite.
 - `Not yet actionable` means no owner setup or credential creation should occur with the current binary.
 - `Optional release operation` means an approved owner may deliberately publish the current reviewed software, independently of deployment or provider readiness.
 
 | Area | Status | What the owner should do now | What unblocks it |
 | --- | --- | --- | --- |
-| Turso architecture | `Blocking now` | Provide only the non-secret decisions listed above | An accepted replacement architecture and credential-free contract tests |
-| Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | Accepted architecture plus an approved production-readiness issue |
+| Turso architecture | `Resolved for the inert adapter` | Review ADR 0004 and the known-risk register | A later superseding decision only if the driver or architecture changes |
+| Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | An approved production-readiness issue with explicit owner authorization |
 | Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | OAuth enrollment implementation and explicit owner approval |
 | Encryption key | `Not yet actionable` | Do not generate or provide a key | An accepted key format, rotation design, and encrypted credential store |
 | MCP and Hermes | `Future owner action` | Reserve a private connectivity design, without creating a token | Authenticated MCP transport and an approved integration issue |
@@ -58,7 +62,7 @@ They are listed so the owner can recognize the safe next action when the relevan
 
 | Condition | When it matters | Safe owner action |
 | --- | --- | --- |
-| Current storage architecture rejection | Before any migration, persistence, or Turso credential use | Provide the non-secret architecture decisions above and wait for an accepted replacement ADR |
+| Accepted Turso driver risks | Before any runtime activation, credential use, migration, or new query path | Review `TURSO-001` through `TURSO-005`, keep the use within the explicit acceptance, and require a new decision if the surface broadens |
 | Google testing-mode refresh-token expiration | During OAuth enrollment testing for an external app that remains in testing mode | Review Google's current testing-mode policy and plan reauthorization or approved publication without sharing tokens or user identities |
 | Google Workspace administrator restrictions | Before authorizing a managed Workspace account | Ask the Workspace administrator to review the exact read-only scope and app policy through Google controls |
 | Google OAuth verification requirement | Before use outside an exempt, permitted testing, or eligible internal audience | Recheck audience applicability and exemptions, then complete Google's owner-managed verification process when required |
@@ -116,7 +120,7 @@ Do not create an untracked `.env` file in the repository as a convenience.
 
 ## Step-by-step Turso preparation after architecture acceptance
 
-Do not begin this section until a merged architecture decision replaces the rejected boundary and the active implementation issue explicitly authorizes production setup.
+Do not begin this section until ADR 0004 is merged and an active implementation issue explicitly authorizes production setup.
 The implementation and its credential-free tests must pass before live Turso access is considered.
 
 1. Read the accepted replacement ADR and confirm its exact driver or protocol version, transport controls, engine requirements, and rollback plan.
