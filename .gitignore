@@ -1,0 +1,12 @@
+/.build/
+/.cache/
+/.tools/
+/inboxgate
+/plan.md
+
+.DS_Store
+*.coverprofile
+*.out
+.env
+.env.*
+!.env.example

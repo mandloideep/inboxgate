@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/mandloideep/inboxgate/security/advisories/new
+    about: Report suspected vulnerabilities privately.
+  - name: Support and design discussion
+    url: https://github.com/mandloideep/inboxgate/discussions
+    about: Ask usage questions or discuss ideas before proposing work.

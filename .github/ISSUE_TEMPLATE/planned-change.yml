@@ -1,0 +1,77 @@
+name: Planned change
+description: Propose one focused implementation task from the approved roadmap.
+title: "change: "
+labels:
+  - "type:feature"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search open and closed issues and pull requests before filing.
+        State one user or operator problem before describing a solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What cannot a user or operator do safely or reliably today, and why does it matter?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed outcome
+      description: Describe the smallest useful outcome without leading with a file inventory.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Provide measurable behavior and observable results.
+      placeholder: |
+        - [ ] A user can ...
+        - [ ] The service rejects ...
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: State nearby behavior that this issue deliberately excludes.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and privacy impact
+      description: Identify affected trust boundaries, permissions, secrets, or sensitive data, or explain why there is no impact.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependency impact
+      description: List new direct or tool dependencies and the required ADR, or write None.
+    validations:
+      required: true
+  - type: textarea
+    id: capabilities
+    attributes:
+      label: Capability-surface impact
+      description: List any implemented or enabled command, MCP, network, or provider capability change, or write None.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: State the initial failing test, focused checks, full checks, and any end-to-end evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: deletion
+    attributes:
+      label: Deletion requests
+      description: List owner-only removal requests or write None.
+    validations:
+      required: true

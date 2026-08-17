@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+*.go text diff=golang
+*.md text diff=markdown
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
