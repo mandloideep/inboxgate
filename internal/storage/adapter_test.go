@@ -41,7 +41,10 @@ func (a *fakeAdapter) Open(_ context.Context, endpoint storage.Endpoint) (storag
 type fakeHandle struct{}
 
 func (h *fakeHandle) Ping(context.Context) error { return nil }
-func (h *fakeHandle) Close() error               { return nil }
+func (h *fakeHandle) Migrate(context.Context) (storage.MigrationResult, error) {
+	return storage.MigrationResult{}, nil
+}
+func (h *fakeHandle) Close() error { return nil }
 
 var _ storage.Adapter = (*fakeAdapter)(nil)
 var _ storage.Handle = (*fakeHandle)(nil)

@@ -2,6 +2,7 @@ package turso
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"net/http"
@@ -101,9 +102,17 @@ func TestOpenRejectsUnsafeEndpointsWithoutCallingDriver(t *testing.T) {
 func TestNewRejectsUnboundedOptions(t *testing.T) {
 	t.Parallel()
 
-	for _, timeout := range []time.Duration{-time.Second, 31 * time.Second} {
-		if _, err := New(Options{PingTimeout: timeout}); !errors.Is(err, ErrInvalidOptions) {
-			t.Fatalf("New(PingTimeout: %v) error = %v, want ErrInvalidOptions", timeout, err)
+	tests := []Options{
+		{PingTimeout: -time.Second},
+		{PingTimeout: maximumPingTimeout + time.Second},
+		{MigrationTimeout: -time.Second},
+		{MigrationTimeout: maximumMigrationTimeout + time.Second},
+		{CleanupTimeout: -time.Second},
+		{CleanupTimeout: maximumCleanupTimeout + time.Second},
+	}
+	for _, options := range tests {
+		if _, err := New(options); !errors.Is(err, ErrInvalidOptions) {
+			t.Fatalf("New(%#v) error = %v, want ErrInvalidOptions", options, err)
 		}
 	}
 }
@@ -528,8 +537,10 @@ func TestCredentialFreeLoopbackPingIsBounded(t *testing.T) {
 
 type fakeDatabase struct {
 	ping       func(context.Context) error
+	conn       func(context.Context) (*sql.Conn, error)
 	close      func() error
 	closeErr   error
+	connCalls  atomic.Int32
 	closeCalls atomic.Int32
 }
 
@@ -538,6 +549,14 @@ func (d *fakeDatabase) PingContext(ctx context.Context) error {
 		return nil
 	}
 	return d.ping(ctx)
+}
+
+func (d *fakeDatabase) Conn(ctx context.Context) (*sql.Conn, error) {
+	d.connCalls.Add(1)
+	if d.conn != nil {
+		return d.conn(ctx)
+	}
+	return nil, errors.New("synthetic connection unavailable")
 }
 
 func (d *fakeDatabase) Close() error {
