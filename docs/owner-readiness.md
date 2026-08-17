@@ -6,20 +6,22 @@ Complete a provider step only after the corresponding implementation issue is ac
 
 ## Current blocker
 
-No owner credential or provider setup is blocking the next storage implementation issue.
+No owner credential or provider setup is blocking the next account-persistence implementation issue.
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official `turso.tech/database/tursogo-serverless` remote driver behind a narrow inert adapter.
-The adapter is not connected to configuration, commands, service startup, migrations, schemas, repositories, or production credentials.
+[ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner restricted to credential-free literal-loopback tests.
+The adapter is not connected to configuration, commands, service startup, repositories, remote endpoints, or production credentials.
 
 The owner accepts five unresolved driver risks for the exact selected version.
 
 - A server-provided `base_url` can change authority before a later request carries the bearer token.
 - Valid remote error text can be reflected by the driver.
-- Commit, rollback, and stream close use background requests that the caller cannot cancel truthfully.
+- The driver's transaction helpers and stream close use background requests, a failed pipeline sequence has uncertain terminal state, a nil rollback response cannot prove cleanup completion, and the exact driver does not validate sequence payload type or require a true autocommit observation.
+- Synthetic migrations therefore require locked exact-pair ledger-prefix validation with null rejection during both application and terminal repair, a regression-resistant same-session `user_version` probe, separate durable ledger and marker verification, and forced pool discard when session state is unproven.
 - The driver owns a private HTTP client without an injectable redirect, transport, or timeout policy.
 - Successful pipeline bodies, cursor lines, rows, and individual values lack repository-owned total limits.
 
 These items remain open in the [known-risk register](known-risks.md) and are not fixed by the adapter.
-The next code issue can implement append-only migrations through the repository-owned boundary without owner credentials.
+The next code issue can implement minimum account and synchronization-cursor persistence through synthetic stores without owner credentials.
 Production setup, credential creation, live connectivity, and database writes remain blocked until a separate approved issue requests them and the owner explicitly authorizes them.
 
 ## What you can decide now
@@ -47,7 +49,7 @@ Use these status meanings throughout this runbook.
 
 | Area | Status | What the owner should do now | What unblocks it |
 | --- | --- | --- | --- |
-| Turso architecture | `Resolved for the inert adapter` | Review ADR 0004 and the known-risk register | A later superseding decision only if the driver or architecture changes |
+| Turso architecture | `Resolved for synthetic migrations` | Review ADR 0004, ADR 0005, and the known-risk register | A later superseding decision only if the driver or architecture changes |
 | Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | An approved production-readiness issue with explicit owner authorization |
 | Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | OAuth enrollment implementation and explicit owner approval |
 | Encryption key | `Not yet actionable` | Do not generate or provide a key | An accepted key format, rotation design, and encrypted credential store |

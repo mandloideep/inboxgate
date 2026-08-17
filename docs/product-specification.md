@@ -842,10 +842,10 @@ Create a new Turso Database rather than a legacy libSQL database.
 The operator should use the Turso database-engine creation option documented at implementation time and record the resulting engine type in the deployment runbook.
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official remote `tursogo-serverless` driver behind the narrow repository-owned storage adapter.
-The adapter is inert and provides only open, bounded ping, and idempotent close behavior.
-It is not connected to configuration, commands, service startup, capabilities, migrations, schemas, repositories, or production credentials.
+The adapter provides open, bounded ping, idempotent close, and a narrow embedded migration operation.
+Migration execution is restricted to credential-free literal-loopback endpoints and is not connected to configuration, commands, service startup, capabilities, repositories, or production credentials.
 
-The owner accepts the unresolved `base_url` authority, raw remote diagnostic, background commit, rollback and close context, private HTTP client and redirect policy, and successful-response bound risks recorded in the [known-risk register](known-risks.md).
+The owner accepts the unresolved `base_url` authority, raw remote diagnostic, transaction completion, close context, terminal acknowledgement, private HTTP client and redirect policy, and successful-response bound risks recorded in the [known-risk register](known-risks.md).
 That acceptance permits focused storage implementation to continue but does not describe the risks as fixed.
 Every later storage issue must identify which accepted risks it reaches and add containment or obtain a new decision before broadening the boundary.
 
@@ -863,15 +863,24 @@ Create unique constraints for all provider identifiers and idempotency keys.
 Set conservative connection limits from the validated configuration.
 The accepted adapter requires HTTPS with standard TLS certificate and hostname verification and rejects cleartext remote URLs before driver construction.
 Plain HTTP may be used only with a literal loopback endpoint in credential-free tests, with no bearer token or production-derived secret attached.
-The current adapter maps ping and returned close failures to fixed diagnostics and bounds ping with an owned deadline.
+The current adapter maps ping, migration, and returned close failures to fixed diagnostics and bounds ping and context-aware migration statements with owned deadlines.
 Authority handling, redirect behavior, successful-response body, cursor-line, row and value limits, and caller-controlled commit, rollback and close cancellation remain accepted unresolved risks.
-Future contracts must still verify transaction semantics, parameter binding, error classification, migration locking, restart durability, and uncertain-write behavior before storing production data.
+The credential-free migration contract verifies parameterized ledger inspection, an exact bounded atomic pipeline sequence, `BEGIN IMMEDIATE` locking, transaction-local validation of the exact row total and every expected pair with null rejection, internally rendered numeric and lowercase-hex catalog metadata, exact checksum drift rejection, bounded rollback attempts with unknown outcomes, no same-invocation replay, and fresh-run reconciliation after an uncertain sequence.
+Every purportedly successful migration commit requires a same-session savepoint sequence that acquires main-database writer serialization through a bounded ledger self-assignment, revalidates the same exact null-rejecting ledger prefix, and refuses to regress a concurrently advanced code-owned `PRAGMA user_version` marker, followed by separate-connection visibility of both the exact ledger and marker while the apply connection remains reserved.
+An apply connection whose autocommit state cannot be proven is discarded from the pool after cleanup is attempted.
+It does not prove remote engine behavior or close the accepted driver risks before production data is stored.
 Do not assume every SQLite pragma or extension is available remotely.
 Do not automatically replay a statement after a transport failure because its server-side outcome may be uncertain.
 
 Migrations are append-only numbered SQL files.
 The migration runner records the migration number and checksum.
 It must refuse to run if an already applied migration has a different checksum.
+The embedded catalog starts with `0001_migration_ledger.sql`, contains no product-state tables, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
+The runner inspects current state outside a transaction, sends pending work as one bounded no-argument `BEGIN IMMEDIATE` through `COMMIT` pipeline sequence, verifies the exact prefix row total and every expected pair under the writer lock while rejecting nulls, proves terminal session state without marker regression through the code-owned `user_version` marker and a separate physical connection, and applies at most one pending migration per transaction.
+The sequence accepts no caller data and renders only a bounded code-derived migration number and validated lowercase-hex checksum as SQL literals because the driver's sequence request cannot carry arguments.
+The prefix guard renders only bounded catalog numbers and validated lowercase-hex checksums, and none of those literals come from users, providers, configuration, or database rows.
+A durable ledger with a missing marker is reconciled by marker repair without schema replay, while a marker ahead of the ledger is drift.
+Credentialed and non-loopback migration execution is rejected before any migration request.
 
 Test restoration by creating a fresh service instance from only the repository, runtime secrets, and Turso database.
 Do not treat Turso as the only place OAuth encryption keys exist.

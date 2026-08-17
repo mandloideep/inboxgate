@@ -19,9 +19,16 @@ type Adapter interface {
 	Open(context.Context, Endpoint) (Handle, error)
 }
 
-// Handle is the minimum connection lifecycle needed by the storage
-// feasibility boundary.
+// Handle exposes connection lifecycle and embedded schema reconciliation
+// without exposing a database handle or caller-supplied SQL.
 type Handle interface {
 	Ping(context.Context) error
+	Migrate(context.Context) (MigrationResult, error)
 	Close() error
+}
+
+// MigrationResult is the bounded outcome of reconciling the embedded schema.
+type MigrationResult struct {
+	Applied uint16
+	Current uint16
 }
