@@ -26,6 +26,48 @@ It validates without any named secret variable being present:
 go run ./cmd/inboxgate --config config.example.yaml config validate
 ```
 
+## Inspect effective policy
+
+Use the same path selection rules with `config effective` to inspect the complete validated policy after compiled defaults are applied:
+
+```sh
+inboxgate --config /path/to/config.yaml config effective
+```
+
+Success exits 0, leaves stderr empty, and writes one indented JSON document followed by exactly one newline.
+Invalid configuration or an unreadable file exits 1 with the same value-safe diagnostics as `config validate` and no partial JSON.
+Command misuse exits 2 with focused usage.
+A stdout write failure exits 1 with a generic error that does not include configuration data.
+
+The versioned JSON envelope has these top-level fields in this exact order:
+
+1. `output_version`, which is integer `1`.
+2. `path_source`, which is `flag`, `environment`, or `default`.
+3. `configuration`, which contains every schema v1 field in example-schema order.
+4. `sources`, which mirrors the complete configuration hierarchy.
+
+The command never prints the selected filesystem path.
+Every leaf in `sources` is `file` when that exact leaf appeared in YAML or `compiled_default` when it was omitted and obtained from `config.Defaults()`.
+An explicit value remains `file` even when it equals the compiled default.
+An explicitly empty mapping does not change the provenance of omitted children.
+Each list has one field-level source rather than one source per element.
+Schema v1 has no valid empty-string leaf, so an explicit empty string remains explicit during validation but is rejected without effective JSON.
+
+Durations use the canonical Go duration string after validation.
+Integers and booleans remain JSON numbers and booleans.
+Empty lists are `[]` rather than `null`.
+Accepted string spelling and list order are preserved.
+Comments, YAML key order, scalar quoting, and an optional document-start marker do not affect the output.
+Repeated runs over the same configuration bytes, path-selection class, and binary version produce byte-identical stdout.
+
+Fields ending in `_env` still contain environment-variable names only.
+The effective command prints those names as policy but never reads, substitutes, hashes, measures, checks the presence of, or otherwise represents the named values.
+The only environment lookup is `INBOXGATE_CONFIG` for file selection.
+
+Effective output can still reveal operationally sensitive policy such as sender domains, subject terms, bind addresses, schedules, retention choices, and environment-variable names.
+Review it before pasting it into public issues, logs, or chat systems.
+The command is a local read-only inspection surface and does not start Gmail, OAuth, Turso, MCP, HTTP, backfill, review, logging, encryption, or task behavior.
+
 ## Secret boundary
 
 Fields ending in `_env` contain only an environment-variable name matching `[A-Z_][A-Z0-9_]{0,127}`.

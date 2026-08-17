@@ -90,63 +90,68 @@ func mapping(fields map[string]*schemaNode) *schemaNode { return &schemaNode{fie
 func sequence(item *schemaNode) *schemaNode             { return &schemaNode{item: item} }
 
 func Parse(data []byte) (Config, error) {
+	config, _, err := parseValidated(data)
+	return config, err
+}
+
+func parseValidated(data []byte) (Config, *yaml.Node, error) {
 	if len(data) > MaxFileBytes {
-		return Config{}, validationError(Problem{Path: "$", Reason: fmt.Sprintf("configuration exceeds the %d-byte limit", MaxFileBytes)})
+		return Config{}, nil, validationError(Problem{Path: "$", Reason: fmt.Sprintf("configuration exceeds the %d-byte limit", MaxFileBytes)})
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
-		return Config{}, validationError(Problem{Path: "$", Reason: "configuration document is empty"})
+		return Config{}, nil, validationError(Problem{Path: "$", Reason: "configuration document is empty"})
 	}
 	if !utf8.Valid(data) {
-		return Config{}, validationError(Problem{Path: "$", Reason: "configuration must be valid UTF-8"})
+		return Config{}, nil, validationError(Problem{Path: "$", Reason: "configuration must be valid UTF-8"})
 	}
 	if problem := invalidCharacter(data); problem != nil {
-		return Config{}, validationError(*problem)
+		return Config{}, nil, validationError(*problem)
 	}
 	if line, found := directiveLine(data); found {
-		return Config{}, validationError(Problem{Path: "$", Line: line, Column: 1, Reason: "YAML directives are not supported"})
+		return Config{}, nil, validationError(Problem{Path: "$", Line: line, Column: 1, Reason: "YAML directives are not supported"})
 	}
 	if line, found := documentEndLine(data); found {
-		return Config{}, validationError(Problem{Path: "$", Line: line, Column: 1, Reason: "YAML document-end markers are not supported"})
+		return Config{}, nil, validationError(Problem{Path: "$", Line: line, Column: 1, Reason: "YAML document-end markers are not supported"})
 	}
 
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	var document yaml.Node
 	if err := decoder.Decode(&document); err != nil {
-		return Config{}, validationError(safeYAMLError(err))
+		return Config{}, nil, validationError(safeYAMLError(err))
 	}
 	var extra yaml.Node
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err != nil {
-			return Config{}, validationError(safeYAMLError(err))
+			return Config{}, nil, validationError(safeYAMLError(err))
 		}
 		line, column := 0, 0
 		if len(extra.Content) > 0 {
 			line, column = extra.Content[0].Line, extra.Content[0].Column
 		}
-		return Config{}, validationError(Problem{Path: "$", Line: line, Column: column, Reason: "multiple YAML documents are not supported"})
+		return Config{}, nil, validationError(Problem{Path: "$", Line: line, Column: column, Reason: "multiple YAML documents are not supported"})
 	}
 	if len(document.Content) != 1 || document.Content[0].Kind == yaml.ScalarNode && document.Content[0].Tag == "!!null" {
-		return Config{}, validationError(Problem{Path: "$", Reason: "configuration document must not be null"})
+		return Config{}, nil, validationError(Problem{Path: "$", Reason: "configuration document must not be null"})
 	}
 	root := document.Content[0]
 	if root.Kind != yaml.MappingNode {
-		return Config{}, validationError(Problem{Path: "$", Line: root.Line, Column: root.Column, Reason: "document root must be a mapping"})
+		return Config{}, nil, validationError(Problem{Path: "$", Line: root.Line, Column: root.Column, Reason: "document root must be a mapping"})
 	}
 
 	var problems []Problem
 	nodes := 0
 	walkStructure(root, schema, "$", 1, &nodes, &problems)
 	if len(problems) != 0 {
-		return Config{}, validationError(problems...)
+		return Config{}, nil, validationError(problems...)
 	}
 
 	config := Defaults()
 	decodeConfig(root, &config, &problems)
 	validateConfig(config, &problems)
 	if len(problems) != 0 {
-		return Config{}, validationError(problems...)
+		return Config{}, nil, validationError(problems...)
 	}
-	return config, nil
+	return config, root, nil
 }
 
 func validationError(problems ...Problem) error {

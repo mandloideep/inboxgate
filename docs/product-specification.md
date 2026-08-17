@@ -377,8 +377,25 @@ Empty path values, repeated flags, positional paths, unknown flags, and extra ar
 Symlinks to regular files are accepted, while directories, devices, sockets, FIFOs, and other non-regular targets are rejected.
 Success exits 0 with exactly `configuration valid` on stdout, invalid configuration exits 1 with value-safe diagnostics on stderr, and CLI misuse exits 2 with focused usage.
 Validation never reads an environment variable whose name came from YAML and makes no external request.
-`inboxgate config effective` prints the normalized effective configuration with every secret value redacted.
-The effective configuration includes compiled defaults and identifies the source of each overridden value.
+`inboxgate config effective` loads and validates the same file, applies the single compiled `config.Defaults()` definition, and prints one deterministic indented JSON document followed by one newline.
+It never contacts a service, activates runtime behavior, reads an environment variable named by YAML, or prints the selected configuration path.
+Invalid input produces the same value-safe diagnostics as `config validate` and no partial JSON.
+
+The versioned JSON envelope orders `output_version`, `path_source`, `configuration`, and `sources` exactly.
+Output version 1 uses `flag`, `environment`, or `default` as the path-selection class without disclosing path data.
+The `configuration` object contains every schema v1 field in section 7.2 order after defaults are applied.
+Durations use `time.Duration.String()`, integers and booleans retain their JSON types, empty lists are never null, and accepted string spelling and list order are preserved.
+Standard `encoding/json` escaping, `json.MarshalIndent` with two spaces, and one final newline define the serialization.
+
+The `sources` object mirrors the complete configuration hierarchy and uses `file` or `compiled_default` at every leaf.
+Provenance comes from YAML presence rather than value comparison, so an explicit default-equivalent value remains `file` and an empty mapping leaves omitted children as `compiled_default`.
+List provenance applies to the whole field.
+The `version` source is always `file` because schema v1 requires it.
+
+Fields ending in `_env` are printed as validated environment-variable names, but their named values are structurally never acquired or represented.
+Successful output may still contain sensitive operational policy, including sender domains, subject terms, bind addresses, schedules, retention choices, and environment-variable names.
+Operators must review it before sharing it in public issues or logs.
+The command is a local read-only inspection surface and does not expose effective configuration through MCP, HTTP, health endpoints, logs, or an application API.
 
 Configuration is loaded once at process start.
 Do not implement hot reload in the first release.

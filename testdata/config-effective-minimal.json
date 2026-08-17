@@ -1,0 +1,166 @@
+{
+  "output_version": 1,
+  "path_source": "flag",
+  "configuration": {
+    "version": 1,
+    "server": {
+      "listen": "0.0.0.0:8080",
+      "read_header_timeout": "5s",
+      "read_timeout": "30s",
+      "write_timeout": "30s",
+      "idle_timeout": "1m0s",
+      "max_request_bytes": 1048576
+    },
+    "database": {
+      "engine": "turso",
+      "url_env": "TURSO_DATABASE_URL",
+      "auth_token_env": "TURSO_AUTH_TOKEN",
+      "max_open_connections": 8,
+      "max_idle_connections": 2,
+      "connection_max_lifetime": "30m0s"
+    },
+    "gmail": {
+      "oauth_client_id_env": "GOOGLE_OAUTH_CLIENT_ID",
+      "oauth_client_secret_env": "GOOGLE_OAUTH_CLIENT_SECRET",
+      "oauth_redirect_url_env": "GOOGLE_OAUTH_REDIRECT_URL",
+      "scope": "gmail.readonly",
+      "poll_interval": "5m0s",
+      "poll_jitter": "30s",
+      "page_size": 100,
+      "max_accounts_in_flight": 2,
+      "body_excerpt_bytes": 32768,
+      "thread_max_messages": 50
+    },
+    "backfill": {
+      "enabled": true,
+      "default_lookback_days": 365,
+      "maximum_lookback_days": 3650,
+      "page_size": 100,
+      "current_mail_has_priority": true,
+      "run_window": {
+        "timezone": "America/Chicago",
+        "start": "22:00",
+        "end": "06:00"
+      }
+    },
+    "gate": {
+      "version": 1,
+      "excluded_labels": [
+        "SPAM",
+        "TRASH"
+      ],
+      "suppress_gmail_categories": [
+        "CATEGORY_PROMOTIONS",
+        "CATEGORY_SOCIAL"
+      ],
+      "direct_recipient_is_candidate": true,
+      "mailing_list_is_bulk_signal": true,
+      "sender_allow_domains": [],
+      "sender_block_domains": [],
+      "subject_candidate_terms": [],
+      "subject_urgent_terms": []
+    },
+    "review": {
+      "default_page_size": 25,
+      "maximum_page_size": 100,
+      "automatic_task_creation": false
+    },
+    "retention": {
+      "metadata_days": 0,
+      "excerpt_days": 365,
+      "audit_days": 730
+    },
+    "mcp": {
+      "enabled": true,
+      "path": "/mcp",
+      "bearer_token_env": "INBOXGATE_MCP_TOKEN",
+      "enable_review_writes": true,
+      "enable_operator_tools": false
+    },
+    "encryption": {
+      "master_key_env": "INBOXGATE_MASTER_KEY"
+    },
+    "logging": {
+      "level": "info",
+      "format": "json"
+    }
+  },
+  "sources": {
+    "version": "file",
+    "server": {
+      "listen": "compiled_default",
+      "read_header_timeout": "compiled_default",
+      "read_timeout": "compiled_default",
+      "write_timeout": "compiled_default",
+      "idle_timeout": "compiled_default",
+      "max_request_bytes": "compiled_default"
+    },
+    "database": {
+      "engine": "compiled_default",
+      "url_env": "compiled_default",
+      "auth_token_env": "compiled_default",
+      "max_open_connections": "compiled_default",
+      "max_idle_connections": "compiled_default",
+      "connection_max_lifetime": "compiled_default"
+    },
+    "gmail": {
+      "oauth_client_id_env": "compiled_default",
+      "oauth_client_secret_env": "compiled_default",
+      "oauth_redirect_url_env": "compiled_default",
+      "scope": "compiled_default",
+      "poll_interval": "compiled_default",
+      "poll_jitter": "compiled_default",
+      "page_size": "compiled_default",
+      "max_accounts_in_flight": "compiled_default",
+      "body_excerpt_bytes": "compiled_default",
+      "thread_max_messages": "compiled_default"
+    },
+    "backfill": {
+      "enabled": "compiled_default",
+      "default_lookback_days": "compiled_default",
+      "maximum_lookback_days": "compiled_default",
+      "page_size": "compiled_default",
+      "current_mail_has_priority": "compiled_default",
+      "run_window": {
+        "timezone": "compiled_default",
+        "start": "compiled_default",
+        "end": "compiled_default"
+      }
+    },
+    "gate": {
+      "version": "compiled_default",
+      "excluded_labels": "compiled_default",
+      "suppress_gmail_categories": "compiled_default",
+      "direct_recipient_is_candidate": "compiled_default",
+      "mailing_list_is_bulk_signal": "compiled_default",
+      "sender_allow_domains": "compiled_default",
+      "sender_block_domains": "compiled_default",
+      "subject_candidate_terms": "compiled_default",
+      "subject_urgent_terms": "compiled_default"
+    },
+    "review": {
+      "default_page_size": "compiled_default",
+      "maximum_page_size": "compiled_default",
+      "automatic_task_creation": "compiled_default"
+    },
+    "retention": {
+      "metadata_days": "compiled_default",
+      "excerpt_days": "compiled_default",
+      "audit_days": "compiled_default"
+    },
+    "mcp": {
+      "enabled": "compiled_default",
+      "path": "compiled_default",
+      "bearer_token_env": "compiled_default",
+      "enable_review_writes": "compiled_default",
+      "enable_operator_tools": "compiled_default"
+    },
+    "encryption": {
+      "master_key_env": "compiled_default"
+    },
+    "logging": {
+      "level": "compiled_default",
+      "format": "compiled_default"
+    }
+  }
+}

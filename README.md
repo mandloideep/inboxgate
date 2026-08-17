@@ -15,11 +15,13 @@ make check
 go run ./cmd/inboxgate version
 go run ./cmd/inboxgate help
 go run ./cmd/inboxgate --config config.example.yaml config validate
+go run ./cmd/inboxgate --config config.example.yaml config effective
 ```
 
 Development builds print `inboxgate dev`.
 Release builds print the canonical version and full source commit.
 The validation command checks strict configuration schema v1 without credentials or network access.
+The effective command prints the complete normalized policy and field provenance without reading named secret values or exposing the selected path.
 See the [configuration guide](docs/configuration.md) and [complete example](config.example.yaml).
 
 ## Product boundaries

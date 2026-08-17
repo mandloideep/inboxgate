@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: configuration parser update for issue #6.
+Status: effective configuration inspection update for issue #8.
 
 ## Security objectives
 
@@ -18,7 +18,7 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 
 | Boundary | Untrusted input | Required control |
 | --- | --- | --- |
-| Operator to CLI and configuration | Arguments, paths, YAML, environment names | Strict parsing, bounded input, redacted output, no secret values in YAML |
+| Operator to CLI and configuration | Arguments, paths, YAML, environment names | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output |
 | Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
 | InboxGate to Turso | Queries, records, credentials | Parameterized fixed queries, encrypted provider credentials, least privilege, migration integrity |
@@ -38,6 +38,19 @@ Tests use synthetic values, provider credentials are stored with versioned authe
 
 Configuration schema v1 accepts environment-variable names only in fields ending in `_env`.
 The validation path checks the name grammar but never looks up the named value, never substitutes environment data into YAML, and never reports a rejected scalar or list value.
+The effective inspection path prints validated environment-variable names as policy but never acquires, checks, hashes, measures, or represents their named values.
+Its only environment lookup selects the configuration path through `INBOXGATE_CONFIG`.
+
+### Effective policy disclosure and side channels
+
+Successful `config effective` stdout can contain sensitive non-secret policy, including sender domains, subject terms, bind addresses, schedules, retention choices, and environment-variable names.
+Operators are warned to review the output before putting it in public issues, logs, or chat systems.
+The selected path is not emitted, so the output does not reveal usernames, home directories, mount details, or other host path data.
+Provenance reveals only the path-selection class and whether each field came from the file or compiled defaults.
+The output contains no timestamps, process identifiers, hostnames, secret presence, service availability, or runtime state.
+Invalid configuration produces no partial normalized output, and write failures use a generic diagnostic.
+Existing file, YAML node, depth, list, string, and schema limits continue to bound rendering.
+The command has no network client, filesystem-write path, provider activation, database activation, or MCP exposure.
 
 ### Malicious or mistaken configuration
 

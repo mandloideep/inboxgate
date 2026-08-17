@@ -1,0 +1,166 @@
+{
+  "output_version": 1,
+  "path_source": "flag",
+  "configuration": {
+    "version": 1,
+    "server": {
+      "listen": "0.0.0.0:8080",
+      "read_header_timeout": "5s",
+      "read_timeout": "30s",
+      "write_timeout": "30s",
+      "idle_timeout": "1m0s",
+      "max_request_bytes": 1048576
+    },
+    "database": {
+      "engine": "turso",
+      "url_env": "TURSO_DATABASE_URL",
+      "auth_token_env": "TURSO_AUTH_TOKEN",
+      "max_open_connections": 8,
+      "max_idle_connections": 2,
+      "connection_max_lifetime": "30m0s"
+    },
+    "gmail": {
+      "oauth_client_id_env": "GOOGLE_OAUTH_CLIENT_ID",
+      "oauth_client_secret_env": "GOOGLE_OAUTH_CLIENT_SECRET",
+      "oauth_redirect_url_env": "GOOGLE_OAUTH_REDIRECT_URL",
+      "scope": "gmail.readonly",
+      "poll_interval": "5m0s",
+      "poll_jitter": "30s",
+      "page_size": 100,
+      "max_accounts_in_flight": 2,
+      "body_excerpt_bytes": 32768,
+      "thread_max_messages": 50
+    },
+    "backfill": {
+      "enabled": true,
+      "default_lookback_days": 365,
+      "maximum_lookback_days": 3650,
+      "page_size": 100,
+      "current_mail_has_priority": true,
+      "run_window": {
+        "timezone": "America/Chicago",
+        "start": "22:00",
+        "end": "06:00"
+      }
+    },
+    "gate": {
+      "version": 1,
+      "excluded_labels": [
+        "SPAM",
+        "TRASH"
+      ],
+      "suppress_gmail_categories": [
+        "CATEGORY_PROMOTIONS",
+        "CATEGORY_SOCIAL"
+      ],
+      "direct_recipient_is_candidate": true,
+      "mailing_list_is_bulk_signal": true,
+      "sender_allow_domains": [],
+      "sender_block_domains": [],
+      "subject_candidate_terms": [],
+      "subject_urgent_terms": []
+    },
+    "review": {
+      "default_page_size": 25,
+      "maximum_page_size": 100,
+      "automatic_task_creation": false
+    },
+    "retention": {
+      "metadata_days": 0,
+      "excerpt_days": 365,
+      "audit_days": 730
+    },
+    "mcp": {
+      "enabled": true,
+      "path": "/mcp",
+      "bearer_token_env": "INBOXGATE_MCP_TOKEN",
+      "enable_review_writes": true,
+      "enable_operator_tools": false
+    },
+    "encryption": {
+      "master_key_env": "INBOXGATE_MASTER_KEY"
+    },
+    "logging": {
+      "level": "info",
+      "format": "json"
+    }
+  },
+  "sources": {
+    "version": "file",
+    "server": {
+      "listen": "file",
+      "read_header_timeout": "file",
+      "read_timeout": "file",
+      "write_timeout": "file",
+      "idle_timeout": "file",
+      "max_request_bytes": "file"
+    },
+    "database": {
+      "engine": "file",
+      "url_env": "file",
+      "auth_token_env": "file",
+      "max_open_connections": "file",
+      "max_idle_connections": "file",
+      "connection_max_lifetime": "file"
+    },
+    "gmail": {
+      "oauth_client_id_env": "file",
+      "oauth_client_secret_env": "file",
+      "oauth_redirect_url_env": "file",
+      "scope": "file",
+      "poll_interval": "file",
+      "poll_jitter": "file",
+      "page_size": "file",
+      "max_accounts_in_flight": "file",
+      "body_excerpt_bytes": "file",
+      "thread_max_messages": "file"
+    },
+    "backfill": {
+      "enabled": "file",
+      "default_lookback_days": "file",
+      "maximum_lookback_days": "file",
+      "page_size": "file",
+      "current_mail_has_priority": "file",
+      "run_window": {
+        "timezone": "file",
+        "start": "file",
+        "end": "file"
+      }
+    },
+    "gate": {
+      "version": "file",
+      "excluded_labels": "file",
+      "suppress_gmail_categories": "file",
+      "direct_recipient_is_candidate": "file",
+      "mailing_list_is_bulk_signal": "file",
+      "sender_allow_domains": "file",
+      "sender_block_domains": "file",
+      "subject_candidate_terms": "file",
+      "subject_urgent_terms": "file"
+    },
+    "review": {
+      "default_page_size": "file",
+      "maximum_page_size": "file",
+      "automatic_task_creation": "file"
+    },
+    "retention": {
+      "metadata_days": "file",
+      "excerpt_days": "file",
+      "audit_days": "file"
+    },
+    "mcp": {
+      "enabled": "file",
+      "path": "file",
+      "bearer_token_env": "file",
+      "enable_review_writes": "file",
+      "enable_operator_tools": "file"
+    },
+    "encryption": {
+      "master_key_env": "file"
+    },
+    "logging": {
+      "level": "file",
+      "format": "file"
+    }
+  }
+}
