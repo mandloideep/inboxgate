@@ -1,0 +1,81 @@
+# InboxGate configuration schema v1.
+# This complete example uses synthetic environment-variable names only.
+version: 1
+
+server:
+  listen: "0.0.0.0:8080" # hostname, IPv4, or bracketed IPv6 plus port 1..65535; at most 263 bytes
+  read_header_timeout: 5s # 1s..30s, not above read_timeout
+  read_timeout: 30s # 1s..5m
+  write_timeout: 30s # 1s..5m
+  idle_timeout: 60s # 1s..10m
+  max_request_bytes: 1048576 # 1024..1048576
+
+database:
+  engine: turso
+  url_env: TURSO_DATABASE_URL
+  auth_token_env: TURSO_AUTH_TOKEN
+  max_open_connections: 8 # 1..64
+  max_idle_connections: 2 # 0..64, not above max_open_connections
+  connection_max_lifetime: 30m # 1m..24h
+
+gmail:
+  oauth_client_id_env: GOOGLE_OAUTH_CLIENT_ID
+  oauth_client_secret_env: GOOGLE_OAUTH_CLIENT_SECRET
+  oauth_redirect_url_env: GOOGLE_OAUTH_REDIRECT_URL
+  scope: gmail.readonly
+  poll_interval: 5m # 1m..1h
+  poll_jitter: 30s # 0s..5m, not above half of poll_interval
+  page_size: 100 # 1..500
+  max_accounts_in_flight: 2 # 1..16
+  body_excerpt_bytes: 32768 # 1024..65536
+  thread_max_messages: 50 # 1..100
+
+backfill:
+  enabled: true
+  default_lookback_days: 365 # 1..3650, not above maximum
+  maximum_lookback_days: 3650 # 1..3650
+  page_size: 100 # 1..500
+  current_mail_has_priority: true
+  run_window:
+    timezone: America/Chicago # UTC or a loadable safe IANA name
+    start: "22:00" # zero-padded HH:MM
+    end: "06:00" # must differ from start; overnight is valid
+
+gate:
+  version: 1
+  excluded_labels: # at most 32 unique A-Z, a-z, 0-9, underscore, or hyphen identifiers
+    - SPAM
+    - TRASH
+  suppress_gmail_categories: # at most five unique supported Gmail categories
+    - CATEGORY_PROMOTIONS
+    - CATEGORY_SOCIAL
+  direct_recipient_is_candidate: true
+  mailing_list_is_bulk_signal: true
+  sender_allow_domains: [] # at most 256 unique lowercase ASCII DNS domains
+  sender_block_domains: [] # disjoint from sender_allow_domains
+  subject_candidate_terms: [] # at most 256 unique trimmed literal terms, 1..128 UTF-8 bytes
+  subject_urgent_terms: [] # at most 256 case-insensitively unique literal terms
+
+review:
+  default_page_size: 25 # 1..100, not above maximum
+  maximum_page_size: 100 # 1..100
+  automatic_task_creation: false
+
+retention:
+  metadata_days: 0 # 0 means retain until policy changes; otherwise 1..36500
+  excerpt_days: 365 # 1..3650
+  audit_days: 730 # 1..3650
+
+mcp:
+  enabled: true
+  path: /mcp # clean unescaped RFC 3986 path, 2..128 ASCII bytes
+  bearer_token_env: INBOXGATE_MCP_TOKEN
+  enable_review_writes: true
+  enable_operator_tools: false
+
+encryption:
+  master_key_env: INBOXGATE_MASTER_KEY
+
+logging:
+  level: info # debug, info, warn, or error
+  format: json # json or text

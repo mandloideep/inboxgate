@@ -77,5 +77,5 @@ The checksum file covers all six platform archives and the SPDX SBOM.
 The build-provenance attestation covers all eight published assets.
 A separate SBOM attestation associates the SPDX document with all six archives.
 
-Each archive contains one versioned top-level directory with the platform binary, `LICENSE`, and `README.md`.
+Each archive contains one versioned top-level directory with the platform binary, `LICENSE`, `README.md`, and `THIRD_PARTY_NOTICES.md`.
 Linux and macOS archives use `.tar.gz`, while Windows archives use `.zip`.

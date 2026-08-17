@@ -230,8 +230,7 @@ The configuration may name the environment variable to read, but it never receiv
 
 ### 7.2 Example schema
 
-The first committed `config.example.yaml` should have this shape.
-Exact defaults must be confirmed by failing tests before implementation.
+The committed `config.example.yaml` has this shape and its values are the compiled schema v1 defaults.
 
 ```yaml
 version: 1
@@ -331,12 +330,53 @@ The parser must reject YAML anchors, aliases, custom tags, and multiple document
 The configuration file has a small fixed maximum size and nesting depth.
 These restrictions keep YAML a human-friendly syntax without accepting its most complex features.
 
+Schema v1 requires exactly one non-null UTF-8 mapping document no larger than 65,536 bytes.
+It allows comments and one optional document-start marker.
+It rejects additional documents, document-end markers, directives, anchors, aliases, merge keys, custom tags, explicit nulls, non-string keys, unknown keys, duplicate keys, NUL, and disallowed control characters before typed decoding.
+Mapping and sequence depth is limited to 8, counting the root as depth 1, and the decoded tree is limited to 4,096 nodes.
+Booleans are unquoted lowercase `true` or `false`, integer fields are unquoted canonical unsigned decimal values, and durations use `time.ParseDuration` followed by field bounds.
+The parser provides no includes, templates, environment substitution, arbitrary unmarshalling hooks, or regular expressions.
+
+`version` is the only required field and must be unquoted integer `1`.
+Omitted sections and fields receive the defaults in section 7.2.
+Explicit zeroes, empty strings, empty lists, and `false` values are validated and never replaced by defaults.
+Explicit null is invalid and every list field permits an empty list.
+
+`server.listen` is a non-empty hostname, IPv4, or bracketed IPv6 `host:port` of at most 263 bytes with numeric port 1 through 65535 and no whitespace, controls, backslashes, malformed host labels, or URL components.
+Read-header timeout is 1 second through 30 seconds and cannot exceed read timeout.
+Read and write timeouts are 1 second through 5 minutes, idle timeout is 1 second through 10 minutes, and maximum request bytes is 1,024 through 1,048,576.
+The database engine is exactly `turso`, open connections are 1 through 64, idle connections are 0 through 64 and cannot exceed open connections, and connection lifetime is 1 minute through 24 hours.
+
+Gmail scope is exactly `gmail.readonly`.
+Polling is 1 minute through 1 hour, jitter is 0 through 5 minutes and cannot exceed half the polling interval, page size is 1 through 500, account concurrency is 1 through 16, excerpt bytes is 1,024 through 65,536, and thread messages is 1 through 100.
+Backfill lookbacks are 1 through 3,650 days with the default not above the maximum, and backfill page size is 1 through 500.
+The run timezone is `UTC` or a loadable safe IANA name of at most 64 ASCII bytes, and its exact zero-padded `HH:MM` start and end must differ.
+Both same-day and overnight windows are valid, and disabling backfill does not bypass validation.
+
+Gate version is integer `1`.
+Excluded labels contain at most 32 unique `[A-Za-z0-9_-]{1,128}` identifiers.
+Suppressed Gmail categories contain at most five unique values from `CATEGORY_FORUMS`, `CATEGORY_PERSONAL`, `CATEGORY_PROMOTIONS`, `CATEGORY_SOCIAL`, and `CATEGORY_UPDATES`.
+Sender allow and block lists each contain at most 256 unique lowercase ASCII DNS domains and remain disjoint.
+Subject lists each contain at most 256 case-insensitively unique trimmed literal terms of 1 through 128 UTF-8 bytes without controls.
+Review page sizes are 1 through 100 with the default not above the maximum.
+Metadata retention is 0 or 1 through 36,500 days, excerpt and audit retention are 1 through 3,650 days, and nonzero metadata retention cannot be shorter than excerpt retention.
+The MCP path is a clean absolute ASCII HTTP path of 2 through 128 bytes using unescaped RFC 3986 `pchar` characters and `/` separators, and cannot be `/`, contain whitespace, controls, backslashes, repeated slashes, dot segments, percent escapes, a query, or a fragment.
+Logging level is `debug`, `info`, `warn`, or `error`, and logging format is `json` or `text`.
+Every field ending in `_env` stores only a name matching `[A-Z_][A-Z0-9_]{0,127}`.
+Policy booleans do not activate runtime behavior during validation, and a generic `capabilities` mapping is rejected until the typed registry is implemented.
+
 Do not support regular expressions in the first gate configuration.
 Use normalized exact addresses, domain suffixes, header signals, and case-insensitive literal terms.
 This avoids regular-expression denial of service and makes rule behavior explainable.
 Subject terms are signals only and cannot produce an urgent decision without another trusted signal.
 
 `inboxgate config validate` parses and validates the file without contacting Google or Turso.
+The global `--config PATH` or `--config=PATH` flag must precede the command.
+Path precedence is the explicit flag, an explicitly set `INBOXGATE_CONFIG`, and `/etc/inboxgate/config.yaml`.
+Empty path values, repeated flags, positional paths, unknown flags, and extra arguments are rejected.
+Symlinks to regular files are accepted, while directories, devices, sockets, FIFOs, and other non-regular targets are rejected.
+Success exits 0 with exactly `configuration valid` on stdout, invalid configuration exits 1 with value-safe diagnostics on stderr, and CLI misuse exits 2 with focused usage.
+Validation never reads an environment variable whose name came from YAML and makes no external request.
 `inboxgate config effective` prints the normalized effective configuration with every secret value redacted.
 The effective configuration includes compiled defaults and identifies the source of each overridden value.
 

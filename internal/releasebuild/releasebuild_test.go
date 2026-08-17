@@ -11,16 +11,31 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 )
 
 const testCommit = "0123456789abcdef0123456789abcdef01234567"
+
+func TestReleaseCommandIncludesEmbeddedTimezoneDatabase(t *testing.T) {
+	command := exec.Command("go", "list", "-mod=readonly", "-deps", "./cmd/inboxgate")
+	command.Dir = repositoryRoot(t)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list release command dependencies: %v: %s", err, output)
+	}
+	dependencies := strings.Fields(string(output))
+	if !slices.Contains(dependencies, "time/tzdata") {
+		t.Fatal("release command dependency graph does not include embedded time/tzdata")
+	}
+}
 
 func TestValidateMetadata(t *testing.T) {
 	t.Parallel()
@@ -493,7 +508,7 @@ func inspectZip(t *testing.T, archivePath, binaryPath, root string) {
 
 func assertArchiveModes(t *testing.T, modes []fs.FileMode) {
 	t.Helper()
-	want := []fs.FileMode{fs.ModeDir | 0o755, 0o755, 0o644, 0o644}
+	want := []fs.FileMode{fs.ModeDir | 0o755, 0o755, 0o644, 0o644, 0o644}
 	if len(modes) != len(want) {
 		t.Fatalf("archive mode count = %d, want %d", len(modes), len(want))
 	}
@@ -506,8 +521,8 @@ func assertArchiveModes(t *testing.T, modes []fs.FileMode) {
 
 func assertArchiveNames(t *testing.T, archivePath string, names []string) string {
 	t.Helper()
-	if len(names) != 4 {
-		t.Fatalf("archive entries = %v, want directory and three files", names)
+	if len(names) != 5 {
+		t.Fatalf("archive entries = %v, want directory and four files", names)
 	}
 	if !strings.HasSuffix(names[0], "/") {
 		t.Errorf("first archive entry %q is not top-level directory", names[0])
@@ -518,7 +533,7 @@ func assertArchiveNames(t *testing.T, archivePath string, names []string) string
 	if top != wantTop {
 		t.Errorf("archive top-level directory = %q, want basename %q", top, wantTop)
 	}
-	wantSuffixes := []string{"", "LICENSE", "README.md"}
+	wantSuffixes := []string{"", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"}
 	if strings.HasSuffix(names[1], ".exe") {
 		wantSuffixes[0] = "inboxgate.exe"
 	} else {
@@ -539,9 +554,10 @@ func assertArchiveContents(t *testing.T, top, binaryPath, root string, contents 
 		binaryName += ".exe"
 	}
 	for archiveName, sourcePath := range map[string]string{
-		top + binaryName:  binaryPath,
-		top + "LICENSE":   filepath.Join(root, "LICENSE"),
-		top + "README.md": filepath.Join(root, "README.md"),
+		top + binaryName:               binaryPath,
+		top + "LICENSE":                filepath.Join(root, "LICENSE"),
+		top + "README.md":              filepath.Join(root, "README.md"),
+		top + "THIRD_PARTY_NOTICES.md": filepath.Join(root, "THIRD_PARTY_NOTICES.md"),
 	} {
 		want, err := os.ReadFile(sourcePath)
 		if err != nil {

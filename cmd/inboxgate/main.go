@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/mandloideep/inboxgate/internal/buildmeta"
+	"github.com/mandloideep/inboxgate/internal/config"
 )
 
 var version = "dev"
@@ -20,9 +23,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		printHelp(stdout)
 		return 0
 	}
+	configPath, explicitConfig, remaining, usageError := parseGlobalFlags(args)
+	if usageError != "" {
+		return printUsageError(stderr, usageError, printHelp)
+	}
+	args = remaining
+	if len(args) == 0 {
+		return printUsageError(stderr, "missing command", printHelp)
+	}
 
 	switch args[0] {
 	case "version":
+		if len(args) != 1 {
+			return printUsageError(stderr, "version does not accept arguments", printHelp)
+		}
 		metadata, err := buildmeta.Format(version, commit)
 		if err != nil {
 			fmt.Fprintf(stderr, "invalid release metadata: %v\n", err)
@@ -31,22 +45,131 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "inboxgate %s\n", metadata)
 		return 0
 	case "help", "-h", "--help":
+		if len(args) != 1 {
+			return printUsageError(stderr, "help does not accept arguments", printHelp)
+		}
 		printHelp(stdout)
 		return 0
+	case "config":
+		return runConfig(args[1:], configPath, explicitConfig, stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "unknown command %q\n\n", args[0])
-		printHelp(stderr)
-		return 2
+		return printUsageError(stderr, fmt.Sprintf("unknown command %q", args[0]), printHelp)
 	}
+}
+
+func parseGlobalFlags(args []string) (string, bool, []string, string) {
+	var path string
+	explicit := false
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		argument := args[0]
+		if argument == "-h" || argument == "--help" {
+			return "", false, args, ""
+		}
+		if argument == "--config" {
+			if explicit {
+				return "", false, nil, "--config may be specified only once"
+			}
+			if len(args) < 2 {
+				return "", false, nil, "--config requires a path"
+			}
+			if strings.HasPrefix(args[1], "-") {
+				if args[1] == "--config" || strings.HasPrefix(args[1], "--config=") {
+					return "", false, nil, "--config may be specified only once"
+				}
+				return "", false, nil, "--config requires a path"
+			}
+			path, explicit, args = args[1], true, args[2:]
+			continue
+		}
+		if strings.HasPrefix(argument, "--config=") {
+			if explicit {
+				return "", false, nil, "--config may be specified only once"
+			}
+			path, explicit, args = strings.TrimPrefix(argument, "--config="), true, args[1:]
+			continue
+		}
+		return "", false, nil, fmt.Sprintf("unknown global flag %q", argument)
+	}
+	if explicit && strings.TrimSpace(path) == "" {
+		return "", false, nil, "--config requires a non-empty path"
+	}
+	return path, explicit, args, ""
+}
+
+func runConfig(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		printConfigHelp(stdout)
+		return 0
+	}
+	if len(args) == 0 {
+		return printUsageError(stderr, "config requires a subcommand", printConfigHelp)
+	}
+	if args[0] != "validate" {
+		return printUsageError(stderr, fmt.Sprintf("unknown config subcommand %q", args[0]), printConfigHelp)
+	}
+	if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
+		printConfigValidateHelp(stdout)
+		return 0
+	}
+	if len(args) != 1 {
+		return printUsageError(stderr, "config validate does not accept arguments", printConfigValidateHelp)
+	}
+	if !explicitConfig {
+		if environmentPath, set := os.LookupEnv("INBOXGATE_CONFIG"); set {
+			if strings.TrimSpace(environmentPath) == "" {
+				fmt.Fprintln(stderr, "configuration invalid: INBOXGATE_CONFIG: path must not be empty")
+				return 1
+			}
+			configPath = environmentPath
+		} else {
+			configPath = "/etc/inboxgate/config.yaml"
+		}
+	}
+	if _, err := config.Load(configPath); err != nil {
+		var validation *config.ValidationError
+		if errors.As(err, &validation) {
+			for _, problem := range validation.Problems {
+				fmt.Fprintf(stderr, "configuration invalid: %s\n", problem.Error())
+			}
+		} else {
+			fmt.Fprintln(stderr, "configuration invalid: file: validation failed")
+		}
+		return 1
+	}
+	fmt.Fprintln(stdout, "configuration valid")
+	return 0
+}
+
+func printUsageError(output io.Writer, message string, usage func(io.Writer)) int {
+	fmt.Fprintln(output, message)
+	fmt.Fprintln(output)
+	usage(output)
+	return 2
 }
 
 func printHelp(output io.Writer) {
 	fmt.Fprintln(output, "InboxGate keeps high-volume email behind a deterministic review gate.")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Usage:")
-	fmt.Fprintln(output, "  inboxgate <command>")
+	fmt.Fprintln(output, "  inboxgate [--config PATH] <command>")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Commands:")
+	fmt.Fprintln(output, "  config   Validate InboxGate configuration")
 	fmt.Fprintln(output, "  version  Print the InboxGate version")
 	fmt.Fprintln(output, "  help     Show this help")
+}
+
+func printConfigHelp(output io.Writer) {
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  inboxgate [--config PATH] config <subcommand>")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Subcommands:")
+	fmt.Fprintln(output, "  validate  Validate schema v1 without reading secrets or contacting services")
+}
+
+func printConfigValidateHelp(output io.Writer) {
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  inboxgate [--config PATH] config validate")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Validates configuration schema v1 without reading named secrets or contacting services.")
 }
