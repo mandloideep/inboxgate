@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: process-health runtime update for issue #12.
+Status: rejected Turso driver feasibility gate for issue #14.
 
 ## Security objectives
 
@@ -21,7 +21,7 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 | Operator to CLI and configuration | Arguments, paths, YAML, environment names, capability policy | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output, fail-closed capability validation |
 | Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
-| InboxGate to Turso | Queries, records, credentials | Parameterized fixed queries, encrypted provider credentials, least privilege, migration integrity |
+| InboxGate to future database | URL, redirects, protocol authority, responses, query results, credentials, uncertain transport outcomes | Boundary remains disabled until a separate ADR requires verified HTTPS, rejects cleartext remote URLs, limits plain HTTP to credential-free literal-loopback tests, proves same-authority credential handling, bounds typed diagnostics and successful response bodies, cursor lines, rows and values or equivalent streaming, provides caller-controlled cancellation, uses fixed parameterized queries, prevents automatic statement replay, encrypts provider credentials, and preserves migration integrity |
 | Hermes to MCP | Authentication, tool inputs, pagination | Authentication, explicit schemas, bounds, allowlisted capabilities, audit events |
 | Runtime to logs and health endpoints | Errors, state, identifiers | Redaction, minimal readiness detail, private binding, no credentials or message bodies |
 | Owner to release workflow | Version, expected commit, dispatch identity, immutable-release setting | Exact input syntax, owner-only manual dispatch, immediate manual settings check, current-main and successful-CI gates |
@@ -130,6 +130,28 @@ Retries, duplicate Gmail history, concurrent work, or a crash could skip mail or
 Durable writes and cursor movement must be transactional.
 External and review operations require stable idempotency keys, valid state transitions, bounded retries, and restart tests.
 
+### Rejected database boundary
+
+The evaluated `tursogo-serverless` version is not a dependency and no database boundary is active.
+A credential-free local experiment proved basic SQL over HTTP v3 interoperability but failed production security and cancellation review.
+
+The driver trusted a protocol-provided `base_url`, replaced the original authority, and attached the bearer token to later requests.
+A malicious synthetic loopback response reproduced cross-authority bearer forwarding.
+The public API exposed no injectable HTTP client, transport, or authority-policy hook that a repository-owned wrapper could use to fail closed.
+
+Valid JSON error text below the driver's response limit was returned verbatim.
+Synthetic token-like text, SQL, values, paths, queries, and sentinels therefore crossed the remote-response boundary into diagnostics.
+
+Commit, rollback, and connection close created background contexts inside the driver and used an HTTP client without a timeout.
+Synthetic stalled responses outlived the caller's deadline.
+A wrapper timer would abandon the live request and locked connection rather than cancel the operation.
+
+The storage roadmap is blocked by [ADR 0003](adr/0003-turso-serverless-driver-contract.md).
+A future production driver or explicitly approved protocol boundary must require HTTPS with standard certificate and hostname verification and reject cleartext remote URLs before request or credential use.
+Plain HTTP is limited to literal-loopback credential-free tests and may carry no bearer token or production-derived secret.
+The boundary must also prove same-authority credential handling, fail-closed redirects, bounded typed diagnostics, owned limits for successful response body bytes, cursor-line bytes, row counts and individual value bytes or equivalent streaming controls, caller-controlled cancellation for every transaction and close operation, and no replay after uncertain writes.
+Later persistence code must also use durable uniqueness or idempotency keys and outcome reconciliation where a write can be ambiguous.
+
 ### Resource exhaustion
 
 Large messages, deep MIME trees, unbounded history, pagination, retry loops, or concurrent requests could exhaust memory, storage, quota, or model budget.
@@ -143,6 +165,9 @@ The project minimizes direct dependencies, pins versions and Action SHAs, verifi
 
 Configuration parsing adds only `go.yaml.in/yaml/v3` v3.0.5, which has no declared transitive modules.
 Repository code treats its syntax tree as untrusted, applies independent structure and complexity limits before typed decoding, pins and verifies the module checksum, scans reachable code with `govulncheck`, and retains the upstream license notice in release archives.
+
+The rejected Turso module and prototype libSQL container harness are not retained or distributed.
+Any future database driver, fork, proxy, or contract image is a new supply-chain boundary that requires exact pins, an accepted ADR, complete license and advisory review, lifecycle fault injection, and a removal plan before use.
 
 The release workflow grants narrow write authority to create one immutable GitHub release.
 The original actor and triggering actor must both be the repository owner, the run attempt must be one, and the dispatch must come from `main`.
@@ -182,7 +207,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a process-health network service intended only for private deployment but no OAuth flow, database, MCP endpoint, scheduler, or provider integration.
+- The current foundation has a process-health network service intended only for private deployment but no database driver, OAuth flow, MCP endpoint, scheduler, or provider integration.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 
