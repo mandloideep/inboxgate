@@ -109,6 +109,8 @@ func TestNewRejectsUnboundedOptions(t *testing.T) {
 		{MigrationTimeout: maximumMigrationTimeout + time.Second},
 		{CleanupTimeout: -time.Second},
 		{CleanupTimeout: maximumCleanupTimeout + time.Second},
+		{PersistenceTimeout: -time.Second},
+		{PersistenceTimeout: maximumPersistenceTimeout + time.Second},
 	}
 	for _, options := range tests {
 		if _, err := New(options); !errors.Is(err, ErrInvalidOptions) {

@@ -44,6 +44,15 @@ func (h *fakeHandle) Ping(context.Context) error { return nil }
 func (h *fakeHandle) Migrate(context.Context) (storage.MigrationResult, error) {
 	return storage.MigrationResult{}, nil
 }
+func (h *fakeHandle) EnsureAccount(context.Context, storage.AccountSeed) (storage.Account, error) {
+	return storage.Account{}, nil
+}
+func (h *fakeHandle) GetSynchronizationCursor(context.Context, storage.AccountID) (storage.SynchronizationCursor, error) {
+	return storage.SynchronizationCursor{}, nil
+}
+func (h *fakeHandle) CommitSynchronization(context.Context, storage.SynchronizationCommit) error {
+	return nil
+}
 func (h *fakeHandle) Close() error { return nil }
 
 var _ storage.Adapter = (*fakeAdapter)(nil)
