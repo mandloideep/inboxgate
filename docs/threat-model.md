@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: accepted inert Turso adapter with known upstream risks for issue #18.
+Status: accepted credential-free loopback migration runner with known upstream risks for issue #20.
 
 ## Security objectives
 
@@ -21,7 +21,7 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 | Operator to CLI and configuration | Arguments, paths, YAML, environment names, capability policy | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output, fail-closed capability validation |
 | Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
-| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, credentials, uncertain transport outcomes | Inert repository-owned interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback HTTP only for the initial endpoint, fixed outer ping and close diagnostics, bounded ping, explicit accepted-risk register for later protocol-driven scheme or authority changes, fixed parameterized queries in future work, no automatic statement replay, encrypted provider credentials in future work, and migration integrity in future work |
+| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, credentials, uncertain transport outcomes | Repository-owned interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration execution only, fixed outer diagnostics, bounded context-aware requests, embedded exact-byte migration checksums, parameterized ledger inspection, one exact atomic transaction sequence with bounded internal literals, no automatic sequence replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
 | Hermes to MCP | Authentication, tool inputs, pagination | Authentication, explicit schemas, bounds, allowlisted capabilities, audit events |
 | Runtime to logs and health endpoints | Errors, state, identifiers | Redaction, minimal readiness detail, private binding, no credentials or message bodies |
 | Owner to release workflow | Version, expected commit, dispatch identity, immutable-release setting | Exact input syntax, owner-only manual dispatch, immediate manual settings check, current-main and successful-CI gates |
@@ -130,27 +130,41 @@ Retries, duplicate Gmail history, concurrent work, or a crash could skip mail or
 Durable writes and cursor movement must be transactional.
 External and review operations require stable idempotency keys, valid state transitions, bounded retries, and restart tests.
 
-### Accepted inert database adapter
+### Accepted database adapter and synthetic migration boundary
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
 The adapter is present in code but is not reachable from configuration, commands, service startup, health endpoints, capabilities, Gmail, OAuth, or MCP.
-No migration, schema, repository, production URL, live token, or stored record is introduced by the decision.
+[ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner that can execute only against a credential-free literal-loopback endpoint.
+No product-state schema, repository, production URL, live token, account record, or email record is introduced by the decision.
 
 The adapter validates the initial endpoint before driver construction.
 It keeps URL and token values separate, normalizes `turso` to HTTPS, requires standard verified HTTPS for remote endpoints, rejects credentials in URLs, and limits cleartext HTTP to credential-free literal IPv4 or IPv6 loopback tests.
 That policy applies only to the caller-supplied initial endpoint and does not validate a later protocol-provided `base_url`.
 Ping has an adapter-owned deadline no longer than 30 seconds and respects a shorter caller deadline.
-Returned ping and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
+Migration catalog validation completes before connection acquisition, and credentialed or non-loopback migration execution fails before the first migration request.
+The runner embeds reviewed exact-byte SQL, limits catalog and logical ledger data, inspects current state outside a transaction, and applies at most one migration through one bounded no-argument pipeline transaction sequence.
+The sequence contains fixed `BEGIN IMMEDIATE`, the exact migration, a bounded transaction-local guard that requires the exact row total, rejects nulls, and counts every expected ledger pair exactly once under the writer lock, an insertion with only a bounded code-derived number and validated lowercase-hex checksum, and fixed `COMMIT`.
+The sequence accepts no caller-controlled value, while ledger inspection remains parameterized.
+Pipeline responses rejected by the driver, and every purported success that fails semantic terminal proof, return unknown without same-invocation replay.
+The pinned driver does not validate the sequence response payload and accepts a false autocommit observation, so success additionally requires a same-session savepoint sequence that acquires main-database writer serialization through a bounded ledger self-assignment, revalidates the exact null-rejecting prefix, transactionally prevents marker regression, sets `PRAGMA user_version`, and proves separate-connection visibility of both the exact ledger and marker.
+An unproven apply session is rollback-attempted and forcibly discarded from the pool, while a later explicit invocation can repair a missing marker without replaying committed schema SQL.
+A marker ahead of the ledger is rejected as drift.
+Every failed sequence attempts rollback but returns unknown because the driver cannot confirm rollback completion even when the rollback call returns nil.
+The runner revalidates the exact expected ledger prefix through a separate physical connection after every purported commit.
+Returned ping, migration, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
 
 These controls do not fix the driver properties reproduced during the earlier evaluation.
 The driver can still trust an arbitrary scheme and authority from a protocol-provided `base_url` and send the bearer token to a changed authority or over cleartext HTTP after an HTTPS-to-HTTP downgrade.
 It can still reflect valid remote error text internally.
-Commit, rollback, and stream close still use background contexts through a private HTTP client without an owned timeout or redirect policy.
+The migration path avoids the driver's background-context `database/sql.Tx` completion methods, but stream close still uses a background context through a private HTTP client without an owned timeout or redirect policy.
+An unacknowledged sequence or rollback remains uncertain and requires reconciliation on a new explicit invocation.
 Successful pipeline bodies, cursor lines, accumulated rows, and individual values still lack repository-owned total limits.
 
 The owner accepts those unresolved risks under identifiers `TURSO-001` through `TURSO-005` in the [known-risk register](known-risks.md).
-The acceptance is limited to the exact selected version and current inert surface.
+The acceptance is limited to the exact selected version and current credential-free loopback surface.
 Every future storage issue must list the risks it reaches and must not treat the register as proof that the behavior is safe.
+Credential-free contracts reproduce protocol-provided authority changes, redirect following, dropped-commit reconciliation, and post-buffer oversized-value rejection.
+Those contracts document the remaining attack and failure surface and do not close `TURSO-001` through `TURSO-005`.
 Later persistence code must use fixed parameterized SQL, durable uniqueness or idempotency keys, and outcome reconciliation where a write can be ambiguous.
 
 ### Resource exhaustion
@@ -209,7 +223,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a process-health network service intended only for private deployment and an inert Turso adapter, but no database activation, migration, OAuth flow, MCP endpoint, scheduler, or provider integration.
+- The current foundation has a process-health network service intended only for private deployment and an embedded migration runner restricted to credential-free literal-loopback tests, but no runtime database activation, remote migration, OAuth flow, MCP endpoint, scheduler, or provider integration.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 

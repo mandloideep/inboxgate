@@ -20,8 +20,12 @@ import (
 )
 
 const (
-	defaultPingTimeout = 5 * time.Second
-	maximumPingTimeout = 30 * time.Second
+	defaultPingTimeout      = 5 * time.Second
+	maximumPingTimeout      = 30 * time.Second
+	defaultMigrationTimeout = 30 * time.Second
+	maximumMigrationTimeout = 2 * time.Minute
+	defaultCleanupTimeout   = 2 * time.Second
+	maximumCleanupTimeout   = 10 * time.Second
 )
 
 var (
@@ -43,14 +47,18 @@ var (
 
 // Options controls adapter-owned operation bounds.
 type Options struct {
-	PingTimeout time.Duration
+	PingTimeout      time.Duration
+	MigrationTimeout time.Duration
+	CleanupTimeout   time.Duration
 }
 
 // Adapter opens remote Turso Database handles behind the repository-owned
 // storage contract.
 type Adapter struct {
-	pingTimeout time.Duration
-	open        databaseFactory
+	pingTimeout      time.Duration
+	migrationTimeout time.Duration
+	cleanupTimeout   time.Duration
+	open             databaseFactory
 }
 
 // New creates an inert adapter.
@@ -69,10 +77,25 @@ func newAdapter(options Options, open databaseFactory) (*Adapter, error) {
 	if pingTimeout == 0 {
 		pingTimeout = defaultPingTimeout
 	}
-	if pingTimeout < 0 || pingTimeout > maximumPingTimeout || open == nil {
+	migrationTimeout := options.MigrationTimeout
+	if migrationTimeout == 0 {
+		migrationTimeout = defaultMigrationTimeout
+	}
+	cleanupTimeout := options.CleanupTimeout
+	if cleanupTimeout == 0 {
+		cleanupTimeout = defaultCleanupTimeout
+	}
+	if pingTimeout < 0 || pingTimeout > maximumPingTimeout ||
+		migrationTimeout < 0 || migrationTimeout > maximumMigrationTimeout ||
+		cleanupTimeout < 0 || cleanupTimeout > maximumCleanupTimeout || open == nil {
 		return nil, ErrInvalidOptions
 	}
-	return &Adapter{pingTimeout: pingTimeout, open: open}, nil
+	return &Adapter{
+		pingTimeout:      pingTimeout,
+		migrationTimeout: migrationTimeout,
+		cleanupTimeout:   cleanupTimeout,
+		open:             open,
+	}, nil
 }
 
 // Open validates and normalizes the endpoint before constructing the driver.
@@ -92,7 +115,22 @@ func (a *Adapter) Open(ctx context.Context, endpoint storage.Endpoint) (storage.
 	if database == nil {
 		return nil, ErrOpenFailed
 	}
-	return &handle{database: database, pingTimeout: a.pingTimeout}, nil
+	return &handle{
+		database:         database,
+		pingTimeout:      a.pingTimeout,
+		migrationTimeout: a.migrationTimeout,
+		cleanupTimeout:   a.cleanupTimeout,
+		migrationAllowed: migrationEndpointAllowed(endpoint),
+	}, nil
+}
+
+func migrationEndpointAllowed(endpoint storage.Endpoint) bool {
+	parsed, err := url.Parse(endpoint.URL)
+	if err != nil || strings.ToLower(parsed.Scheme) != "http" || endpoint.Token != "" {
+		return false
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	return ip != nil && ip.IsLoopback()
 }
 
 func normalizeEndpoint(endpoint storage.Endpoint) (string, bool) {
@@ -136,16 +174,20 @@ func normalizeEndpoint(endpoint storage.Endpoint) (string, bool) {
 
 type databaseHandle interface {
 	PingContext(context.Context) error
+	Conn(context.Context) (*sql.Conn, error)
 	Close() error
 }
 
 type databaseFactory func(databaseURL, token string) databaseHandle
 
 type handle struct {
-	database    databaseHandle
-	pingTimeout time.Duration
-	closeOnce   sync.Once
-	closeErr    error
+	database         databaseHandle
+	pingTimeout      time.Duration
+	migrationTimeout time.Duration
+	cleanupTimeout   time.Duration
+	migrationAllowed bool
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 func (h *handle) Ping(ctx context.Context) error {
