@@ -24,8 +24,8 @@ func TestModuleGraphContainsOnlyPinnedYAML(t *testing.T) {
 	}
 }
 
-func TestProductionDependencyGraphEmbedsTimezoneDataWithoutNetworkClients(t *testing.T) {
-	command := exec.Command("go", "list", "-mod=readonly", "-deps", "./cmd/inboxgate")
+func TestConfigDependencyGraphEmbedsTimezoneDataWithoutNetworkClients(t *testing.T) {
+	command := exec.Command("go", "list", "-mod=readonly", "-deps", "./internal/config")
 	command.Dir = repositoryRoot(t)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -36,11 +36,11 @@ func TestProductionDependencyGraphEmbedsTimezoneDataWithoutNetworkClients(t *tes
 		dependencies[dependency] = true
 	}
 	if !dependencies["time/tzdata"] {
-		t.Error("production dependency graph does not include embedded time/tzdata")
+		t.Error("config dependency graph does not include embedded time/tzdata")
 	}
 	for _, forbidden := range []string{"net/http", "net/url", "crypto/tls"} {
 		if dependencies[forbidden] {
-			t.Errorf("production validation dependency graph includes network client package %q", forbidden)
+			t.Errorf("config dependency graph includes network client package %q", forbidden)
 		}
 	}
 }

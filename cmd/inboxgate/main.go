@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/mandloideep/inboxgate/internal/buildmeta"
 	"github.com/mandloideep/inboxgate/internal/config"
+	"github.com/mandloideep/inboxgate/internal/server"
 )
 
 var version = "dev"
@@ -54,9 +57,76 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runConfig(args[1:], configPath, explicitConfig, stdout, stderr)
 	case "capabilities":
 		return runCapabilities(args[1:], configPath, explicitConfig, stdout, stderr)
+	case "serve":
+		return runServe(args[1:], configPath, explicitConfig, stdout, stderr)
+	case "doctor":
+		return runDoctor(args[1:], configPath, explicitConfig, stdout, stderr)
 	default:
 		return printUsageError(stderr, fmt.Sprintf("unknown command %q", args[0]), printHelp)
 	}
+}
+
+var doctorResult = []byte("{\n  \"output_version\": 1,\n  \"status\": \"ok\",\n  \"checks\": [\n    {\n      \"name\": \"configuration\",\n      \"status\": \"pass\"\n    },\n    {\n      \"name\": \"service_runtime\",\n      \"status\": \"pass\"\n    }\n  ]\n}\n")
+
+func runServe(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		printServeHelp(stdout)
+		return 0
+	}
+	if len(args) != 0 {
+		return printUsageError(stderr, "serve does not accept arguments", printServeHelp)
+	}
+	configuration, ok := loadSelectedConfig(configPath, explicitConfig, stderr)
+	if !ok {
+		return 1
+	}
+	runtime, err := server.New(configuration, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "cannot construct service runtime")
+		return 1
+	}
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	return runtime.ListenAndServe(configuration.Server.Listen, signals)
+}
+
+func runDoctor(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		printDoctorHelp(stdout)
+		return 0
+	}
+	if len(args) != 0 {
+		return printUsageError(stderr, "doctor does not accept arguments", printDoctorHelp)
+	}
+	configuration, ok := loadSelectedConfig(configPath, explicitConfig, stderr)
+	if !ok {
+		return 1
+	}
+	if _, err := server.New(configuration, stderr); err != nil {
+		fmt.Fprintln(stderr, "cannot construct service runtime")
+		return 1
+	}
+	written, err := stdout.Write(doctorResult)
+	if err != nil || written != len(doctorResult) {
+		fmt.Fprintln(stderr, "cannot write doctor result")
+		return 1
+	}
+	return 0
+}
+
+func loadSelectedConfig(configPath string, explicitConfig bool, stderr io.Writer) (config.Config, bool) {
+	selection, selectionError := selectConfig(configPath, explicitConfig)
+	if selectionError != "" {
+		fmt.Fprintf(stderr, "configuration invalid: %s\n", selectionError)
+		return config.Config{}, false
+	}
+	configuration, err := config.Load(selection.path)
+	if err != nil {
+		printConfigValidationError(stderr, err)
+		return config.Config{}, false
+	}
+	return configuration, true
 }
 
 func runCapabilities(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
@@ -241,8 +311,25 @@ func printHelp(output io.Writer) {
 	fmt.Fprintln(output, "Commands:")
 	fmt.Fprintln(output, "  capabilities  Inspect compile-time and configured capability status as JSON")
 	fmt.Fprintln(output, "  config        Validate and inspect InboxGate configuration")
+	fmt.Fprintln(output, "  serve         Run bounded process-health endpoints")
+	fmt.Fprintln(output, "  doctor        Validate local service construction")
 	fmt.Fprintln(output, "  version       Print the InboxGate version")
 	fmt.Fprintln(output, "  help          Show this help")
+}
+
+func printServeHelp(output io.Writer) {
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  inboxgate [--config PATH] serve")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Runs bounded liveness and process-readiness endpoints until SIGINT or SIGTERM.")
+	fmt.Fprintln(output, "Bind only to an approved private interface or private reverse-proxy path.")
+}
+
+func printDoctorHelp(output io.Writer) {
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  inboxgate [--config PATH] doctor")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Validates configuration and local service construction without binding a listener.")
 }
 
 func printCapabilitiesHelp(output io.Writer) {

@@ -185,9 +185,11 @@ inboxgate doctor
 inboxgate migrate
 ```
 
-`serve` runs the private MCP endpoint, health endpoints, OAuth callback endpoint, and internal poll scheduler.
+The completed first-release `serve` command will run the private MCP endpoint, health endpoints, OAuth callback endpoint, and internal poll scheduler.
+The current service slice registers only fixed process-health endpoints and deliberately does not register MCP, OAuth, scheduler, database, or provider behavior.
 The other subcommands are operator surfaces and reuse the same application use cases.
 The local `capabilities` command is available before `serve` and loads inert validated policy without starting any runtime component.
+The local `doctor` command validates configuration and constructs the logger, readiness state, health handler, and bounded HTTP server without binding a listener.
 The future MCP `system_capabilities` tool adapts the same typed registry.
 
 Do not create separate server and worker binaries in the first release.
@@ -885,6 +887,15 @@ Reject unexpected content types.
 Use constant-time comparison for fixed bearer secrets where applicable.
 Do not put secrets in URLs.
 
+The initial health-only runtime exposes exactly `GET` and `HEAD` on `/health/live` and `/health/ready`.
+Percent-encoded alternate path spellings are unmatched even when URL decoding would produce a health path.
+It uses fixed bounded JSON responses, a compiled 16 KiB header limit, a compiled limit of 128 concurrently accepted connections, the configured timeouts and request-body limit, and no provider, storage, OAuth, MCP, scheduler, or mutation route.
+The listener acquires an admission permit before accepting a connection into application work and reuses that permit only after the accepted connection closes.
+Readiness reports only an active serving lifecycle after strict configuration validation, logger and server construction, and listener establishment.
+It becomes false before shutdown draining begins.
+The unauthenticated health routes disclose no configuration, address, host, account, connectivity, provider, secret, migration, scheduler, or process details and must remain on an approved private interface or private reverse-proxy path.
+The first termination signal permits active requests to drain for up to a compiled 10 seconds without allowing another signal to extend the deadline.
+
 Apply least privilege to the container.
 Run as a non-root user.
 Use a read-only root filesystem when the runtime and certificate handling permit it.
@@ -909,11 +920,13 @@ Secrets or sensitive personal data detected in a message should be omitted from 
 ## 18. Observability
 
 Use `log/slog` with JSON output in production.
-Include request ID, account ID, operation, outcome, duration, and retry class where useful.
+Include request ID, account ID, operation, outcome, duration, and retry class only where the corresponding bounded operation requires them.
 Never include tokens or complete message bodies.
 
 Expose a minimal liveness endpoint that reports only process health.
 Expose an authenticated readiness or diagnostics endpoint for database access, migration status, scheduler state, and Gmail account summaries.
+The initial unauthenticated readiness endpoint reports only whether the process is actively serving and not shutting down.
+Detailed local preflight remains in `doctor` until a separately authenticated diagnostics surface is approved.
 
 Start with counters and durations derivable from structured logs.
 Do not add a metrics dependency until a concrete monitoring consumer exists.
