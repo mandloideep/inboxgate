@@ -1,4 +1,4 @@
-// Package gmail implements the bounded one-shot Gmail enrollment flow.
+// Package gmail implements bounded Google authorization and Gmail read-only provider behavior.
 package gmail
 
 import (
@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,7 @@ const (
 	maximumCodeBytes                = 4_096
 	attemptLifetime                 = 10 * time.Minute
 	providerDeadline                = 15 * time.Second
+	maximumTokenLifetimeSeconds     = 24 * 60 * 60
 )
 
 var (
@@ -367,7 +369,7 @@ func (e *Enrollment) complete(ctx context.Context, code, verifier string) error 
 	if err != nil {
 		return fixedProviderError(requestCtx)
 	}
-	if token == nil || token.TokenType != "Bearer" || len(token.AccessToken) < 1 || len(token.AccessToken) > 4096 || len(token.RefreshToken) < 1 || len(token.RefreshToken) > 4096 || token.Expiry.IsZero() || !token.Expiry.After(e.now()) || token.Expiry.After(e.now().Add(24*time.Hour)) || !exactScope(fmt.Sprint(token.Extra("scope"))) {
+	if token == nil || token.TokenType != "Bearer" || len(token.AccessToken) < 1 || len(token.AccessToken) > 4096 || len(token.RefreshToken) < 1 || len(token.RefreshToken) > 4096 || token.Expiry.IsZero() || !exactScope(fmt.Sprint(token.Extra("scope"))) {
 		return ErrProvider
 	}
 	accessToken := []byte(token.AccessToken)
@@ -633,6 +635,9 @@ func validateTokenResponse(contentType string, body []byte) error {
 	mediaType := strings.TrimSpace(strings.Split(contentType, ";")[0])
 	switch mediaType {
 	case "application/json", "text/json":
+		if !validJSONUnicode(body) {
+			return ErrProvider
+		}
 		decoder := json.NewDecoder(bytes.NewReader(body))
 		start, err := decoder.Token()
 		if err != nil || start != json.Delim('{') {
@@ -651,6 +656,11 @@ func validateTokenResponse(contentType string, body []byte) error {
 			if err := decoder.Decode(&value); err != nil {
 				return ErrProvider
 			}
+			if name == "expires_in" {
+				if !validTokenLifetime(string(value)) {
+					return ErrProvider
+				}
+			}
 		}
 		end, err := decoder.Token()
 		if err != nil || end != json.Delim('}') || decoder.Decode(&struct{}{}) != io.EOF {
@@ -667,10 +677,26 @@ func validateTokenResponse(contentType string, body []byte) error {
 				return ErrProvider
 			}
 		}
+		if expiry, ok := values["expires_in"]; ok && (len(expiry) != 1 || !validTokenLifetime(expiry[0])) {
+			return ErrProvider
+		}
 		return nil
 	default:
 		return ErrProvider
 	}
+}
+
+func validTokenLifetime(value string) bool {
+	if len(value) < 1 || len(value) > 5 || (len(value) > 1 && value[0] == '0') {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	seconds, err := strconv.ParseUint(value, 10, 32)
+	return err == nil && seconds > 0 && seconds <= maximumTokenLifetimeSeconds
 }
 
 func noncanonicalSensitiveJSONName(name string, canonicalNames []string) bool {
