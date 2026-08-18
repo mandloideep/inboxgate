@@ -131,7 +131,7 @@ func ValidateAccountSeed(seed AccountSeed) error {
 }
 
 func ValidateSynchronizationCommit(commit SynchronizationCommit) error {
-	if !commit.AccountID.valid() || !commit.Next.valid() || (commit.Expected != nil && !commit.Expected.valid()) {
+	if !commit.AccountID.valid() || !commit.Next.valid() || commit.Expected != nil {
 		return ErrInvalidValue
 	}
 	return nil

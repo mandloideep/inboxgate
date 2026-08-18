@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/mandloideep/inboxgate/internal/mail"
 	"github.com/mandloideep/inboxgate/internal/storage"
 )
 
@@ -16,6 +17,20 @@ type Store struct {
 	cursors     map[storage.AccountID]storage.HistoryID
 	credentials map[storage.AccountID]storage.ProviderCredential
 	lifecycles  map[storage.AccountID]storage.AccountLifecycle
+	messages    map[storage.AccountID]map[string]mail.Message
+	records     map[string]messageNaturalKey
+	attempts    map[storage.AccountID]*currentDiscoveryAttempt
+}
+
+type messageNaturalKey struct {
+	accountID      storage.AccountID
+	gmailMessageID string
+}
+
+type currentDiscoveryAttempt struct {
+	prepared storage.PreparedCurrentDiscovery
+	state    string
+	staged   []mail.Message
 }
 
 func New() *Store {
@@ -25,6 +40,9 @@ func New() *Store {
 		cursors:     make(map[storage.AccountID]storage.HistoryID),
 		credentials: make(map[storage.AccountID]storage.ProviderCredential),
 		lifecycles:  make(map[storage.AccountID]storage.AccountLifecycle),
+		messages:    make(map[storage.AccountID]map[string]mail.Message),
+		records:     make(map[string]messageNaturalKey),
+		attempts:    make(map[storage.AccountID]*currentDiscoveryAttempt),
 	}
 }
 
@@ -34,7 +52,7 @@ func (s *Store) Migrate(ctx context.Context) (storage.MigrationResult, error) {
 	if err := ctx.Err(); err != nil {
 		return storage.MigrationResult{}, err
 	}
-	return storage.MigrationResult{Current: 4}, nil
+	return storage.MigrationResult{Current: 5}, nil
 }
 
 func (s *Store) EnsureAccount(ctx context.Context, seed storage.AccountSeed) (storage.Account, error) {
@@ -94,21 +112,7 @@ func (s *Store) CommitSynchronization(ctx context.Context, commit storage.Synchr
 	if _, ok := s.accounts[commit.AccountID]; !ok {
 		return storage.ErrAccountNotFound
 	}
-	current, exists := s.cursors[commit.AccountID]
-	if exists && current == commit.Next {
-		return nil
-	}
-	if exists && commit.Next.Compare(current) < 0 {
-		return storage.ErrCursorRegression
-	}
-	if !exists {
-		if commit.Expected != nil {
-			return storage.ErrCursorConflict
-		}
-		s.cursors[commit.AccountID] = commit.Next
-		return nil
-	}
-	if commit.Expected == nil || *commit.Expected != current {
+	if _, exists := s.cursors[commit.AccountID]; exists || s.attempts[commit.AccountID] != nil {
 		return storage.ErrCursorConflict
 	}
 	s.cursors[commit.AccountID] = commit.Next
@@ -252,6 +256,9 @@ func (s *Store) CommitAccountLifecycle(ctx context.Context, commit storage.Lifec
 		AccountID: commit.AccountID, State: commit.NextState, Version: version,
 		ReauthorizationReason: commit.ReauthorizationReason, RevocationStatus: commit.RevocationStatus,
 	}
+	if commit.NextState == storage.AccountStateRevoked {
+		delete(s.attempts, commit.AccountID)
+	}
 	return nil
 }
 
@@ -283,6 +290,177 @@ func (s *Store) DeleteRevokedProviderCredential(ctx context.Context, operation s
 	}
 	delete(s.credentials, operation.AccountID)
 	return nil
+}
+
+func (s *Store) CommitCurrentDiscovery(ctx context.Context, commit storage.CurrentDiscoveryCommit) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	prepared, err := storage.PrepareCurrentDiscoveryCommit(commit)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.currentDiscoveryDurable(prepared) {
+		return nil
+	}
+	lifecycle, ok := s.lifecycles[prepared.AccountID()]
+	if !ok {
+		if _, exists := s.accounts[prepared.AccountID()]; exists {
+			return storage.ErrLifecycleNotFound
+		}
+		return storage.ErrAccountNotFound
+	}
+	if lifecycle.State != storage.AccountStateActive {
+		return storage.ErrLifecycleConflict
+	}
+	cursor, ok := s.cursors[prepared.AccountID()]
+	if !ok {
+		return storage.ErrCursorNotFound
+	}
+	if cursor != prepared.Expected() {
+		return storage.ErrCurrentDiscoveryConflict
+	}
+	if existing := s.attempts[prepared.AccountID()]; existing != nil {
+		if existing.prepared.AttemptID() != prepared.AttemptID() {
+			return storage.ErrCurrentDiscoveryConflict
+		}
+		if existing.state == "sealed" {
+			return s.finalizeCurrentDiscovery(existing.prepared)
+		}
+	} else {
+		s.attempts[prepared.AccountID()] = &currentDiscoveryAttempt{prepared: prepared, state: "open"}
+	}
+	attempt := s.attempts[prepared.AccountID()]
+	attempt.staged = prepared.Messages()
+	attempt.state = "sealed"
+	return s.finalizeCurrentDiscovery(prepared)
+}
+
+func (s *Store) ReconcileCurrentDiscovery(ctx context.Context, accountID storage.AccountID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if parsed, err := storage.ParseAccountID(accountID.String()); err != nil || parsed != accountID {
+		return storage.ErrInvalidValue
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	attempt := s.attempts[accountID]
+	if attempt == nil {
+		return nil
+	}
+	prepared := attempt.prepared
+	cursor, ok := s.cursors[accountID]
+	if attempt.state == "open" {
+		if !ok || cursor != prepared.Expected() || len(attempt.staged) > prepared.MessageCount() {
+			return storage.ErrCurrentDiscoveryRecoveryRequired
+		}
+		lifecycle, lifecycleExists := s.lifecycles[accountID]
+		if !lifecycleExists {
+			return storage.ErrCurrentDiscoveryRecoveryRequired
+		}
+		if lifecycle.State != storage.AccountStateActive {
+			return storage.ErrLifecycleConflict
+		}
+		delete(s.attempts, accountID)
+		return nil
+	}
+	rebuilt, err := storage.PrepareCurrentDiscoveryCommit(storage.CurrentDiscoveryCommit{AccountID: prepared.AccountID(), Expected: prepared.Expected(), Next: prepared.Next(), Messages: attempt.staged})
+	if err != nil || rebuilt.AttemptID() != prepared.AttemptID() || rebuilt.ManifestHash() != prepared.ManifestHash() || rebuilt.EncodedBytes() != prepared.EncodedBytes() {
+		return storage.ErrCurrentDiscoveryRecoveryRequired
+	}
+	if !ok || cursor != prepared.Expected() {
+		return storage.ErrCurrentDiscoveryRecoveryRequired
+	}
+	if attempt.state != "sealed" || len(attempt.staged) != prepared.MessageCount() {
+		return storage.ErrCurrentDiscoveryRecoveryRequired
+	}
+	lifecycle, ok := s.lifecycles[accountID]
+	if !ok {
+		return storage.ErrCurrentDiscoveryRecoveryRequired
+	}
+	if lifecycle.State != storage.AccountStateActive {
+		return storage.ErrLifecycleConflict
+	}
+	return s.finalizeCurrentDiscovery(prepared)
+}
+
+func (s *Store) GetDiscoveredMessage(ctx context.Context, accountID storage.AccountID, gmailMessageID string) (mail.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return mail.Message{}, err
+	}
+	if parsed, err := storage.ParseAccountID(accountID.String()); err != nil || parsed != accountID || storage.ValidateGmailMessageID(gmailMessageID) != nil {
+		return mail.Message{}, storage.ErrInvalidValue
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.accounts[accountID]; !ok {
+		return mail.Message{}, storage.ErrAccountNotFound
+	}
+	message, ok := s.messages[accountID][gmailMessageID]
+	if !ok {
+		return mail.Message{}, storage.ErrMessageNotFound
+	}
+	decoded, err := mail.DecodeCanonical(accountID.String(), message.GmailMessageID(), message.GmailThreadID(), message.MetadataVersion(), message.CanonicalJSON(), message.MetadataHash())
+	if err != nil || decoded.RecordID() != message.RecordID() {
+		return mail.Message{}, storage.ErrCurrentDiscoveryRecoveryRequired
+	}
+	return decoded, nil
+}
+
+func (s *Store) finalizeCurrentDiscovery(prepared storage.PreparedCurrentDiscovery) error {
+	attempt := s.attempts[prepared.AccountID()]
+	if attempt == nil || attempt.state != "sealed" || attempt.prepared.AttemptID() != prepared.AttemptID() || len(attempt.staged) != prepared.MessageCount() {
+		return storage.ErrCurrentDiscoveryRecoveryRequired
+	}
+	if lifecycle := s.lifecycles[prepared.AccountID()]; lifecycle.State != storage.AccountStateActive {
+		return storage.ErrLifecycleConflict
+	}
+	if cursor, ok := s.cursors[prepared.AccountID()]; !ok || cursor != prepared.Expected() {
+		return storage.ErrCurrentDiscoveryConflict
+	}
+	for _, message := range attempt.staged {
+		key := messageNaturalKey{accountID: prepared.AccountID(), gmailMessageID: message.GmailMessageID()}
+		if occupied, ok := s.records[message.RecordID()]; ok && occupied != key {
+			return storage.ErrMessageIdentityCollision
+		}
+		if existing, ok := s.messages[prepared.AccountID()][message.GmailMessageID()]; ok {
+			if existing.RecordID() != message.RecordID() {
+				return storage.ErrCurrentDiscoveryRecoveryRequired
+			}
+			if existing.GmailThreadID() != message.GmailThreadID() {
+				return storage.ErrCurrentDiscoveryConflict
+			}
+		}
+	}
+	if s.messages[prepared.AccountID()] == nil {
+		s.messages[prepared.AccountID()] = make(map[string]mail.Message)
+	}
+	for _, message := range attempt.staged {
+		s.messages[prepared.AccountID()][message.GmailMessageID()] = message
+		s.records[message.RecordID()] = messageNaturalKey{accountID: prepared.AccountID(), gmailMessageID: message.GmailMessageID()}
+	}
+	s.cursors[prepared.AccountID()] = prepared.Next()
+	delete(s.attempts, prepared.AccountID())
+	return nil
+}
+
+func (s *Store) currentDiscoveryDurable(prepared storage.PreparedCurrentDiscovery) bool {
+	if s.attempts[prepared.AccountID()] != nil {
+		return false
+	}
+	if cursor, ok := s.cursors[prepared.AccountID()]; !ok || cursor != prepared.Next() {
+		return false
+	}
+	for _, expected := range prepared.Messages() {
+		stored, ok := s.messages[prepared.AccountID()][expected.GmailMessageID()]
+		if !ok || !stored.Equal(expected) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) Close() error { return nil }
