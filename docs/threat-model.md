@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: accepted versioned provider-credential encryption and credential-free loopback ciphertext persistence with known upstream risks for issue #24.
+Status: accepted one-shot Gmail OAuth enrollment with encrypted credential persistence and known upstream risks for issue #26.
 
 ## Security objectives
 
@@ -19,6 +19,8 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 | Boundary | Untrusted input | Required control |
 | --- | --- | --- |
 | Operator to CLI and configuration | Arguments, paths, YAML, environment names, capability policy | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output, fail-closed capability validation |
+| Browser to one-shot OAuth callback | Authorization code, denial, state, request target | Exact route and method, one-time ten-minute state, constant-time comparison, PKCE S256, strict query shape, bounded request target, no-store fixed response, capacity-one result |
+| InboxGate to Google OAuth, OpenID Connect, and Gmail profile | Client credentials, code, verifier, bearer token, subject, email, history ID, provider responses | Fixed endpoints, exact read-only scopes, owned redirect-rejecting client, 15-second deadlines, 16 KiB body limits, no retry, strict decoding, fixed diagnostics, discard-only email |
 | Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
 | InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, ciphertext credentials, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration, account-cursor, and ciphertext-credential execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, typed compare-and-swap, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
@@ -112,6 +114,12 @@ An overbroad OAuth scope or a generic Gmail proxy could permit destructive mailb
 The application requests read-only Gmail access and implements only handwritten calls required for discovery and retrieval.
 No tool or command may send, delete, archive, label, forward, or mark a message as read.
 
+The one-shot enrollment command requests `openid` only for stable subject identity and `gmail.readonly` as its only Gmail data scope.
+It performs one token exchange, one UserInfo read, and one `users/me/profile` read and has no message or mutation request surface.
+State replay, callback CSRF, authorization-code interception, PKCE substitution, scope expansion, partial grants, redirects, malicious provider bodies, and concurrent enrollment fail closed through the bounded contracts recorded in ADR 0008.
+Plaintext credentials remain memory-only and repository-owned mutable buffers are cleared where practical without claiming complete Go memory zeroization.
+Cursor-first staged persistence makes account-only and cursor-only states restartable, rejects credential-only state as recovery-required, and never claims atomicity across three durable records.
+
 ### Prompt injection through email
 
 Email is attacker-controlled content that may contain instructions aimed at Hermes or an operator.
@@ -133,7 +141,8 @@ External and review operations require stable idempotency keys, valid state tran
 ### Accepted database adapter, synthetic migration, account-cursor, and ciphertext-credential boundary
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
-The adapter is present in code but is not reachable from configuration, commands, service startup, health endpoints, capabilities, Gmail, OAuth, or MCP.
+The adapter is reachable only from the one-shot `account add` command after environment-selector separation and a credential-free literal-loopback endpoint check.
+It remains unreachable from service startup, health endpoints, doctor, configuration inspection, capability inspection, Gmail synchronization, and MCP.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner that can execute only against a credential-free literal-loopback endpoint.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) appends minimum account identity and synchronization-cursor tables and exposes only typed account and cursor operations under the same restriction.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) appends a ciphertext-only provider-credential table and exposes only typed credential lookup and compare-and-swap under the same restriction.
@@ -246,7 +255,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a process-health network service intended only for private deployment plus embedded migrations and minimum account-cursor persistence restricted to credential-free literal-loopback tests, but no runtime database activation, remote migration, OAuth flow, MCP endpoint, scheduler, or provider integration.
+- The current foundation has a health-only network service plus a one-shot OAuth enrollment command restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, MCP endpoint, scheduler, or Gmail synchronization.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 

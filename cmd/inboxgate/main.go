@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -11,7 +14,11 @@ import (
 
 	"github.com/mandloideep/inboxgate/internal/buildmeta"
 	"github.com/mandloideep/inboxgate/internal/config"
+	"github.com/mandloideep/inboxgate/internal/cryptobox"
+	"github.com/mandloideep/inboxgate/internal/gmail"
 	"github.com/mandloideep/inboxgate/internal/server"
+	"github.com/mandloideep/inboxgate/internal/storage"
+	"github.com/mandloideep/inboxgate/internal/storage/turso"
 )
 
 var version = "dev"
@@ -61,9 +68,177 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runServe(args[1:], configPath, explicitConfig, stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], configPath, explicitConfig, stdout, stderr)
+	case "account":
+		return runAccount(args[1:], configPath, explicitConfig, stdout, stderr)
 	default:
 		return printUsageError(stderr, fmt.Sprintf("unknown command %q", args[0]), printHelp)
 	}
+}
+
+var accountAddCommand = runAccountAddCommand
+var accountAddListen = net.Listen
+var lookupAccountEnvironment = os.LookupEnv
+var newAccountEnrollment = gmail.New
+
+func runAccount(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return printUsageError(stderr, "account requires a subcommand", printAccountHelp)
+	}
+	if args[0] != "add" {
+		return printUsageError(stderr, fmt.Sprintf("unknown account subcommand %q", args[0]), printAccountHelp)
+	}
+	if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
+		printAccountAddHelp(stdout)
+		return 0
+	}
+	if len(args) != 1 {
+		return printUsageError(stderr, "account add does not accept arguments", printAccountAddHelp)
+	}
+	configuration, ok := loadSelectedConfig(configPath, explicitConfig, stderr)
+	if !ok {
+		return 1
+	}
+	return accountAddCommand(configuration, stdout, stderr)
+}
+
+func runAccountAddCommand(configuration config.Config, stdout, stderr io.Writer) int {
+	if !accountEnrollmentSelectorsSeparated(configuration) {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime configuration")
+		return 1
+	}
+	clientID, ok := resolvedAccountPublicEnvironment(configuration.Gmail.OAuthClientIDEnv, 512)
+	if !ok {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime secret")
+		return 1
+	}
+	defer clear(clientID)
+	clientSecret, ok := resolvedAccountSecretEnvironment(configuration.Gmail.OAuthClientSecretEnv, 512)
+	if !ok {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime secret")
+		return 1
+	}
+	defer clear(clientSecret)
+	redirect, ok := resolvedAccountPublicEnvironment(configuration.Gmail.OAuthRedirectURLEnv, 2048)
+	if !ok {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime secret")
+		return 1
+	}
+	defer clear(redirect)
+	keyText, ok := resolvedAccountSecretEnvironment(configuration.Encryption.MasterKeyEnv, cryptobox.MaximumKeyringBytes)
+	if !ok {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime secret")
+		return 1
+	}
+	defer clear(keyText)
+	databaseURL, ok := resolvedAccountSecretEnvironment(configuration.Database.URLEnv, 2048)
+	if !ok {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime secret")
+		return 1
+	}
+	defer clear(databaseURL)
+	databaseToken, ok := resolvedOptionalAccountSecretEnvironment(configuration.Database.AuthTokenEnv, 4096)
+	if !ok {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime secret")
+		return 1
+	}
+	defer clear(databaseToken)
+	if !accountEnrollmentStorageAllowed(string(databaseURL), databaseToken) {
+		fmt.Fprintln(stderr, "account enrollment unavailable: storage setup failed")
+		return 1
+	}
+	ring, err := cryptobox.ParseKeyring(keyText)
+	if err != nil {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime secret")
+		return 1
+	}
+	defer ring.Close()
+	adapter, err := turso.New(turso.Options{})
+	if err != nil {
+		fmt.Fprintln(stderr, "account enrollment unavailable: storage setup failed")
+		return 1
+	}
+	handle, err := adapter.Open(context.Background(), storage.Endpoint{URL: string(databaseURL), Token: string(databaseToken)})
+	if err != nil {
+		fmt.Fprintln(stderr, "account enrollment unavailable: storage setup failed")
+		return 1
+	}
+	defer handle.Close()
+	enrollment, err := newAccountEnrollment(clientID, clientSecret, string(redirect), handle, ring)
+	if err != nil {
+		fmt.Fprintln(stderr, "account enrollment unavailable: invalid runtime secret")
+		return 1
+	}
+	defer enrollment.Close()
+	listener, err := accountAddListen("tcp", configuration.Server.Listen)
+	if err != nil {
+		fmt.Fprintln(stderr, "account enrollment unavailable: callback listener failed")
+		return 1
+	}
+	defer listener.Close()
+	if err := enrollment.Run(context.Background(), listener, stdout); err != nil {
+		fmt.Fprintln(stderr, "account enrollment failed")
+		return 1
+	}
+	fmt.Fprintln(stdout, "account enrolled")
+	return 0
+}
+
+func accountEnrollmentSelectorsSeparated(configuration config.Config) bool {
+	names := []string{
+		configuration.Gmail.OAuthClientIDEnv,
+		configuration.Gmail.OAuthClientSecretEnv,
+		configuration.Gmail.OAuthRedirectURLEnv,
+		configuration.Encryption.MasterKeyEnv,
+		configuration.Database.URLEnv,
+		configuration.Database.AuthTokenEnv,
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if _, exists := seen[name]; exists {
+			return false
+		}
+		seen[name] = struct{}{}
+	}
+	return true
+}
+
+func accountEnrollmentStorageAllowed(databaseURL string, token []byte) bool {
+	if len(token) != 0 {
+		return false
+	}
+	parsed, err := url.Parse(databaseURL)
+	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") || parsed.RawPath != "" {
+		return false
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	return ip != nil && ip.IsLoopback()
+}
+
+func resolvedAccountPublicEnvironment(name string, maximum int) ([]byte, bool) {
+	value, set := lookupAccountEnvironment(name)
+	if !set || len(value) < 1 || len(value) > maximum {
+		return nil, false
+	}
+	return []byte(value), true
+}
+
+func resolvedAccountSecretEnvironment(name string, maximum int) ([]byte, bool) {
+	value, set := lookupAccountEnvironment(name)
+	if !set || len(value) < 1 || len(value) > maximum {
+		return nil, false
+	}
+	return []byte(value), true
+}
+
+func resolvedOptionalAccountSecretEnvironment(name string, maximum int) ([]byte, bool) {
+	value, set := lookupAccountEnvironment(name)
+	if !set {
+		return []byte{}, true
+	}
+	if len(value) > maximum {
+		return nil, false
+	}
+	return []byte(value), true
 }
 
 var doctorResult = []byte("{\n  \"output_version\": 1,\n  \"status\": \"ok\",\n  \"checks\": [\n    {\n      \"name\": \"configuration\",\n      \"status\": \"pass\"\n    },\n    {\n      \"name\": \"service_runtime\",\n      \"status\": \"pass\"\n    }\n  ]\n}\n")
@@ -310,11 +485,28 @@ func printHelp(output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Commands:")
 	fmt.Fprintln(output, "  capabilities  Inspect compile-time and configured capability status as JSON")
+	fmt.Fprintln(output, "  account       Enroll a Gmail account through a one-shot operator flow")
 	fmt.Fprintln(output, "  config        Validate and inspect InboxGate configuration")
 	fmt.Fprintln(output, "  serve         Run bounded process-health endpoints")
 	fmt.Fprintln(output, "  doctor        Validate local service construction")
 	fmt.Fprintln(output, "  version       Print the InboxGate version")
 	fmt.Fprintln(output, "  help          Show this help")
+}
+
+func printAccountHelp(output io.Writer) {
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  inboxgate [--config PATH] account <subcommand>")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Subcommands:")
+	fmt.Fprintln(output, "  add  Enroll one Gmail account")
+}
+
+func printAccountAddHelp(output io.Writer) {
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  inboxgate [--config PATH] account add")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Runs a one-shot flow, prints one authorization URL, and waits for one callback.")
+	fmt.Fprintln(output, "Credential values are read only from the environment names selected by validated configuration.")
 }
 
 func printServeHelp(output io.Writer) {

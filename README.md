@@ -5,10 +5,11 @@ The first release will connect multiple Gmail and Google Workspace accounts with
 
 The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, and bounded process-health serving.
 Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, and local service preflight are implemented.
-A replaceable Turso adapter, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, and versioned authenticated encryption for provider credentials are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md).
+A replaceable Turso adapter, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, versioned authenticated encryption, and a one-shot Gmail OAuth enrollment command are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md).
 Credential persistence stores only validated ciphertext envelopes and is covered by the same credential-free literal-loopback restriction as migrations and account-cursor persistence.
-These storage and encryption operations are not reachable from the runtime.
-Account lifecycle state, email synchronization, MCP, OAuth, remote database activation, and deployment are intentionally not implemented yet.
+Only the one-shot `account add` command resolves its selected Google, encryption, and database environment values and reaches OAuth, cryptobox, and credential-free literal-loopback Turso persistence.
+The health-only service, doctor, configuration inspection, and capability inspection remain inert and do not resolve those values.
+Account lifecycle state, email synchronization, MCP, live OAuth approval, remote database activation, and deployment are intentionally not implemented yet.
 
 ## Quick start
 
@@ -22,6 +23,7 @@ go run ./cmd/inboxgate --config config.example.yaml config validate
 go run ./cmd/inboxgate --config config.example.yaml config effective
 go run ./cmd/inboxgate --config config.example.yaml capabilities
 go run ./cmd/inboxgate --config config.example.yaml doctor
+go run ./cmd/inboxgate --config config.example.yaml account add --help
 ```
 
 Development builds print `inboxgate dev`.

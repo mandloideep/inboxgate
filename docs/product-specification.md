@@ -606,7 +606,7 @@ Use one Google OAuth client configuration for the service and authorize every ac
 Store the Google subject ID for stable account identity.
 Do not use Chrome profile numbers such as `/u/0` as identity.
 
-Request only the `gmail.readonly` scope in the first release.
+Request the identity-only `openid` scope and the sole Gmail data scope `https://www.googleapis.com/auth/gmail.readonly` in the first release.
 Do not request modification, compose, send, settings, contacts, Drive, or Calendar scopes.
 
 Use authorization code flow with PKCE when supported by the selected Google application type and library path.
@@ -617,6 +617,17 @@ Reject callbacks with a missing, expired, reused, or mismatched state.
 The OAuth callback is an API endpoint required by the protocol.
 It is not a web dashboard.
 The operator command may print the authorization URL and wait for callback completion.
+
+The implemented `account add` command is a one-shot flow whose callback path is exactly `/oauth/google/callback`.
+It rejects every alias among the six selected Google, encryption, and database environment-variable names before resolving any value.
+It uses independently generated 32-byte state and PKCE values, a ten-minute one-time attempt with an owned expiry wake-up, fixed Google endpoints, an owned redirect-rejecting HTTP client, 16,384-byte provider response limits, and one request per token, UserInfo, and Gmail profile operation.
+The callback proves that a body of unknown declared length is empty before consuming the one-time attempt.
+Successful token responses require a supported JSON or form encoding with no duplicate field or noncanonical sensitive JSON field, the exact two-scope set in either order, a bearer token, a refresh token, and a bounded positive expiry before OAuth decoding is accepted.
+The long-running `serve` command remains health-only and does not register the callback.
+Enrollment resolves the stable OpenID Connect subject before creating or adopting the canonical account and fetches Gmail `historyId` only after the account row is durable.
+It initializes the cursor before encrypting and initializing the refresh token, never replaces an existing cursor or credential, and reports success only after fresh account, cursor, ciphertext, and authenticated-decryption checks.
+Account-only and cursor-only states are restartable, credential-only state requires recovery, and the protocol does not claim three-record atomicity.
+A concurrent same-subject initializer adopts any valid cursor that won durable initialization and never replays the losing cursor write in the same attempt.
 
 Encrypt refresh tokens before persistence with an application master key supplied through the runtime secret store.
 Use standard-library AES-256-GCM with a 32-byte key, a fresh 12-byte nonce read completely from `crypto/rand.Reader`, and the 16-byte authentication tag.
@@ -863,7 +874,9 @@ The operator should use the Turso database-engine creation option documented at 
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official remote `tursogo-serverless` driver behind the narrow repository-owned storage adapter.
 The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, and typed ciphertext-only provider-credential compare-and-swap operations.
-Migration, account-cursor, and ciphertext-credential execution are restricted to credential-free literal-loopback endpoints and are not connected to configuration, commands, service startup, capabilities, OAuth, providers, or production credentials.
+Migration, account-cursor, and ciphertext-credential execution are restricted to credential-free literal-loopback endpoints.
+Only the one-shot `account add` command connects configuration-selected runtime values, OAuth enrollment, and these typed persistence operations, while live Turso credentials and remote database activation remain prohibited.
+The health-only service, capability inspection, and other commands do not activate this persistence boundary.
 
 The owner accepts the unresolved `base_url` authority, raw remote diagnostic, transaction completion, close context, terminal acknowledgement, private HTTP client and redirect policy, and successful-response bound risks recorded in the [known-risk register](known-risks.md).
 That acceptance permits focused storage implementation to continue but does not describe the risks as fixed.

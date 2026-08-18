@@ -147,6 +147,14 @@ The default `0.0.0.0:8080` listener covers every host interface and is not autho
 Bind only to an approved private interface, protect the listener with an appropriate firewall, or publish the probes through an approved private reverse-proxy path.
 This repository does not yet provide TLS termination, deployment configuration, authenticated diagnostics, MCP transport, or any public REST API.
 
+## Enroll one Gmail account
+
+`inboxgate account add` is a one-shot operator command that binds the validated `server.listen` address, prints one bounded authorization URL, accepts one exact callback at `/oauth/google/callback`, and exits after durable reconciliation.
+It resolves only the environment variables named by the validated Gmail, database, and encryption fields.
+It accepts no credential argument and never adds OAuth routes to `serve`.
+HTTP callback URIs are accepted only for credential-free literal-loopback tests, while normal runtime input requires HTTPS.
+Live authorization and live Turso access remain prohibited until the owner completes the later approval and runtime-activation checkpoints.
+
 ## Secret boundary
 
 Fields ending in `_env` contain only an environment-variable name matching `[A-Z_][A-Z0-9_]{0,127}`.

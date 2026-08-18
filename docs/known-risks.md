@@ -3,7 +3,7 @@
 This register records unresolved security and reliability risks that the repository owner has explicitly accepted so work can continue.
 An accepted risk is not a fixed risk and must not be described as a security control.
 
-The current acceptance applies only to the exact dependency version and adapter selected by [ADR 0004](adr/0004-turso-serverless-adapter.md), as extended for credential-free loopback migrations by [ADR 0005](adr/0005-append-only-migration-protocol.md), minimum account-cursor persistence by [ADR 0006](adr/0006-minimum-account-cursor-persistence.md), and ciphertext-only provider-credential persistence by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md).
+The current acceptance applies only to the exact dependency version and adapter selected by [ADR 0004](adr/0004-turso-serverless-adapter.md), as extended for credential-free loopback migrations by [ADR 0005](adr/0005-append-only-migration-protocol.md), minimum account-cursor persistence by [ADR 0006](adr/0006-minimum-account-cursor-persistence.md), ciphertext-only provider-credential persistence by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md), and synthetic OAuth enrollment reconciliation by [ADR 0008](adr/0008-google-oauth2-client.md).
 It does not authorize production credentials, runtime activation, remote migrations, live account data, plaintext provider data, stored email data, or live Turso Cloud access.
 
 ## Register

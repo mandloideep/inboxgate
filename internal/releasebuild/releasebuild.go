@@ -30,6 +30,12 @@ const goVersion = "go1.26.6"
 const yamlModulePath = "go.yaml.in/yaml/v3"
 const yamlModuleVersion = "v3.0.5"
 const yamlModuleSum = "h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw="
+const oauthModulePath = "golang.org/x/oauth2"
+const oauthModuleVersion = "v0.36.0"
+const oauthModuleSum = "h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs="
+const tursoModulePath = "turso.tech/database/tursogo-serverless"
+const tursoModuleVersion = "v0.0.0-20260817122138-24adc316cdc4"
+const tursoModuleSum = "h1:Fnxwfn492a+9kTegF2G7QUT1aF0Vfjz0dMrNO+HmthA="
 
 // ArchiveTime is the fixed timestamp stored in every release archive.
 // The ZIP format cannot represent dates before 1980.
@@ -233,12 +239,23 @@ func ValidateBinary(path, goos, goarch string) error {
 	if info.GoVersion != goVersion {
 		return fmt.Errorf("Go version = %q, want %q", info.GoVersion, goVersion)
 	}
-	if len(info.Deps) != 1 {
-		return fmt.Errorf("release binary has %d module dependencies, want one", len(info.Deps))
+	expectedDependencies := map[string]struct{ version, sum string }{
+		yamlModulePath:  {yamlModuleVersion, yamlModuleSum},
+		oauthModulePath: {oauthModuleVersion, oauthModuleSum},
+		tursoModulePath: {tursoModuleVersion, tursoModuleSum},
 	}
-	dependency := info.Deps[0]
-	if dependency.Path != yamlModulePath || dependency.Version != yamlModuleVersion || dependency.Sum != yamlModuleSum || dependency.Replace != nil {
-		return fmt.Errorf("release binary dependency does not match the pinned YAML module")
+	if len(info.Deps) != len(expectedDependencies) {
+		return fmt.Errorf("release binary has %d module dependencies, want %d", len(info.Deps), len(expectedDependencies))
+	}
+	for _, dependency := range info.Deps {
+		expected, ok := expectedDependencies[dependency.Path]
+		if !ok || dependency.Version != expected.version || dependency.Sum != expected.sum || dependency.Replace != nil {
+			return fmt.Errorf("release binary dependency does not match the reviewed module graph")
+		}
+		delete(expectedDependencies, dependency.Path)
+	}
+	if len(expectedDependencies) != 0 {
+		return fmt.Errorf("release binary is missing a reviewed module dependency")
 	}
 	settings := make(map[string]string, len(info.Settings))
 	for _, setting := range info.Settings {
