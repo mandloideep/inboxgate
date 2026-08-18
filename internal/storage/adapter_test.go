@@ -77,6 +77,12 @@ func (h *fakeHandle) ReconcileCurrentDiscovery(context.Context, storage.AccountI
 func (h *fakeHandle) GetDiscoveredMessage(context.Context, storage.AccountID, string) (mail.Message, error) {
 	return mail.Message{}, nil
 }
+func (h *fakeHandle) GetGateDecision(context.Context, storage.AccountID, string) (storage.GateDecisionState, error) {
+	return storage.GateDecisionState{}, nil
+}
+func (h *fakeHandle) CommitGateDecision(context.Context, storage.GateDecisionCommit) error {
+	return nil
+}
 func (h *fakeHandle) Close() error { return nil }
 
 var _ storage.Adapter = (*fakeAdapter)(nil)

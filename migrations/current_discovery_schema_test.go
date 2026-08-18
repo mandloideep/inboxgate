@@ -29,7 +29,7 @@ func TestCurrentDiscoveryMigrationIsAppendOnlyAndProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog) != 5 || catalog[4].Name != "0005_current_discovery_atomic_commit.sql" {
+	if len(catalog) < 5 || catalog[4].Name != "0005_current_discovery_atomic_commit.sql" {
 		t.Fatalf("catalog = %#v, want append-only migration 0005", catalog)
 	}
 }
