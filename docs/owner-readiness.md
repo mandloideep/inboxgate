@@ -6,10 +6,11 @@ Complete a provider step only after the corresponding implementation issue is ac
 
 ## Current blocker
 
-No owner credential or provider setup is blocking the next authenticated-encryption implementation issue.
+No owner credential or provider setup is blocking the next fake-server OAuth enrollment implementation issue.
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official `turso.tech/database/tursogo-serverless` remote driver behind a narrow inert adapter.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner restricted to credential-free literal-loopback tests.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) adds minimum Gmail identity and synchronization-cursor persistence under the same credential-free literal-loopback restriction.
+[ADR 0007](adr/0007-versioned-provider-credential-encryption.md) adds standard-library versioned authenticated encryption and ciphertext-only provider-credential persistence under the same restriction.
 The adapter is not connected to configuration, commands, service startup, repositories, remote endpoints, or production credentials.
 
 The owner accepts five unresolved driver risks for the exact selected version.
@@ -22,8 +23,8 @@ The owner accepts five unresolved driver risks for the exact selected version.
 - Successful pipeline bodies, cursor lines, rows, and individual values lack repository-owned total limits.
 
 These items remain open in the [known-risk register](known-risks.md) and are not fixed by the adapter.
-The minimum account-cursor slice uses synthetic identities only and requires no owner action.
-The next code issue can define and implement versioned authenticated encryption with synthetic keys without owner credentials.
+The encryption and credential-persistence slice uses synthetic keys and ciphertext only and requires no owner action.
+The next code issue can implement OAuth enrollment against fake OAuth and Gmail servers without owner credentials.
 Production setup, credential creation, live connectivity, and database writes remain blocked until a separate approved issue requests them and the owner explicitly authorizes them.
 
 ## What you can decide now
@@ -51,10 +52,10 @@ Use these status meanings throughout this runbook.
 
 | Area | Status | What the owner should do now | What unblocks it |
 | --- | --- | --- | --- |
-| Turso architecture | `Resolved for synthetic migrations and account cursors` | Review ADR 0004, ADR 0005, ADR 0006, and the known-risk register | A later superseding decision only if the driver or architecture changes |
+| Turso architecture | `Resolved for synthetic migrations, account cursors, and ciphertext credentials` | Review ADR 0004 through ADR 0007 and the known-risk register | A later superseding decision only if the driver or architecture changes |
 | Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | An approved production-readiness issue with explicit owner authorization |
 | Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | OAuth enrollment implementation and explicit owner approval |
-| Encryption key | `Not yet actionable` | Do not generate or provide a key | An accepted key format, rotation design, and encrypted credential store |
+| Encryption key | `Future owner action` | Do not generate or provide a key yet | Runtime secret resolution, an approved credential rotation workflow, and explicit owner approval |
 | MCP and Hermes | `Future owner action` | Reserve a private connectivity design, without creating a token | Authenticated MCP transport and an approved integration issue |
 | Private deployment | `Future owner action` | Identify the intended private host, firewall owner, TLS boundary, and recovery owner | Hardened deployment guidance and explicit deployment approval |
 | GitHub release | `Optional release operation` | Use the repository UI only for an approved release | Current `main`, passing `ci-required`, immutable releases, and approved version inputs |
@@ -177,14 +178,24 @@ An access token or refresh token must never be copied from the service for troub
 
 ## Step-by-step encryption-key preparation
 
-Do not generate the production master key until the encrypted credential-store issue defines the accepted algorithm, encoding, length, key identifier, rotation process, and recovery test.
+The accepted format is now defined by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md), but the current runtime does not resolve the key or use the encrypted store.
+Do not generate a production key until a later approved runtime issue supplies the exact private secret-manager workflow, rotation command, durable-record verification, and explicit owner approval.
 
-1. Use the approved deployment secret manager's cryptographically secure generator to create the exact key format required by the merged implementation.
-2. Store the value only in the runtime secret store under the validated configuration name (default: `INBOXGATE_MASTER_KEY`).
-3. Keep an independently protected recovery copy outside Turso and outside the InboxGate host.
-4. Restrict read access to the InboxGate runtime identity and the designated recovery operators.
-5. Complete the future encrypt, restart, rotate, and restore tests before enrolling a live Gmail account.
-6. Share only the key identifier and successful test status when evidence is required.
+1. In the approved deployment secret manager, use its cryptographically secure binary generator to create one 32-byte AES key without exposing its value to a terminal, clipboard, log, file, issue, pull request, chat, or agent.
+2. Choose a non-secret key identifier that matches `[a-z][a-z0-9_-]{0,31}` and does not encode an account, person, host, date of birth, provider project, or secret-derived value.
+3. Have the secret manager construct the canonical value `igk1:<active-key-id>=<43-character-unpadded-raw-URL-base64-key>` without printing it.
+4. Store the complete canonical value only under the exact environment-variable name selected by the validated YAML, whose compiled default is `INBOXGATE_MASTER_KEY`.
+5. Keep an independently protected recovery copy outside Turso and outside the InboxGate host.
+6. Restrict read access to the InboxGate runtime identity and designated recovery operators.
+7. For rotation, generate a new unique 32-byte key and make it the first active entry while retaining every prior key as a decrypt-only entry sorted bytewise by key identifier.
+8. Keep the keyring to at most eight unique identifiers, eight unique key values, and 620 bytes without padding or whitespace.
+9. Run the future bounded rotation operation and verify after a fresh process restart that every durable credential decrypts under the intended retained key set before removing any old key.
+10. Roll back by restoring the previously backed-up canonical keyring and application version together, then verify decryption before resuming enrollment or synchronization.
+11. Recover a replacement host by restoring the database and exact protected keyring independently, then complete the future redacted restart and credential-read checks.
+12. Share only the non-secret key identifier, command name, exit status, and sanitized fixed error category when evidence is required.
+
+Never share a key value, encoded key, hash, fingerprint, prefix, suffix, length-derived sample, or secret-manager export.
+The current code has no operator rotation command and no live credential path, so these instructions define the required future owner action rather than authorizing it now.
 
 Loss of this key could make encrypted OAuth credentials unrecoverable.
 Exposure of this key could compromise every stored provider credential encrypted by it.

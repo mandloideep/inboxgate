@@ -509,6 +509,10 @@ All broader account fields and states remain future schema work owned by their v
 The minimum account ID is exactly 32 lowercase hexadecimal ASCII characters and is generated before storage receives it.
 The provider subject is opaque, case-sensitive visible ASCII from 1 through 255 bytes and is never trimmed, case-folded, parsed, logged, or used as the primary key.
 
+Migration `0003_provider_credentials.sql` stores one versioned authenticated ciphertext envelope per account.
+It stores only the account ID, envelope key identifier, and ciphertext envelope and never accepts or persists plaintext token bytes.
+The envelope and stored key identifier must agree structurally before a storage request is made and again after every database read.
+
 ### 9.2 Synchronization cursors
 
 Each account has an incremental Gmail history cursor.
@@ -615,8 +619,15 @@ It is not a web dashboard.
 The operator command may print the authorization URL and wait for callback completion.
 
 Encrypt refresh tokens before persistence with an application master key supplied through the runtime secret store.
-Use an authenticated encryption mode from the standard library.
-Include key versioning in the ciphertext envelope so keys can be rotated later.
+Use standard-library AES-256-GCM with a 32-byte key, a fresh 12-byte nonce read completely from `crypto/rand.Reader`, and the 16-byte authentication tag.
+Bind every refresh token to its exact ciphertext header, internal account ID, provider `gmail`, and purpose `oauth_refresh_token` through authenticated additional data.
+The canonical keyring text starts with `igk1:` and contains one through eight unique key identifiers and unique raw 32-byte keys, with the first entry active for encryption and remaining decrypt-only identifiers sorted bytewise.
+Each key uses unpadded raw URL-safe base64, and key identifiers match `[a-z][a-z0-9_-]{0,31}`.
+The ciphertext text starts with `igc1.` and encodes the fixed magic, format version, algorithm identifier, key identifier, nonce, ciphertext, and tag as unpadded raw URL-safe base64.
+Plaintext is limited to 1 through 4096 bytes, and ciphertext envelope text is limited to 55 through 5556 bytes.
+Rotation decrypts with the referenced retained key and re-encrypts under the active key, while an envelope already using the active key remains byte-identical.
+Retain every old decrypt key until all durable envelopes have been rotated and separately verified after restart.
+Restore the keyring independently from the database before attempting credential recovery.
 Never log tokens or authorization codes.
 
 ### 10.2 Initial account bootstrap
@@ -851,8 +862,8 @@ Create a new Turso Database rather than a legacy libSQL database.
 The operator should use the Turso database-engine creation option documented at implementation time and record the resulting engine type in the deployment runbook.
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official remote `tursogo-serverless` driver behind the narrow repository-owned storage adapter.
-The adapter provides open, bounded ping, idempotent close, narrow embedded migration, and typed minimum account-cursor operations.
-Migration and account-cursor execution are restricted to credential-free literal-loopback endpoints and are not connected to configuration, commands, service startup, capabilities, OAuth, providers, or production credentials.
+The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, and typed ciphertext-only provider-credential compare-and-swap operations.
+Migration, account-cursor, and ciphertext-credential execution are restricted to credential-free literal-loopback endpoints and are not connected to configuration, commands, service startup, capabilities, OAuth, providers, or production credentials.
 
 The owner accepts the unresolved `base_url` authority, raw remote diagnostic, transaction completion, close context, terminal acknowledgement, private HTTP client and redirect policy, and successful-response bound risks recorded in the [known-risk register](known-risks.md).
 That acceptance permits focused storage implementation to continue but does not describe the risks as fixed.
@@ -872,7 +883,7 @@ Create unique constraints for all provider identifiers and idempotency keys.
 Set conservative connection limits from the validated configuration.
 The accepted adapter requires HTTPS with standard TLS certificate and hostname verification and rejects cleartext remote URLs before driver construction.
 Plain HTTP may be used only with a literal loopback endpoint in credential-free tests, with no bearer token or production-derived secret attached.
-The current adapter maps ping, migration, account, cursor, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
+The current adapter maps ping, migration, account, cursor, credential, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
 Authority handling, redirect behavior, successful-response body, cursor-line, row and value limits, and caller-controlled commit, rollback and close cancellation remain accepted unresolved risks.
 The credential-free migration contract verifies parameterized ledger inspection, an exact bounded atomic pipeline sequence, `BEGIN IMMEDIATE` locking, transaction-local validation of the exact row total and every expected pair with null rejection, internally rendered numeric and lowercase-hex catalog metadata, exact checksum drift rejection, bounded rollback attempts with unknown outcomes, no same-invocation replay, and fresh-run reconciliation after an uncertain sequence.
 Every purportedly successful migration commit requires a same-session savepoint sequence that acquires main-database writer serialization through a bounded ledger self-assignment, revalidates the same exact null-rejecting ledger prefix, and refuses to regress a concurrently advanced code-owned `PRAGMA user_version` marker, followed by separate-connection visibility of both the exact ledger and marker while the apply connection remains reserved.
@@ -884,7 +895,7 @@ Do not automatically replay a statement after a transport failure because its se
 Migrations are append-only numbered SQL files.
 The migration runner records the migration number and checksum.
 It must refuse to run if an already applied migration has a different checksum.
-The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
+The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
 The runner inspects current state outside a transaction, sends pending work as one bounded no-argument `BEGIN IMMEDIATE` through `COMMIT` pipeline sequence, verifies the exact prefix row total and every expected pair under the writer lock while rejecting nulls, proves terminal session state without marker regression through the code-owned `user_version` marker and a separate physical connection, and applies at most one pending migration per transaction.
 The sequence accepts no caller data and renders only a bounded code-derived migration number and validated lowercase-hex checksum as SQL literals because the driver's sequence request cannot carry arguments.
 The prefix guard renders only bounded catalog numbers and validated lowercase-hex checksums, and none of those literals come from users, providers, configuration, or database rows.
@@ -901,6 +912,15 @@ Every attempted product-state mutation keeps its connection reserved until a sep
 Successful-looking responses without visible state and uncertain failures without visible state return a bounded unknown outcome, discard the mutation session, and never trigger same-invocation replay.
 A fresh explicit invocation may reconcile a state that became durable after an uncertain response.
 These operations use only fixed parameterized SQL and bounded validated values and expose no raw SQL, generic executor, transaction callback, or driver type.
+
+Provider credentials use a separate typed compare-and-swap operation whose inputs are an account ID, an optional exact expected ciphertext envelope, and a required next ciphertext envelope.
+Initialization succeeds only from absence, replacement succeeds only from the exact expected envelope, and an already durable next envelope is idempotent success.
+The one fixed parameterized mutation derives the stored key identifier only from the validated next envelope, never accepts plaintext, and never exposes a delete or blind overwrite.
+Its source predicate permits initialization only with a nil expected envelope and permits replacement only when the same account has the exact non-nil expected envelope, while the conflict update repeats that exact expected-envelope guard.
+The mutation connection remains reserved until a separate physical connection observes the exact durable next envelope.
+Only an exact one-row affected acknowledgement plus exact separate visibility allows that connection to return to the pool, while incomplete or zero-row acknowledgements force discard even when visibility proves the requested ciphertext durable.
+Unknown outcomes discard the mutation session and never replay in the same invocation.
+The no-SQL fake implements the same typed behavior for credential-free higher-layer tests.
 
 Test restoration by creating a fresh service instance from only the repository, runtime secrets, and Turso database.
 Do not treat Turso as the only place OAuth encryption keys exist.
@@ -979,7 +999,8 @@ Do not add a metrics dependency until a concrete monitoring consumer exists.
 Use `httptest.Server` for OAuth token, Google identity, and Gmail API behavior.
 Use synthetic fixtures for messages and history pages.
 The accepted Turso adapter contract uses a no-SQL fake replacement and a credential-free literal-loopback SQL over HTTP server.
-It verifies initial endpoint policy, URL and token separation, bounded operation cancellation, fixed diagnostics, idempotent close, exact fixed parameterized account-cursor statements, durable uniqueness, cursor compare-and-swap, separate physical visibility, uncertain outcomes, session discard, no replay, and fresh reconciliation.
+It verifies initial endpoint policy, URL and token separation, bounded operation cancellation, fixed diagnostics, idempotent close, exact fixed parameterized account-cursor and ciphertext-credential statements, durable uniqueness, typed compare-and-swap, separate physical visibility, uncertain outcomes, session discard, no replay, and fresh reconciliation.
+The literal-loopback server exercises the exact pinned HTTP driver but models SQL durability and does not execute SQLite.
 It does not prove Turso Cloud availability, quota, latency, recovery, engine-specific behavior, same-authority handling after `base_url`, redirect rejection, successful-response limits, or bounded transaction and stream close.
 Those gaps remain in the [known-risk register](known-risks.md) and must be exercised when a later issue reaches the affected behavior.
 Do not mock SQL with a third-party SQL-mocking library.
@@ -1053,7 +1074,8 @@ The YAML package is the only runtime dependency approved in this phase.
 [ADR 0004](adr/0004-turso-serverless-adapter.md) resolves the driver-selection gate with an inert repository-owned adapter and explicitly accepted unresolved risks.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) implements the credential-free append-only migration runner and checksum protection.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) implements minimum Gmail account identity and synchronization-cursor persistence with synthetic fixtures only.
-Next, define and implement versioned authenticated encryption before any provider credential can be persisted.
+[ADR 0007](adr/0007-versioned-provider-credential-encryption.md) implements versioned authenticated encryption and ciphertext-only typed credential persistence with synthetic fixtures only.
+Next, implement one-account Gmail OAuth enrollment against fake OAuth and Gmail servers.
 Do not activate live credentials or production database writes without a separately approved issue and explicit owner approval.
 Do not add email or review tables until their vertical slices require them.
 

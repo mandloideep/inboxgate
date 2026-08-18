@@ -15,6 +15,8 @@ var (
 	ErrCursorNotFound        = errors.New("storage: synchronization cursor not found")
 	ErrCursorConflict        = errors.New("storage: synchronization cursor conflict")
 	ErrCursorRegression      = errors.New("storage: synchronization cursor regression")
+	ErrCredentialNotFound    = errors.New("storage: provider credential not found")
+	ErrCredentialConflict    = errors.New("storage: provider credential conflict")
 	ErrPersistenceAcquire    = errors.New("storage: persistence connection failed")
 	ErrPersistenceInspect    = errors.New("storage: persistence inspection failed")
 	ErrPersistenceUnknown    = errors.New("storage: persistence outcome unknown")

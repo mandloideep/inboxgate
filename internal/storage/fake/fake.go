@@ -9,17 +9,19 @@ import (
 )
 
 type Store struct {
-	mu        sync.Mutex
-	accounts  map[storage.AccountID]storage.Account
-	bySubject map[storage.ProviderSubject]storage.AccountID
-	cursors   map[storage.AccountID]storage.HistoryID
+	mu          sync.Mutex
+	accounts    map[storage.AccountID]storage.Account
+	bySubject   map[storage.ProviderSubject]storage.AccountID
+	cursors     map[storage.AccountID]storage.HistoryID
+	credentials map[storage.AccountID]storage.ProviderCredential
 }
 
 func New() *Store {
 	return &Store{
-		accounts:  make(map[storage.AccountID]storage.Account),
-		bySubject: make(map[storage.ProviderSubject]storage.AccountID),
-		cursors:   make(map[storage.AccountID]storage.HistoryID),
+		accounts:    make(map[storage.AccountID]storage.Account),
+		bySubject:   make(map[storage.ProviderSubject]storage.AccountID),
+		cursors:     make(map[storage.AccountID]storage.HistoryID),
+		credentials: make(map[storage.AccountID]storage.ProviderCredential),
 	}
 }
 
@@ -29,7 +31,7 @@ func (s *Store) Migrate(ctx context.Context) (storage.MigrationResult, error) {
 	if err := ctx.Err(); err != nil {
 		return storage.MigrationResult{}, err
 	}
-	return storage.MigrationResult{Current: 2}, nil
+	return storage.MigrationResult{Current: 3}, nil
 }
 
 func (s *Store) EnsureAccount(ctx context.Context, seed storage.AccountSeed) (storage.Account, error) {
@@ -105,6 +107,55 @@ func (s *Store) CommitSynchronization(ctx context.Context, commit storage.Synchr
 		return storage.ErrCursorConflict
 	}
 	s.cursors[commit.AccountID] = commit.Next
+	return nil
+}
+
+func (s *Store) GetProviderCredential(ctx context.Context, accountID storage.AccountID) (storage.ProviderCredential, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.ProviderCredential{}, err
+	}
+	if parsed, err := storage.ParseAccountID(accountID.String()); err != nil || parsed != accountID {
+		return storage.ProviderCredential{}, storage.ErrInvalidValue
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.accounts[accountID]; !ok {
+		return storage.ProviderCredential{}, storage.ErrAccountNotFound
+	}
+	credential, ok := s.credentials[accountID]
+	if !ok {
+		return storage.ProviderCredential{}, storage.ErrCredentialNotFound
+	}
+	return credential, nil
+}
+
+func (s *Store) CommitProviderCredential(ctx context.Context, commit storage.ProviderCredentialCommit) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := storage.ValidateProviderCredentialCommit(commit); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.accounts[commit.AccountID]; !ok {
+		return storage.ErrAccountNotFound
+	}
+	current, exists := s.credentials[commit.AccountID]
+	if exists && current.Envelope == commit.Next {
+		return nil
+	}
+	if !exists {
+		if commit.Expected != nil {
+			return storage.ErrCredentialConflict
+		}
+		s.credentials[commit.AccountID] = storage.ProviderCredential{AccountID: commit.AccountID, KeyID: commit.Next.KeyID(), Envelope: commit.Next}
+		return nil
+	}
+	if commit.Expected == nil || current.Envelope != *commit.Expected {
+		return storage.ErrCredentialConflict
+	}
+	s.credentials[commit.AccountID] = storage.ProviderCredential{AccountID: commit.AccountID, KeyID: commit.Next.KeyID(), Envelope: commit.Next}
 	return nil
 }
 

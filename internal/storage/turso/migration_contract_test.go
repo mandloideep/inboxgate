@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -25,13 +26,14 @@ import (
 )
 
 const (
-	expectedMaximumMigrationCount = 256
-	expectedMigrationSQL          = "CREATE TABLE inboxgate_schema_migrations (\n    number INTEGER PRIMARY KEY CHECK (number BETWEEN 1 AND 256),\n    checksum TEXT NOT NULL CHECK (length(checksum) = 64 AND checksum NOT GLOB '*[^0-9a-f]*')\n) STRICT, WITHOUT ROWID;\n"
-	expectedAccountMigrationSQL   = "CREATE TABLE inboxgate_accounts (\n    account_id TEXT PRIMARY KEY CHECK (length(CAST(account_id AS BLOB)) = 32 AND instr(CAST(account_id AS BLOB), x'00') = 0 AND account_id NOT GLOB '*[^0-9a-f]*'),\n    provider TEXT NOT NULL CHECK (provider = 'gmail'),\n    provider_subject TEXT COLLATE BINARY NOT NULL CHECK (length(CAST(provider_subject AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(provider_subject AS BLOB), x'00') = 0 AND provider_subject NOT GLOB '*[^!-~]*'),\n    UNIQUE (provider, provider_subject)\n) STRICT, WITHOUT ROWID;\n\nCREATE TABLE inboxgate_synchronization_cursors (\n    account_id TEXT PRIMARY KEY,\n    history_id TEXT COLLATE BINARY NOT NULL CHECK (\n        length(CAST(history_id AS BLOB)) BETWEEN 1 AND 20\n        AND instr(CAST(history_id AS BLOB), x'00') = 0\n        AND history_id NOT GLOB '*[^0-9]*'\n        AND substr(history_id, 1, 1) BETWEEN '1' AND '9'\n        AND (length(CAST(history_id AS BLOB)) < 20 OR history_id <= '18446744073709551615')\n    ),\n    FOREIGN KEY (account_id) REFERENCES inboxgate_accounts (account_id) ON DELETE RESTRICT\n) STRICT, WITHOUT ROWID;\n"
-	expectedSecondMigrationSQL    = "CREATE TABLE inboxgate_synthetic_second (id INTEGER PRIMARY KEY);\n"
-	expectedThirdMigrationSQL     = "CREATE TABLE inboxgate_synthetic_third (id INTEGER PRIMARY KEY);\n"
-	ledgerInsertSQL               = "INSERT INTO inboxgate_schema_migrations (number, checksum) VALUES (?, ?)"
-	commitAfterDurabilityStage    = "commit-after-durability"
+	expectedMaximumMigrationCount  = 256
+	expectedMigrationSQL           = "CREATE TABLE inboxgate_schema_migrations (\n    number INTEGER PRIMARY KEY CHECK (number BETWEEN 1 AND 256),\n    checksum TEXT NOT NULL CHECK (length(checksum) = 64 AND checksum NOT GLOB '*[^0-9a-f]*')\n) STRICT, WITHOUT ROWID;\n"
+	expectedAccountMigrationSQL    = "CREATE TABLE inboxgate_accounts (\n    account_id TEXT PRIMARY KEY CHECK (length(CAST(account_id AS BLOB)) = 32 AND instr(CAST(account_id AS BLOB), x'00') = 0 AND account_id NOT GLOB '*[^0-9a-f]*'),\n    provider TEXT NOT NULL CHECK (provider = 'gmail'),\n    provider_subject TEXT COLLATE BINARY NOT NULL CHECK (length(CAST(provider_subject AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(provider_subject AS BLOB), x'00') = 0 AND provider_subject NOT GLOB '*[^!-~]*'),\n    UNIQUE (provider, provider_subject)\n) STRICT, WITHOUT ROWID;\n\nCREATE TABLE inboxgate_synchronization_cursors (\n    account_id TEXT PRIMARY KEY,\n    history_id TEXT COLLATE BINARY NOT NULL CHECK (\n        length(CAST(history_id AS BLOB)) BETWEEN 1 AND 20\n        AND instr(CAST(history_id AS BLOB), x'00') = 0\n        AND history_id NOT GLOB '*[^0-9]*'\n        AND substr(history_id, 1, 1) BETWEEN '1' AND '9'\n        AND (length(CAST(history_id AS BLOB)) < 20 OR history_id <= '18446744073709551615')\n    ),\n    FOREIGN KEY (account_id) REFERENCES inboxgate_accounts (account_id) ON DELETE RESTRICT\n) STRICT, WITHOUT ROWID;\n"
+	expectedCredentialMigrationSQL = "CREATE TABLE inboxgate_provider_credentials (\n    account_id TEXT PRIMARY KEY CHECK (length(CAST(account_id AS BLOB)) = 32 AND instr(CAST(account_id AS BLOB), x'00') = 0 AND account_id NOT GLOB '*[^0-9a-f]*'),\n    key_id TEXT COLLATE BINARY NOT NULL CHECK (\n        length(CAST(key_id AS BLOB)) BETWEEN 1 AND 32\n        AND instr(CAST(key_id AS BLOB), x'00') = 0\n        AND substr(key_id, 1, 1) GLOB '[a-z]'\n        AND key_id NOT GLOB '*[^a-z0-9_-]*'\n    ),\n    envelope TEXT COLLATE BINARY NOT NULL CHECK (\n        length(CAST(envelope AS BLOB)) BETWEEN 55 AND 5556\n        AND instr(CAST(envelope AS BLOB), x'00') = 0\n        AND substr(envelope, 1, 5) = 'igc1.'\n        AND substr(envelope, 6) NOT GLOB '*[^A-Za-z0-9_-]*'\n    ),\n    FOREIGN KEY (account_id) REFERENCES inboxgate_accounts (account_id) ON DELETE RESTRICT\n) STRICT, WITHOUT ROWID;\n"
+	expectedSecondMigrationSQL     = "CREATE TABLE inboxgate_synthetic_second (id INTEGER PRIMARY KEY);\n"
+	expectedThirdMigrationSQL      = "CREATE TABLE inboxgate_synthetic_third (id INTEGER PRIMARY KEY);\n"
+	ledgerInsertSQL                = "INSERT INTO inboxgate_schema_migrations (number, checksum) VALUES (?, ?)"
+	commitAfterDurabilityStage     = "commit-after-durability"
 )
 
 var expectedMigrationChecksum = func() string {
@@ -39,8 +41,19 @@ var expectedMigrationChecksum = func() string {
 	return hex.EncodeToString(sum[:])
 }()
 
+func TestMain(m *testing.M) {
+	code := m.Run()
+	closeMigrationProtocolHost()
+	os.Exit(code)
+}
+
 var expectedAccountMigrationChecksum = func() string {
 	sum := sha256.Sum256([]byte(expectedAccountMigrationSQL))
+	return hex.EncodeToString(sum[:])
+}()
+
+var expectedCredentialMigrationChecksum = func() string {
+	sum := sha256.Sum256([]byte(expectedCredentialMigrationSQL))
 	return hex.EncodeToString(sum[:])
 }()
 
@@ -72,6 +85,12 @@ var expectedAccountMigrationSequence = beginImmediateSQL + ";\n" + expectedAccou
 	"DROP TABLE temp." + guardTable + ";\n" +
 	sequenceInsertSQL + "2, '" + expectedAccountMigrationChecksum + "');\n" + commitSQL + ";"
 
+var expectedCredentialMigrationSequence = beginImmediateSQL + ";\n" + expectedCredentialMigrationSQL +
+	"CREATE TEMP TABLE " + guardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
+	"INSERT INTO " + guardTable + " (valid) SELECT CASE WHEN (SELECT COUNT(*) FROM " + ledgerTable + ") = 2 AND NOT EXISTS (SELECT 1 FROM " + ledgerTable + " WHERE number IS NULL OR checksum IS NULL) AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 1 AND checksum = '" + expectedMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 2 AND checksum = '" + expectedAccountMigrationChecksum + "') = 1 THEN 1 ELSE 0 END;\n" +
+	"DROP TABLE temp." + guardTable + ";\n" +
+	sequenceInsertSQL + "3, '" + expectedCredentialMigrationChecksum + "');\n" + commitSQL + ";"
+
 var expectedTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";\n" +
 	"UPDATE " + ledgerTable + " SET checksum = checksum WHERE number = 1;\n" +
 	"CREATE TEMP TABLE " + terminalGuardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
@@ -86,6 +105,13 @@ var expectedAccountTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";\n" +
 	"DROP TABLE temp." + terminalGuardTable + ";\n" +
 	"PRAGMA user_version = 2;\nRELEASE SAVEPOINT " + terminalSavepoint + ";"
 
+var expectedCredentialTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";\n" +
+	"UPDATE " + ledgerTable + " SET checksum = checksum WHERE number = 3;\n" +
+	"CREATE TEMP TABLE " + terminalGuardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
+	"INSERT INTO " + terminalGuardTable + " (valid) SELECT CASE WHEN (SELECT COUNT(*) FROM " + ledgerTable + ") = 3 AND NOT EXISTS (SELECT 1 FROM " + ledgerTable + " WHERE number IS NULL OR checksum IS NULL) AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 1 AND checksum = '" + expectedMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 2 AND checksum = '" + expectedAccountMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 3 AND checksum = '" + expectedCredentialMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM pragma_user_version) = 1 AND (SELECT user_version FROM pragma_user_version) BETWEEN 0 AND 3 THEN 1 ELSE 0 END;\n" +
+	"DROP TABLE temp." + terminalGuardTable + ";\n" +
+	"PRAGMA user_version = 3;\nRELEASE SAVEPOINT " + terminalSavepoint + ";"
+
 func TestMigrationContractEmptyApplication(t *testing.T) {
 
 	server := newMigrationProtocolServer(t)
@@ -95,8 +121,8 @@ func TestMigrationContractEmptyApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-		t.Fatalf("Migrate() result = %#v, want two applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+		t.Fatalf("Migrate() result = %#v, want three applied migrations", result)
 	}
 	server.assertCommittedCatalog(t)
 	server.assertSeparateVerificationStream(t)
@@ -107,12 +133,33 @@ func TestMigrationContractEmptyApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 0, Current: 2}) {
+	if result != (storage.MigrationResult{Applied: 0, Current: 3}) {
 		t.Fatalf("second Migrate() result = %#v, want bounded no-op", result)
 	}
 	if got := server.mutationCount(); got != firstMutationCount {
 		t.Fatalf("second Migrate() mutations = %d, want unchanged %d", got, firstMutationCount)
 	}
+}
+
+func TestMigrationFromAccountSchemaSendsExactCredentialSchemaBytes(t *testing.T) {
+	server := newMigrationProtocolServer(t)
+	server.seedLedger(1, expectedMigrationChecksum)
+	server.seedLedger(2, expectedAccountMigrationChecksum)
+	handle := openMigrationContractHandle(t, server.URL)
+	result, err := handle.Migrate(context.Background())
+	if err != nil || result.Applied != 1 || result.Current != 3 {
+		t.Fatalf("Migrate() = (%#v, %v), want one credential migration", result, err)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	for _, record := range server.pipelineRecords {
+		for _, request := range record.requests {
+			if request.Type == "sequence" && request.SQL == expectedCredentialMigrationSequence && len(request.Args) == 0 && len(request.NamedArgs) == 0 {
+				return
+			}
+		}
+	}
+	t.Fatal("exact credential migration transaction sequence was not sent")
 }
 
 func TestMigrationSequenceUsesOnlyBoundedInternalLiterals(t *testing.T) {
@@ -312,11 +359,11 @@ func TestMigrationContractDroppedCommitDoesNotReplayAndFreshRunReconciles(t *tes
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 1, Current: 2}) {
+	if result != (storage.MigrationResult{Applied: 2, Current: 3}) {
 		t.Fatalf("fresh Migrate() result = %#v, want durable reconciliation", result)
 	}
-	if got := server.sequenceCount(); got != 2 {
-		t.Fatalf("sequence requests after reconciliation = %d, want only pending migration 2", got)
+	if got := server.sequenceCount(); got != 3 {
+		t.Fatalf("sequence requests after reconciliation = %d, want only pending migrations 2 and 3", got)
 	}
 }
 
@@ -338,11 +385,11 @@ func TestMigrationContractDroppedCommitBeforeDurabilityAppliesOnceOnFreshRun(t *
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-		t.Fatalf("fresh Migrate() result = %#v, want two newly durable migrations", result)
+	if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+		t.Fatalf("fresh Migrate() result = %#v, want three newly durable migrations", result)
 	}
-	if got := server.sequenceCount(); got != 3 {
-		t.Fatalf("sequence requests across explicit invocations = %d, want 3", got)
+	if got := server.sequenceCount(); got != 4 {
+		t.Fatalf("sequence requests across explicit invocations = %d, want 4", got)
 	}
 	server.assertCommittedCatalog(t)
 }
@@ -356,14 +403,14 @@ func TestMigrationHeaderOnlyStandaloneCommitPathIsNotUsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-		t.Fatalf("Migrate() result = %#v, want two atomic sequences", result)
+	if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+		t.Fatalf("Migrate() result = %#v, want three atomic sequences", result)
 	}
 	if got := server.commitCount(); got != 0 {
 		t.Fatalf("standalone commit requests = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 2 {
-		t.Fatalf("sequence requests = %d, want 2", got)
+	if got := server.sequenceCount(); got != 3 {
+		t.Fatalf("sequence requests = %d, want 3", got)
 	}
 }
 
@@ -376,8 +423,8 @@ func TestMigrationHeaderOnlyBeginCannotMoveWritesToAutocommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-		t.Fatalf("Migrate() result = %#v, want two atomic sequences", result)
+	if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+		t.Fatalf("Migrate() result = %#v, want three atomic sequences", result)
 	}
 	if got := server.countSQL(beginImmediateSQL); got != 0 {
 		t.Fatalf("standalone begin requests = %d, want 0", got)
@@ -385,8 +432,8 @@ func TestMigrationHeaderOnlyBeginCannotMoveWritesToAutocommit(t *testing.T) {
 	if got := server.migrationStatementCount(); got != 0 {
 		t.Fatalf("standalone migration requests = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 2 {
-		t.Fatalf("sequence requests = %d, want 2", got)
+	if got := server.sequenceCount(); got != 3 {
+		t.Fatalf("sequence requests = %d, want 3", got)
 	}
 }
 
@@ -399,8 +446,8 @@ func TestMigrationHeaderOnlyPendingStatementCannotCreateFalseLedgerSuccess(t *te
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-		t.Fatalf("Migrate() result = %#v, want two atomic sequences", result)
+	if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+		t.Fatalf("Migrate() result = %#v, want three atomic sequences", result)
 	}
 	if got := server.migrationStatementCount(); got != 0 {
 		t.Fatalf("standalone migration requests = %d, want 0", got)
@@ -408,8 +455,8 @@ func TestMigrationHeaderOnlyPendingStatementCannotCreateFalseLedgerSuccess(t *te
 	if got := server.insertCount(); got != 0 {
 		t.Fatalf("standalone ledger inserts = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 2 {
-		t.Fatalf("sequence requests = %d, want 2", got)
+	if got := server.sequenceCount(); got != 3 {
+		t.Fatalf("sequence requests = %d, want 3", got)
 	}
 }
 
@@ -431,8 +478,8 @@ func TestMigrationDroppedSequenceReturnsUnknownWithoutReplayAndFreshRunReconcile
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-		t.Fatalf("fresh Migrate() result = %#v, want two applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+		t.Fatalf("fresh Migrate() result = %#v, want three applied migrations", result)
 	}
 }
 
@@ -480,11 +527,11 @@ func TestMigrationRejectsIncompleteSequenceResultsAndReconcilesFresh(t *testing.
 			if err != nil {
 				t.Fatalf("fresh Migrate() error = %v", err)
 			}
-			if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-				t.Fatalf("fresh Migrate() result = %#v, want two atomic migrations", result)
+			if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+				t.Fatalf("fresh Migrate() result = %#v, want three atomic migrations", result)
 			}
-			if got := server.sequenceCount(); got != 3 {
-				t.Fatalf("sequence requests across explicit invocations = %d, want 3", got)
+			if got := server.sequenceCount(); got != 4 {
+				t.Fatalf("sequence requests across explicit invocations = %d, want 4", got)
 			}
 		})
 	}
@@ -509,14 +556,14 @@ func TestMigrationSequenceResponseRequiresSemanticTerminalProof(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Migrate() error = %v", err)
 			}
-			if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-				t.Fatalf("Migrate() result = %#v, want two semantically proven migrations", result)
+			if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+				t.Fatalf("Migrate() result = %#v, want three semantically proven migrations", result)
 			}
-			if got := server.terminalSequenceCount(); got != 2 {
-				t.Fatalf("terminal proof sequences = %d, want 2", got)
+			if got := server.terminalSequenceCount(); got != 3 {
+				t.Fatalf("terminal proof sequences = %d, want 3", got)
 			}
-			if got := server.userVersionValue(); got != 2 {
-				t.Fatalf("durable user_version = %d, want 2", got)
+			if got := server.userVersionValue(); got != 3 {
+				t.Fatalf("durable user_version = %d, want 3", got)
 			}
 		})
 	}
@@ -548,11 +595,11 @@ func TestMigrationUnprovenApplySessionIsDiscardedBeforeFreshReconciliation(t *te
 	if err != nil {
 		t.Fatalf("fresh explicit Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
-		t.Fatalf("fresh explicit Migrate() result = %#v, want two applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
+		t.Fatalf("fresh explicit Migrate() result = %#v, want three applied migrations", result)
 	}
-	if got := server.sequenceCount(); got != 3 {
-		t.Fatalf("migration sequences across explicit invocations = %d, want 3", got)
+	if got := server.sequenceCount(); got != 4 {
+		t.Fatalf("migration sequences across explicit invocations = %d, want 4", got)
 	}
 }
 
@@ -566,7 +613,7 @@ func TestMigrationRepairsCommittedLedgerWithoutTerminalMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 2}) {
+	if result != (storage.MigrationResult{Current: 3}) {
 		t.Fatalf("Migrate() result = %#v, want marker-only reconciliation", result)
 	}
 	if got := server.sequenceCount(); got != 0 {
@@ -575,8 +622,8 @@ func TestMigrationRepairsCommittedLedgerWithoutTerminalMarker(t *testing.T) {
 	if got := server.terminalSequenceCount(); got != 1 {
 		t.Fatalf("terminal sequences = %d, want one marker repair", got)
 	}
-	if got := server.userVersionValue(); got != 2 {
-		t.Fatalf("durable user_version = %d, want 2", got)
+	if got := server.userVersionValue(); got != 3 {
+		t.Fatalf("durable user_version = %d, want 3", got)
 	}
 }
 
@@ -599,7 +646,7 @@ func TestMigrationMarkerRepairDoesNotOverwriteConcurrentAdvance(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("marker repair did not reach the locked race point")
 	}
-	server.setUserVersion(3)
+	server.setUserVersion(4)
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case err := <-result:
@@ -609,8 +656,8 @@ func TestMigrationMarkerRepairDoesNotOverwriteConcurrentAdvance(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("marker repair did not return after race release")
 	}
-	if got := server.userVersionValue(); got != 3 {
-		t.Fatalf("durable user_version = %d, want concurrent value 3 preserved", got)
+	if got := server.userVersionValue(); got != 4 {
+		t.Fatalf("durable user_version = %d, want concurrent value 4 preserved", got)
 	}
 
 	fresh := openMigrationContractHandle(t, server.URL)
@@ -713,11 +760,11 @@ func TestMigrationTerminalSequenceResponsesRequireSeparateMarkerVisibility(t *te
 				if err != nil {
 					t.Fatalf("Migrate() error = %v", err)
 				}
-				if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
+				if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
 					t.Fatalf("Migrate() result = %#v, want proven migration", result)
 				}
-				if got := server.userVersionValue(); got != 2 {
-					t.Fatalf("durable user_version = %d, want 2", got)
+				if got := server.userVersionValue(); got != 3 {
+					t.Fatalf("durable user_version = %d, want 3", got)
 				}
 				return
 			}
@@ -738,11 +785,11 @@ func TestMigrationTerminalSequenceResponsesRequireSeparateMarkerVisibility(t *te
 			if freshErr != nil {
 				t.Fatalf("fresh Migrate() error = %v", freshErr)
 			}
-			if freshResult != (storage.MigrationResult{Applied: 1, Current: 2}) {
-				t.Fatalf("fresh Migrate() result = %#v, want marker repair and migration 2", freshResult)
+			if freshResult != (storage.MigrationResult{Applied: 2, Current: 3}) {
+				t.Fatalf("fresh Migrate() result = %#v, want marker repair and migrations 2 and 3", freshResult)
 			}
-			if got := server.sequenceCount(); got != 2 {
-				t.Fatalf("migration sequences after fresh reconciliation = %d, want only migration 2 after no schema replay", got)
+			if got := server.sequenceCount(); got != 3 {
+				t.Fatalf("migration sequences after fresh reconciliation = %d, want only migrations 2 and 3 after no schema replay", got)
 			}
 		})
 	}
@@ -797,8 +844,8 @@ func TestMigrationCurrentSchemaAvoidsAmbiguousFinalCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 2}) {
-		t.Fatalf("Migrate() result = %#v, want current migration 2", result)
+	if result != (storage.MigrationResult{Current: 3}) {
+		t.Fatalf("Migrate() result = %#v, want current migration 3", result)
 	}
 	if got := server.countSQL(beginImmediateSQL); got != 0 {
 		t.Fatalf("begin requests = %d, want 0 for current schema", got)
@@ -887,11 +934,11 @@ func TestMigrationStatementFailureAttemptsRollbackAndReturnsUnknown(t *testing.T
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 2, Current: 2}) {
+	if result != (storage.MigrationResult{Applied: 3, Current: 3}) {
 		t.Fatalf("fresh Migrate() result = %#v, want atomic reconciliation", result)
 	}
-	if got := server.sequenceCount(); got != 3 {
-		t.Fatalf("sequence requests across explicit invocations = %d, want 3", got)
+	if got := server.sequenceCount(); got != 4 {
+		t.Fatalf("sequence requests across explicit invocations = %d, want 4", got)
 	}
 }
 
@@ -1324,11 +1371,11 @@ func TestMigrationStalledWriteCommitAndCleanupAreNotReplayed(t *testing.T) {
 			if freshErr != nil {
 				t.Fatalf("fresh Migrate() error = %v", freshErr)
 			}
-			wantFresh := storage.MigrationResult{Applied: 2, Current: 2}
-			wantSequences := 3
+			wantFresh := storage.MigrationResult{Applied: 3, Current: 3}
+			wantSequences := 4
 			if tt.wantDurable {
-				wantFresh = storage.MigrationResult{Applied: 1, Current: 2}
-				wantSequences = 2
+				wantFresh = storage.MigrationResult{Applied: 2, Current: 3}
+				wantSequences = 3
 			}
 			if freshResult != wantFresh {
 				t.Fatalf("fresh Migrate() result = %#v, want %#v", freshResult, wantFresh)
@@ -1409,11 +1456,11 @@ func TestMigrationRollbackCleanupUsesIndependentContext(t *testing.T) {
 	if freshErr != nil {
 		t.Fatalf("fresh Migrate() error = %v", freshErr)
 	}
-	if freshResult != (storage.MigrationResult{Applied: 2, Current: 2}) {
-		t.Fatalf("fresh Migrate() result = %#v, want two applied migrations", freshResult)
+	if freshResult != (storage.MigrationResult{Applied: 3, Current: 3}) {
+		t.Fatalf("fresh Migrate() result = %#v, want three applied migrations", freshResult)
 	}
-	if got := server.sequenceCount(); got != 3 {
-		t.Fatalf("migration sequences after fresh reconciliation = %d, want 3", got)
+	if got := server.sequenceCount(); got != 4 {
+		t.Fatalf("migration sequences after fresh reconciliation = %d, want 4", got)
 	}
 }
 
@@ -1455,11 +1502,11 @@ func TestConcurrentMigrationSequencesConvergeAfterUnknownLockOutcome(t *testing.
 	if err != nil {
 		t.Fatalf("reconciliation Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 2}) {
-		t.Fatalf("reconciliation result = %#v, want current migration 2", result)
+	if result != (storage.MigrationResult{Current: 3}) {
+		t.Fatalf("reconciliation result = %#v, want current migration 3", result)
 	}
-	if got := server.sequenceCount(); got != 3 {
-		t.Fatalf("sequence requests = %d, want two successful and one rejected sequence", got)
+	if got := server.sequenceCount(); got != 4 {
+		t.Fatalf("sequence requests = %d, want three successful and one rejected sequence", got)
 	}
 }
 
@@ -1585,67 +1632,80 @@ func (d *failNthConnectionDatabase) Conn(ctx context.Context) (*sql.Conn, error)
 type migrationProtocolServer struct {
 	*httptest.Server
 
-	testing              *testing.T
-	mu                   sync.Mutex
-	ledger               map[int]string
-	pending              map[int]string
-	userVersion          int
-	pendingUserVersion   int
-	inTxn                bool
-	exists               bool
-	pendingExists        bool
-	pendingSecondSchema  bool
-	pendingThirdSchema   bool
-	drop                 bool
-	dropBeforeCommit     bool
-	headerOnlyCommit     bool
-	headerOnlyRollback   bool
-	headerOnlyBegin      bool
-	headerOnlyMigration  bool
-	malformedSequence    bool
-	omitSequenceResult   bool
-	malformedAutocommit  bool
-	omitSequencePayload  bool
-	wrongSequencePayload bool
-	falseAutocommit      bool
-	holdTransaction      bool
-	terminalMalformed    bool
-	terminalOmitResult   bool
-	terminalBadAuto      bool
-	terminalFalseAuto    bool
-	terminalOmitPayload  bool
-	terminalWrongPayload bool
-	terminalSkipMarker   bool
-	ignoredRollbacks     int
-	ignoredCloses        int
-	failSQL              string
-	failSQLSkip          int
-	ledgerRowsOverride   [][]any
-	stallSQL             string
-	stallStarted         chan struct{}
-	stallRelease         chan struct{}
-	stallFinished        chan struct{}
-	beforeSequenceStart  chan struct{}
-	beforeSequenceAllow  chan struct{}
-	beforeTerminalStart  chan struct{}
-	beforeTerminalAllow  chan struct{}
-	secondSchema         bool
-	thirdSchema          bool
-	accounts             map[string]string
-	cursors              map[string]string
-	persistenceMode      string
-	persistenceStatement string
-	persistenceStarted   chan struct{}
-	persistenceRelease   chan struct{}
-	persistenceRows      map[string][][]any
-	persistenceColumns   map[string][]any
-	nextCursorBaseURL    string
-	nextCursorBaton      int
-	closedCursorAt       map[string]int
-	closedCursorCount    map[string]int
-	records              []migrationRequest
-	pipelineRecords      []migrationPipelineRequest
+	testing                 *testing.T
+	mu                      sync.Mutex
+	ledger                  map[int]string
+	pending                 map[int]string
+	userVersion             int
+	pendingUserVersion      int
+	inTxn                   bool
+	exists                  bool
+	pendingExists           bool
+	pendingSecondSchema     bool
+	pendingThirdSchema      bool
+	pendingCredentialSchema bool
+	drop                    bool
+	dropBeforeCommit        bool
+	headerOnlyCommit        bool
+	headerOnlyRollback      bool
+	headerOnlyBegin         bool
+	headerOnlyMigration     bool
+	malformedSequence       bool
+	omitSequenceResult      bool
+	malformedAutocommit     bool
+	omitSequencePayload     bool
+	wrongSequencePayload    bool
+	falseAutocommit         bool
+	holdTransaction         bool
+	terminalMalformed       bool
+	terminalOmitResult      bool
+	terminalBadAuto         bool
+	terminalFalseAuto       bool
+	terminalOmitPayload     bool
+	terminalWrongPayload    bool
+	terminalSkipMarker      bool
+	ignoredRollbacks        int
+	ignoredCloses           int
+	failSQL                 string
+	failSQLSkip             int
+	ledgerRowsOverride      [][]any
+	stallSQL                string
+	stallStarted            chan struct{}
+	stallRelease            chan struct{}
+	stallFinished           chan struct{}
+	beforeSequenceStart     chan struct{}
+	beforeSequenceAllow     chan struct{}
+	beforeTerminalStart     chan struct{}
+	beforeTerminalAllow     chan struct{}
+	secondSchema            bool
+	thirdSchema             bool
+	credentialSchema        bool
+	accounts                map[string]string
+	cursors                 map[string]string
+	credentials             map[string]syntheticCredential
+	persistenceMode         string
+	persistenceStatement    string
+	persistenceStarted      chan struct{}
+	persistenceRelease      chan struct{}
+	persistenceRows         map[string][][]any
+	persistenceColumns      map[string][]any
+	nextCursorBaseURL       string
+	nextCursorBaton         int
+	closedCursorAt          map[string]int
+	closedCursorCount       map[string]int
+	records                 []migrationRequest
+	pipelineRecords         []migrationPipelineRequest
 }
+
+type migrationProtocolHost struct {
+	once   sync.Once
+	mu     sync.RWMutex
+	server *httptest.Server
+	active *migrationProtocolServer
+	lease  chan struct{}
+}
+
+var sharedMigrationProtocolHost migrationProtocolHost
 
 type migrationRequest struct {
 	baton         *string
@@ -1688,19 +1748,63 @@ type protocolCursorRequest struct {
 
 func newMigrationProtocolServer(t *testing.T) *migrationProtocolServer {
 	t.Helper()
+	sharedMigrationProtocolHost.once.Do(func() {
+		sharedMigrationProtocolHost.lease = make(chan struct{}, 1)
+		sharedMigrationProtocolHost.lease <- struct{}{}
+		sharedMigrationProtocolHost.server = httptest.NewServer(http.HandlerFunc(sharedMigrationProtocolHost.serveHTTP))
+	})
+	select {
+	case <-sharedMigrationProtocolHost.lease:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out acquiring reusable synthetic protocol server")
+	}
 	server := &migrationProtocolServer{
 		testing:            t,
 		ledger:             make(map[int]string),
 		accounts:           make(map[string]string),
 		cursors:            make(map[string]string),
+		credentials:        make(map[string]syntheticCredential),
 		persistenceRows:    make(map[string][][]any),
 		persistenceColumns: make(map[string][]any),
 		closedCursorAt:     make(map[string]int),
 		closedCursorCount:  make(map[string]int),
 	}
-	server.Server = httptest.NewServer(http.HandlerFunc(server.serveHTTP))
-	t.Cleanup(server.Close)
+	server.Server = sharedMigrationProtocolHost.server
+	sharedMigrationProtocolHost.mu.Lock()
+	sharedMigrationProtocolHost.active = server
+	sharedMigrationProtocolHost.mu.Unlock()
+	t.Cleanup(func() {
+		sharedMigrationProtocolHost.mu.Lock()
+		sharedMigrationProtocolHost.active = nil
+		sharedMigrationProtocolHost.mu.Unlock()
+		sharedMigrationProtocolHost.lease <- struct{}{}
+	})
 	return server
+}
+
+func (h *migrationProtocolHost) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	active := h.active
+	h.mu.RUnlock()
+	if active == nil {
+		http.Error(w, "synthetic protocol server is not leased", http.StatusServiceUnavailable)
+		return
+	}
+	active.serveHTTP(w, r)
+}
+
+func closeMigrationProtocolHost() {
+	sharedMigrationProtocolHost.mu.Lock()
+	server := sharedMigrationProtocolHost.server
+	sharedMigrationProtocolHost.server = nil
+	sharedMigrationProtocolHost.active = nil
+	sharedMigrationProtocolHost.mu.Unlock()
+	if server != nil {
+		server.Close()
+	}
+	if transport, ok := http.DefaultTransport.(interface{ CloseIdleConnections() }); ok {
+		transport.CloseIdleConnections()
+	}
 }
 
 func (s *migrationProtocolServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1922,6 +2026,16 @@ func (s *migrationProtocolServer) serveCursor(w http.ResponseWriter, r *http.Req
 			map[string]any{"name": "cursor_account_id", "decltype": "TEXT"},
 			map[string]any{"name": "history_id", "decltype": "TEXT"},
 		}
+	} else if statement.SQL == credentialLookupSQL {
+		columns = []any{
+			map[string]any{"name": "sentinel", "decltype": "INTEGER"},
+			map[string]any{"name": "account_count", "decltype": "INTEGER"},
+			map[string]any{"name": "account_id", "decltype": "TEXT"},
+			map[string]any{"name": "credential_count", "decltype": "INTEGER"},
+			map[string]any{"name": "credential_account_id", "decltype": "TEXT"},
+			map[string]any{"name": "key_id", "decltype": "TEXT"},
+			map[string]any{"name": "envelope", "decltype": "TEXT"},
+		}
 	}
 	if overrideColumns != nil {
 		columns = overrideColumns
@@ -2038,6 +2152,7 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 		s.userVersion = s.pendingUserVersion
 		s.secondSchema = s.pendingSecondSchema
 		s.thirdSchema = s.pendingThirdSchema
+		s.credentialSchema = s.pendingCredentialSchema
 		s.inTxn = false
 		if s.drop {
 			s.drop = false
@@ -2054,6 +2169,7 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 		s.pendingUserVersion = 0
 		s.pendingSecondSchema = false
 		s.pendingThirdSchema = false
+		s.pendingCredentialSchema = false
 		s.inTxn = false
 		return nil, 0, false
 	case accountLookupSQL:
@@ -2132,6 +2248,44 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 			return nil, 1, false
 		}
 		return nil, 0, false
+	case credentialLookupSQL:
+		accountID := parseProtocolValue(args[0])
+		row := []any{integerValue(1), integerValue(0), nullValue(), integerValue(0), nullValue(), nullValue(), nullValue()}
+		if _, ok := s.accounts[accountID]; ok {
+			row[1] = integerValue(1)
+			row[2] = textValue(accountID)
+		}
+		if credential, ok := s.credentials[accountID]; ok {
+			row[3] = integerValue(1)
+			row[4] = textValue(accountID)
+			row[5] = textValue(credential.keyID)
+			row[6] = textValue(credential.envelope)
+		}
+		if s.persistenceMode == "oversized" && s.persistenceStatement == statement {
+			rows := make([][]any, migrations.MaximumCount+1)
+			for index := range rows {
+				rows[index] = row
+			}
+			return rows, 0, false
+		}
+		return [][]any{row}, 0, false
+	case credentialCommitSQL:
+		accountID := parseProtocolValue(args[0])
+		if _, ok := s.accounts[accountID]; !ok {
+			return nil, 0, false
+		}
+		next := syntheticCredential{keyID: parseProtocolValue(args[1]), envelope: parseProtocolValue(args[2])}
+		current, exists := s.credentials[accountID]
+		expected := parseProtocolValue(args[7])
+		if !exists && expected == "" {
+			s.credentials[accountID] = next
+			return nil, 1, false
+		}
+		if exists && expected == current.envelope {
+			s.credentials[accountID] = next
+			return nil, 1, false
+		}
+		return nil, 0, false
 	default:
 		if strings.HasPrefix(statement, "CREATE TABLE inboxgate_schema_migrations") {
 			if s.inTxn {
@@ -2188,6 +2342,7 @@ func (s *migrationProtocolServer) servePipeline(w http.ResponseWriter, r *http.R
 			s.pendingUserVersion = 0
 			s.pendingSecondSchema = false
 			s.pendingThirdSchema = false
+			s.pendingCredentialSchema = false
 			autocommit = true
 		}
 	}
@@ -2361,6 +2516,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	s.pendingUserVersion = s.userVersion
 	s.pendingSecondSchema = s.secondSchema
 	s.pendingThirdSchema = s.thirdSchema
+	s.pendingCredentialSchema = s.credentialSchema
 	s.stallSequenceStage("sequence", beginImmediateSQL)
 	if s.failSequenceStage(beginImmediateSQL) {
 		s.mu.Unlock()
@@ -2368,11 +2524,15 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 		return
 	}
 	migrationNumber := 0
+	credentialMigration := false
 	switch {
 	case strings.Contains(sequence, expectedMigrationSQL):
 		migrationNumber = 1
 	case strings.Contains(sequence, expectedAccountMigrationSQL):
 		migrationNumber = 2
+	case strings.Contains(sequence, expectedCredentialMigrationSQL):
+		migrationNumber = 3
+		credentialMigration = true
 	case strings.Contains(sequence, expectedSecondMigrationSQL):
 		migrationNumber = 2
 	case strings.Contains(sequence, expectedThirdMigrationSQL):
@@ -2398,6 +2558,8 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 		s.pendingExists = true
 	} else if migrationNumber == 2 {
 		s.pendingSecondSchema = true
+	} else if credentialMigration {
+		s.pendingCredentialSchema = true
 	} else {
 		s.pendingThirdSchema = true
 	}
@@ -2426,6 +2588,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 		s.pendingUserVersion = 0
 		s.pendingSecondSchema = false
 		s.pendingThirdSchema = false
+		s.pendingCredentialSchema = false
 		s.mu.Unlock()
 		writeDroppedPipelineResponse(w)
 		return
@@ -2459,12 +2622,14 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	s.exists = s.pendingExists
 	s.secondSchema = s.pendingSecondSchema
 	s.thirdSchema = s.pendingThirdSchema
+	s.credentialSchema = s.pendingCredentialSchema
 	s.inTxn = false
 	s.pending = nil
 	s.pendingExists = false
 	s.pendingUserVersion = 0
 	s.pendingSecondSchema = false
 	s.pendingThirdSchema = false
+	s.pendingCredentialSchema = false
 	s.stallSequenceStage(commitAfterDurabilityStage)
 	if s.drop {
 		s.drop = false
@@ -2668,8 +2833,10 @@ func (s *migrationProtocolServer) seedEmbeddedCatalog() {
 	s.exists = true
 	s.ledger[1] = expectedMigrationChecksum
 	s.ledger[2] = expectedAccountMigrationChecksum
+	s.ledger[3] = expectedCredentialMigrationChecksum
 	s.secondSchema = true
-	s.userVersion = 2
+	s.credentialSchema = true
+	s.userVersion = 3
 }
 
 func (s *migrationProtocolServer) dropNextCommit() {
@@ -2888,7 +3055,7 @@ func (s *migrationProtocolServer) assertCommittedCatalog(t *testing.T) {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.exists || s.ledger[1] != expectedMigrationChecksum || s.ledger[2] != expectedAccountMigrationChecksum {
+	if !s.exists || s.ledger[1] != expectedMigrationChecksum || s.ledger[2] != expectedAccountMigrationChecksum || s.ledger[3] != expectedCredentialMigrationChecksum {
 		t.Fatalf("durable ledger = %#v, want exact embedded catalog", s.ledger)
 	}
 }
@@ -2897,6 +3064,9 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 	t.Helper()
 	expected := []migrationRequest{
 		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
+		{sql: userVersionSQL, wantRows: true},
+		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
+		{sql: ledgerRowsSQL, args: []protocolValue{integerProtocolValue(expectedMaximumMigrationCount + 1)}, wantRows: true},
 		{sql: userVersionSQL, wantRows: true},
 		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
 		{sql: ledgerRowsSQL, args: []protocolValue{integerProtocolValue(expectedMaximumMigrationCount + 1)}, wantRows: true},
@@ -2927,8 +3097,8 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 			}
 		}
 	}
-	if len(s.pipelineRecords) != 4 {
-		t.Fatalf("pipeline request shape = %#v, want two apply and terminal sequence pairs", s.pipelineRecords)
+	if len(s.pipelineRecords) != 6 {
+		t.Fatalf("pipeline request shape = %#v, want three apply and terminal sequence pairs", s.pipelineRecords)
 	}
 	for index := range s.pipelineRecords {
 		if len(s.pipelineRecords[index].requests) != 2 {
@@ -2962,6 +3132,14 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 	if accountTerminal.Type != "sequence" || accountTerminal.SQL != expectedAccountTerminalSequence || len(accountTerminal.Args) != 0 || len(accountTerminal.NamedArgs) != 0 {
 		t.Fatal("account pipeline terminal sequence differs from exact reviewed proof bytes")
 	}
+	credentialSequence := s.pipelineRecords[4].requests[0]
+	if credentialSequence.Type != "sequence" || credentialSequence.SQL != expectedCredentialMigrationSequence || len(credentialSequence.Args) != 0 || len(credentialSequence.NamedArgs) != 0 {
+		t.Fatal("credential pipeline sequence differs from exact reviewed transaction bytes")
+	}
+	credentialTerminal := s.pipelineRecords[5].requests[0]
+	if credentialTerminal.Type != "sequence" || credentialTerminal.SQL != expectedCredentialTerminalSequence || len(credentialTerminal.Args) != 0 || len(credentialTerminal.NamedArgs) != 0 {
+		t.Fatal("credential pipeline terminal sequence differs from exact reviewed proof bytes")
+	}
 }
 
 func textProtocolValue(value string) protocolValue {
@@ -2978,7 +3156,7 @@ func (s *migrationProtocolServer) assertSeparateVerificationStream(t *testing.T)
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.records) != 8 || s.records[0].baton != nil {
+	if len(s.records) != 11 || s.records[0].baton != nil {
 		t.Fatal("first migration request did not start a fresh physical stream")
 	}
 	if s.records[1].baton == nil {
@@ -3136,6 +3314,30 @@ func (s *migrationProtocolServer) seedCursor(accountID, historyID string) {
 	s.cursors[accountID] = historyID
 }
 
+func (s *migrationProtocolServer) seedCredential(accountID, keyID, envelope string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.credentials[accountID] = syntheticCredential{keyID: keyID, envelope: envelope}
+}
+
+func (s *migrationProtocolServer) resetCredentialScenario() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accounts = make(map[string]string)
+	s.cursors = make(map[string]string)
+	s.credentials = make(map[string]syntheticCredential)
+	s.persistenceMode = ""
+	s.persistenceStatement = ""
+	s.persistenceStarted = nil
+	s.persistenceRelease = nil
+	s.persistenceRows = make(map[string][][]any)
+	s.persistenceColumns = make(map[string][]any)
+	s.nextCursorBaseURL = ""
+	s.closedCursorAt = make(map[string]int)
+	s.closedCursorCount = make(map[string]int)
+	s.records = nil
+}
+
 func (s *migrationProtocolServer) armPersistenceResponse(statement, mode string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3177,7 +3379,7 @@ func (s *migrationProtocolServer) persistenceRecords() []migrationRequest {
 	defer s.mu.Unlock()
 	records := make([]migrationRequest, 0, len(s.records))
 	for _, record := range s.records {
-		if record.sql == accountLookupSQL || record.sql == accountInsertSQL || record.sql == cursorLookupSQL || record.sql == cursorCommitSQL {
+		if record.sql == accountLookupSQL || record.sql == accountInsertSQL || record.sql == cursorLookupSQL || record.sql == cursorCommitSQL || record.sql == credentialLookupSQL || record.sql == credentialCommitSQL {
 			records = append(records, record)
 		}
 	}
@@ -3197,6 +3399,22 @@ func (s *migrationProtocolServer) cursorSessionWasClosedWithoutReuse(baton strin
 		}
 	}
 	return true
+}
+
+func (s *migrationProtocolServer) cursorSessionWasNotReusedAfterMutation(baton, statement string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	found := false
+	for _, record := range s.records {
+		if !found && record.sql == statement && record.baton != nil && *record.baton == baton {
+			found = true
+			continue
+		}
+		if found && record.baton != nil && *record.baton == baton {
+			return false
+		}
+	}
+	return found
 }
 
 func (s *migrationProtocolServer) cursorSessionCloseCount(baton string) int {

@@ -19,14 +19,16 @@ type Adapter interface {
 	Open(context.Context, Endpoint) (Handle, error)
 }
 
-// Handle exposes connection lifecycle and embedded schema reconciliation
-// without exposing a database handle or caller-supplied SQL.
+// Handle exposes typed persistence and connection lifecycle without exposing a
+// database handle or caller-supplied SQL.
 type Handle interface {
 	Ping(context.Context) error
 	Migrate(context.Context) (MigrationResult, error)
 	EnsureAccount(context.Context, AccountSeed) (Account, error)
 	GetSynchronizationCursor(context.Context, AccountID) (SynchronizationCursor, error)
 	CommitSynchronization(context.Context, SynchronizationCommit) error
+	GetProviderCredential(context.Context, AccountID) (ProviderCredential, error)
+	CommitProviderCredential(context.Context, ProviderCredentialCommit) error
 	Close() error
 }
 
