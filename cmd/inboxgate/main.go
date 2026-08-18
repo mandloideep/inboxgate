@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	accountlife "github.com/mandloideep/inboxgate/internal/account"
 	"github.com/mandloideep/inboxgate/internal/buildmeta"
 	"github.com/mandloideep/inboxgate/internal/config"
 	"github.com/mandloideep/inboxgate/internal/cryptobox"
@@ -76,16 +78,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 var accountAddCommand = runAccountAddCommand
+var accountLifecycleCommand = runAccountLifecycleCommand
 var accountAddListen = net.Listen
 var lookupAccountEnvironment = os.LookupEnv
 var newAccountEnrollment = gmail.New
+var newAccountLifecycleManager = accountlife.NewWithKeyringResolver
 
 func runAccount(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		return printUsageError(stderr, "account requires a subcommand", printAccountHelp)
 	}
-	if args[0] != "add" {
+	if args[0] != "add" && args[0] != "list" && args[0] != "pause" && args[0] != "resume" && args[0] != "revoke" {
 		return printUsageError(stderr, fmt.Sprintf("unknown account subcommand %q", args[0]), printAccountHelp)
+	}
+	if args[0] != "add" {
+		return runAccountLifecycle(args, configPath, explicitConfig, stdout, stderr)
 	}
 	if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
 		printAccountAddHelp(stdout)
@@ -99,6 +106,214 @@ func runAccount(args []string, configPath string, explicitConfig bool, stdout, s
 		return 1
 	}
 	return accountAddCommand(configuration, stdout, stderr)
+}
+
+const (
+	accountPausedMessage           = "account paused\n"
+	accountActiveMessage           = "account active\n"
+	accountRevokedConfirmedMessage = "account revoked; provider revocation confirmed\n"
+	accountRevokedManualMessage    = "account revoked locally; provider revocation requires owner action\n"
+)
+
+func runAccountLifecycle(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
+	action := args[0]
+	if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
+		printAccountLifecycleHelp(stdout, action)
+		return 0
+	}
+	accountID := ""
+	confirmed := false
+	valid := false
+	switch action {
+	case "list":
+		valid = len(args) == 1
+	case "pause", "resume":
+		valid = len(args) == 2
+		if valid {
+			accountID = args[1]
+			_, parseErr := storage.ParseAccountID(accountID)
+			valid = parseErr == nil
+		}
+	case "revoke":
+		valid = len(args) == 3 && args[2] == "--confirm"
+		if valid {
+			accountID = args[1]
+			_, parseErr := storage.ParseAccountID(accountID)
+			valid = parseErr == nil
+			confirmed = valid
+		}
+	}
+	if !valid {
+		return printUsageError(stderr, "invalid account "+action+" arguments", func(output io.Writer) { printAccountLifecycleHelp(output, action) })
+	}
+	configuration, ok := loadSelectedConfig(configPath, explicitConfig, stderr)
+	if !ok {
+		return 1
+	}
+	return accountLifecycleCommand(configuration, action, accountID, confirmed, stdout, stderr)
+}
+
+func runAccountLifecycleCommand(configuration config.Config, action, rawAccountID string, confirmed bool, stdout, stderr io.Writer) int {
+	if !accountLifecycleSelectorsSeparated(configuration) {
+		fmt.Fprintln(stderr, "account operation unavailable: invalid runtime configuration")
+		return 1
+	}
+	databaseURL, ok := resolvedAccountSecretEnvironment(configuration.Database.URLEnv, 2048)
+	if !ok {
+		fmt.Fprintln(stderr, "account operation unavailable: invalid runtime secret")
+		return 1
+	}
+	defer clear(databaseURL)
+	databaseToken, ok := resolvedOptionalAccountSecretEnvironment(configuration.Database.AuthTokenEnv, 4096)
+	if !ok {
+		fmt.Fprintln(stderr, "account operation unavailable: invalid runtime secret")
+		return 1
+	}
+	defer clear(databaseToken)
+	if !accountEnrollmentStorageAllowed(string(databaseURL), databaseToken) {
+		fmt.Fprintln(stderr, "account operation unavailable: storage setup failed")
+		return 1
+	}
+	adapter, err := turso.New(turso.Options{})
+	if err != nil {
+		fmt.Fprintln(stderr, "account operation unavailable: storage setup failed")
+		return 1
+	}
+	handle, err := adapter.Open(context.Background(), storage.Endpoint{URL: string(databaseURL), Token: string(databaseToken)})
+	if err != nil {
+		fmt.Fprintln(stderr, "account operation unavailable: storage setup failed")
+		return 1
+	}
+	defer handle.Close()
+	var resolvedRing *cryptobox.Keyring
+	manager := newAccountLifecycleManager(handle, func() (*cryptobox.Keyring, error) {
+		keyText, ok := resolvedAccountSecretEnvironment(configuration.Encryption.MasterKeyEnv, cryptobox.MaximumKeyringBytes)
+		if !ok {
+			return nil, accountlife.ErrRecoveryRequired
+		}
+		defer clear(keyText)
+		ring, err := cryptobox.ParseKeyring(keyText)
+		if err != nil {
+			return nil, accountlife.ErrRecoveryRequired
+		}
+		resolvedRing = ring
+		return ring, nil
+	})
+	defer func() {
+		if resolvedRing != nil {
+			_ = resolvedRing.Close()
+		}
+	}()
+	if action == "list" {
+		summaries, err := manager.List(context.Background())
+		if err != nil {
+			fmt.Fprintln(stderr, "account listing failed")
+			return 1
+		}
+		data, err := renderAccountList(summaries)
+		if err != nil {
+			fmt.Fprintln(stderr, "account listing failed")
+			return 1
+		}
+		written, err := stdout.Write(data)
+		if err != nil || written != len(data) {
+			fmt.Fprintln(stderr, "account listing failed")
+			return 1
+		}
+		return 0
+	}
+	accountID, err := storage.ParseAccountID(rawAccountID)
+	if err != nil {
+		fmt.Fprintln(stderr, "account operation failed")
+		return 1
+	}
+	switch action {
+	case "pause":
+		err = manager.Pause(context.Background(), accountID)
+		if err == nil {
+			_, err = io.WriteString(stdout, accountPausedMessage)
+		}
+	case "resume":
+		err = manager.Resume(context.Background(), accountID)
+		if err == nil {
+			_, err = io.WriteString(stdout, accountActiveMessage)
+		}
+	case "revoke":
+		if !confirmed {
+			err = accountlife.ErrTransition
+			break
+		}
+		result, revokeErr := manager.Revoke(context.Background(), accountID)
+		if result == accountlife.RevocationConfirmed && revokeErr == nil {
+			_, err = io.WriteString(stdout, accountRevokedConfirmedMessage)
+		} else if result == accountlife.RevocationManual {
+			_, _ = io.WriteString(stdout, accountRevokedManualMessage)
+			return 1
+		} else {
+			err = revokeErr
+		}
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "account operation failed")
+		return 1
+	}
+	return 0
+}
+
+func accountLifecycleSelectorsSeparated(configuration config.Config) bool {
+	allNames := []string{
+		configuration.Database.URLEnv, configuration.Database.AuthTokenEnv,
+		configuration.Gmail.OAuthClientIDEnv, configuration.Gmail.OAuthClientSecretEnv,
+		configuration.Gmail.OAuthRedirectURLEnv, configuration.Encryption.MasterKeyEnv,
+		configuration.MCP.BearerTokenEnv,
+	}
+	seen := make(map[string]struct{}, len(allNames))
+	for _, name := range allNames {
+		if _, exists := seen[name]; exists {
+			return false
+		}
+		seen[name] = struct{}{}
+	}
+	return true
+}
+
+type accountListDocument struct {
+	OutputVersion int                   `json:"output_version"`
+	Accounts      []accountListJSONItem `json:"accounts"`
+}
+
+type accountListJSONItem struct {
+	AccountID             string  `json:"account_id"`
+	Provider              string  `json:"provider"`
+	State                 string  `json:"state"`
+	StateVersion          int64   `json:"state_version"`
+	ReauthorizationReason *string `json:"reauthorization_reason"`
+	RevocationStatus      string  `json:"revocation_status"`
+	CursorPresent         bool    `json:"cursor_present"`
+	CredentialPresent     bool    `json:"credential_present"`
+}
+
+func renderAccountList(summaries []storage.AccountSummary) ([]byte, error) {
+	if len(summaries) > storage.MaximumAccountList {
+		return nil, storage.ErrResultTooLarge
+	}
+	document := accountListDocument{OutputVersion: 1, Accounts: make([]accountListJSONItem, 0, len(summaries))}
+	for _, summary := range summaries {
+		var reason *string
+		if summary.ReauthorizationReason != nil {
+			text := summary.ReauthorizationReason.String()
+			reason = &text
+		}
+		document.Accounts = append(document.Accounts, accountListJSONItem{
+			AccountID: summary.AccountID.String(), Provider: summary.Provider, State: summary.State.String(), StateVersion: summary.StateVersion.Int64(),
+			ReauthorizationReason: reason, RevocationStatus: summary.RevocationStatus.String(), CursorPresent: summary.CursorPresent, CredentialPresent: summary.CredentialPresent,
+		})
+	}
+	data, err := json.MarshalIndent(document, "", "  ")
+	if err != nil || len(data)+1 > 64<<10 {
+		return nil, storage.ErrResultTooLarge
+	}
+	return append(data, '\n'), nil
 }
 
 func runAccountAddCommand(configuration config.Config, stdout, stderr io.Writer) int {
@@ -499,6 +714,29 @@ func printAccountHelp(output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Subcommands:")
 	fmt.Fprintln(output, "  add  Enroll one Gmail account")
+	fmt.Fprintln(output, "  list  List bounded account lifecycle summaries")
+	fmt.Fprintln(output, "  pause  Pause one account")
+	fmt.Fprintln(output, "  resume  Resume one complete paused account")
+	fmt.Fprintln(output, "  revoke  Revoke one account after explicit confirmation")
+}
+
+func printAccountLifecycleHelp(output io.Writer, action string) {
+	fmt.Fprintln(output, "Usage:")
+	switch action {
+	case "list":
+		fmt.Fprintln(output, "  inboxgate [--config PATH] account list")
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, "Prints at most 100 account lifecycle summaries as canonical JSON.")
+		fmt.Fprintln(output, "Account IDs are sensitive and must not be copied into public output.")
+	case "pause":
+		fmt.Fprintln(output, "  inboxgate [--config PATH] account pause <account-id>")
+	case "resume":
+		fmt.Fprintln(output, "  inboxgate [--config PATH] account resume <account-id>")
+	case "revoke":
+		fmt.Fprintln(output, "  inboxgate [--config PATH] account revoke <account-id> --confirm")
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, "Persists revoked intent before one bounded Google revocation request.")
+	}
 }
 
 func printAccountAddHelp(output io.Writer) {

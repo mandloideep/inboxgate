@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: accepted one-shot Gmail OAuth enrollment with encrypted credential persistence and known upstream risks for issue #26.
+Status: accepted synthetic account lifecycle and provider revocation with known upstream risks for issue #28.
 
 ## Security objectives
 
@@ -21,9 +21,10 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 | Operator to CLI and configuration | Arguments, paths, YAML, environment names, capability policy | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output, fail-closed capability validation |
 | Browser to one-shot OAuth callback | Authorization code, denial, state, request target | Exact route and method, one-time ten-minute state, constant-time comparison, PKCE S256, strict query shape, bounded request target, no-store fixed response, capacity-one result |
 | InboxGate to Google OAuth, OpenID Connect, and Gmail profile | Client credentials, code, verifier, bearer token, subject, email, history ID, provider responses | Fixed endpoints, exact read-only scopes, owned redirect-rejecting client, 15-second deadlines, 16 KiB body limits, no retry, strict decoding, fixed diagnostics, discard-only email |
+| InboxGate to Google OAuth revocation | Refresh token, provider status, redirects, response body, transport failure | Proven durable revoked-attempting claim, fixed HTTPS authority, body-only form token, owned proxy-disabled TLS transport, redirect rejection, at most one request, no retry after ambiguous completion, 15-second deadline, 16 KiB response limit, fixed diagnostics, exact local ciphertext deletion |
 | Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
-| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, ciphertext credentials, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration, account-cursor, and ciphertext-credential execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, typed compare-and-swap, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
+| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, ciphertext credentials, lifecycle values, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration, account-cursor, ciphertext-credential, and lifecycle execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, typed compare-and-swap, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
 | Hermes to MCP | Authentication, tool inputs, pagination | Authentication, explicit schemas, bounds, allowlisted capabilities, audit events |
 | Runtime to logs and health endpoints | Errors, state, identifiers | Redaction, minimal readiness detail, private binding, no credentials or message bodies |
 | Owner to release workflow | Version, expected commit, dispatch identity, immutable-release setting | Exact input syntax, owner-only manual dispatch, immediate manual settings check, current-main and successful-CI gates |
@@ -138,15 +139,16 @@ Retries, duplicate Gmail history, concurrent work, or a crash could skip mail or
 Durable writes and cursor movement must be transactional.
 External and review operations require stable idempotency keys, valid state transitions, bounded retries, and restart tests.
 
-### Accepted database adapter, synthetic migration, account-cursor, and ciphertext-credential boundary
+### Accepted database adapter, synthetic migration, account-cursor, ciphertext-credential, and lifecycle boundary
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
-The adapter is reachable only from the one-shot `account add` command after environment-selector separation and a credential-free literal-loopback endpoint check.
+The adapter is reachable from `account add`, `account list`, `account pause`, `account resume`, and confirmed `account revoke` after environment-selector separation and a credential-free literal-loopback endpoint check.
 It remains unreachable from service startup, health endpoints, doctor, configuration inspection, capability inspection, Gmail synchronization, and MCP.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner that can execute only against a credential-free literal-loopback endpoint.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) appends minimum account identity and synchronization-cursor tables and exposes only typed account and cursor operations under the same restriction.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) appends a ciphertext-only provider-credential table and exposes only typed credential lookup and compare-and-swap under the same restriction.
-No production URL, live token, real account record, email record, account lifecycle state, display metadata, plaintext credential, or runtime secret is introduced by these decisions.
+[ADR 0009](adr/0009-account-lifecycle-and-revocation.md) appends strict versioned account lifecycle state and exposes only bounded listing, typed lifecycle compare-and-swap, and revoked-only exact ciphertext deletion under the same restriction.
+No production URL, live token, real account record, email record, display metadata, plaintext credential, or runtime secret is introduced by these decisions.
 
 The adapter validates the initial endpoint before driver construction.
 It keeps URL and token values separate, normalizes `turso` to HTTPS, requires standard verified HTTPS for remote endpoints, rejects credentials in URLs, and limits cleartext HTTP to credential-free literal IPv4 or IPv6 loopback tests.
@@ -162,7 +164,7 @@ An unproven apply session is rollback-attempted and forcibly discarded from the 
 A marker ahead of the ledger is rejected as drift.
 Every failed sequence attempts rollback but returns unknown because the driver cannot confirm rollback completion even when the rollback call returns nil.
 The runner revalidates the exact expected ledger prefix through a separate physical connection after every purported commit.
-Returned ping, migration, account, cursor, credential, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
+Returned ping, migration, account, cursor, credential, lifecycle, deletion, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
 
 These controls do not fix the driver properties reproduced during the earlier evaluation.
 The driver can still trust an arbitrary scheme and authority from a protocol-provided `base_url` and send the bearer token to a changed authority or over cleartext HTTP after an HTTPS-to-HTTP downgrade.
@@ -198,6 +200,16 @@ Migration `0003` enforces byte bounds, embedded-NUL rejection, canonical key ide
 These structural database checks do not replace AES-GCM authentication before a credential is used.
 Credential replacement preserves a source row only for a nil expected envelope or the same account's exact durable expected envelope, and the conflict update repeats the expected-envelope comparison.
 The adapter returns a mutation session to the pool only after an exact one-row acknowledgement and separate exact visibility, while ambiguous or zero-row acknowledgements force discard.
+
+Account lifecycle state and provider revocation add a deliberate credential-action boundary.
+Every provider call follows a separately proved revoked-attempting status-and-version claim, uses the fixed Google revocation authority, places the token only in the form body, rejects redirects, makes no retry, and maps all diagnostics to fixed categories.
+Only HTTP 200 becomes confirmed, every other proven outcome becomes manual-action-required, and local ciphertext is exact-compare-deleted after either final state.
+An interrupted or unproved transition remains restart-visible and fails closed rather than restoring active authority.
+Concurrent managers and processes compete for one durable pending-to-attempting claim, and only the proven winner may contact the provider.
+A restart from attempting assumes provider completion is ambiguous, never calls the provider again, finalizes manual-action-required, and deletes any exact remaining ciphertext with bounded independent cleanup.
+Credential inspection failure after the attempting claim leaves that claim nonterminal until a fresh invocation can re-inspect and exact-delete ciphertext without provider replay.
+Revocation rejects a nonterminal lifecycle before mutation or provider contact unless enough integer-version headroom remains for every required intent, claim, and finalization transition.
+Terminal maximum-version rows remain eligible for exact residual-ciphertext cleanup because that reconciliation does not mutate lifecycle state.
 
 ### Resource exhaustion
 

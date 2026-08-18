@@ -25,7 +25,7 @@ type syntheticCredential struct {
 	envelope string
 }
 
-const expectedCredentialCommitSQL = "INSERT INTO inboxgate_provider_credentials (account_id, key_id, envelope) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM inboxgate_accounts WHERE account_id = ?) AND (? IS NULL OR EXISTS (SELECT 1 FROM inboxgate_provider_credentials WHERE account_id = ? AND envelope = ?)) ON CONFLICT(account_id) DO UPDATE SET key_id = excluded.key_id, envelope = excluded.envelope WHERE ? IS NOT NULL AND inboxgate_provider_credentials.envelope = ?"
+const expectedCredentialCommitSQL = "INSERT INTO inboxgate_provider_credentials (account_id, key_id, envelope) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM inboxgate_accounts WHERE account_id = ?) AND EXISTS (SELECT 1 FROM inboxgate_account_lifecycle WHERE account_id = ? AND state <> 'revoked') AND (? IS NULL OR EXISTS (SELECT 1 FROM inboxgate_provider_credentials WHERE account_id = ? AND envelope = ?)) ON CONFLICT(account_id) DO UPDATE SET key_id = excluded.key_id, envelope = excluded.envelope WHERE ? IS NOT NULL AND inboxgate_provider_credentials.envelope = ?"
 
 func TestProviderCredentialReplacementSQLKeepsMatchingSourceRow(t *testing.T) {
 	if credentialCommitSQL != expectedCredentialCommitSQL {
@@ -33,6 +33,7 @@ func TestProviderCredentialReplacementSQLKeepsMatchingSourceRow(t *testing.T) {
 	}
 	for _, required := range []string{
 		"EXISTS (SELECT 1 FROM inboxgate_accounts WHERE account_id = ?)",
+		"EXISTS (SELECT 1 FROM inboxgate_account_lifecycle WHERE account_id = ? AND state <> 'revoked')",
 		"(? IS NULL OR EXISTS (SELECT 1 FROM inboxgate_provider_credentials WHERE account_id = ? AND envelope = ?))",
 		"WHERE ? IS NOT NULL AND inboxgate_provider_credentials.envelope = ?",
 	} {
@@ -66,7 +67,7 @@ func TestProviderCredentialUsesExactParameterizedWireAndSeparateVisibility(t *te
 		}
 	}
 	assertProtocolStatement(t, mutation, credentialCommitSQL, []protocolValue{
-		textProtocolValue(accountIDA), textProtocolValue("active"), textProtocolValue(next.String()), textProtocolValue(accountIDA), nullProtocolValue(), textProtocolValue(accountIDA), nullProtocolValue(), nullProtocolValue(), nullProtocolValue(),
+		textProtocolValue(accountIDA), textProtocolValue("active"), textProtocolValue(next.String()), textProtocolValue(accountIDA), textProtocolValue(accountIDA), nullProtocolValue(), textProtocolValue(accountIDA), nullProtocolValue(), nullProtocolValue(), nullProtocolValue(),
 	})
 	for index, record := range records {
 		if record.sql == credentialCommitSQL && index+1 < len(records) && records[index+1].sql == credentialLookupSQL {
@@ -97,7 +98,7 @@ func TestProviderCredentialReplacementUsesExactExpectedArguments(t *testing.T) {
 		}
 	}
 	assertProtocolStatement(t, replacement, expectedCredentialCommitSQL, []protocolValue{
-		textProtocolValue(accountIDA), textProtocolValue("active"), textProtocolValue(next.String()), textProtocolValue(accountIDA), textProtocolValue(oldEnvelope.String()), textProtocolValue(accountIDA), textProtocolValue(oldEnvelope.String()), textProtocolValue(oldEnvelope.String()), textProtocolValue(oldEnvelope.String()),
+		textProtocolValue(accountIDA), textProtocolValue("active"), textProtocolValue(next.String()), textProtocolValue(accountIDA), textProtocolValue(accountIDA), textProtocolValue(oldEnvelope.String()), textProtocolValue(accountIDA), textProtocolValue(oldEnvelope.String()), textProtocolValue(oldEnvelope.String()), textProtocolValue(oldEnvelope.String()),
 	})
 }
 
@@ -129,6 +130,21 @@ func TestProviderCredentialStorageRequestContainsCiphertextOnly(t *testing.T) {
 				t.Fatal("credential plaintext appeared in a storage request")
 			}
 		}
+	}
+}
+
+func TestProviderCredentialCommitRejectsRevokedLifecycleBeforeMutation(t *testing.T) {
+	server := newMigrationProtocolServer(t)
+	server.seedAccount(accountIDA, subjectA)
+	server.seedLifecycle(accountIDA, "revoked", 2, nil, "pending")
+	handle := openPersistenceContractHandle(t, server.URL)
+	next := mustCredentialEnvelope(t, structuralCredentialEnvelope("active", 32, 72))
+	err := handle.CommitProviderCredential(context.Background(), storage.ProviderCredentialCommit{AccountID: persistenceAccountID(t, accountIDA), Next: next})
+	if !errors.Is(err, storage.ErrLifecycleConflict) {
+		t.Fatalf("revoked credential commit error = %v", err)
+	}
+	if got := countPersistenceSQL(server.persistenceRecords(), credentialCommitSQL); got != 0 {
+		t.Fatalf("revoked credential mutations = %d, want 0", got)
 	}
 }
 
@@ -583,11 +599,11 @@ func TestProviderCredentialProtocolBaseURLCanChangeAuthority(t *testing.T) {
 	handle := openPersistenceContractHandle(t, server.URL)
 	next := mustCredentialEnvelope(t, structuralCredentialEnvelope("active", 32, 8))
 	err := handle.CommitProviderCredential(context.Background(), storage.ProviderCredentialCommit{AccountID: persistenceAccountID(t, accountIDA), Next: next})
-	if !errors.Is(err, storage.ErrPersistenceUnknown) {
-		t.Fatalf("CommitProviderCredential() error = %v, want ErrPersistenceUnknown", err)
+	if !errors.Is(err, storage.ErrPersistenceInspect) {
+		t.Fatalf("CommitProviderCredential() error = %v, want ErrPersistenceInspect", err)
 	}
-	if destinationRequests.Load() == 0 || mutationRequests.Load() != 1 {
-		t.Fatalf("changed-authority requests = %d and mutations = %d, want one mutation without replay", destinationRequests.Load(), mutationRequests.Load())
+	if destinationRequests.Load() == 0 || mutationRequests.Load() != 0 {
+		t.Fatalf("changed-authority requests = %d and mutations = %d, want preflight failure before mutation", destinationRequests.Load(), mutationRequests.Load())
 	}
 	for _, raw := range []string{"changed-authority", accountIDA, next.String()} {
 		if strings.Contains(err.Error(), raw) {

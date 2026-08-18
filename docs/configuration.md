@@ -155,6 +155,12 @@ It accepts no credential argument and never adds OAuth routes to `serve`.
 HTTP callback URIs are accepted only for credential-free literal-loopback tests, while normal runtime input requires HTTPS.
 Live authorization and live Turso access remain prohibited until the owner completes the later approval and runtime-activation checkpoints.
 
+`inboxgate account list`, `account pause`, `account resume`, and confirmed `account revoke` are one-shot operator commands over the typed account lifecycle boundary.
+They accept no credential argument, keep Turso execution restricted to credential-free literal-loopback endpoints, and never add an operator route to `serve`.
+List, pause, and resume resolve only the selected database URL and optional token environment names.
+Revocation resolves the selected encryption key only after a durable revoked-attempting claim and a fresh encrypted-credential read are proved, then makes at most one bounded request to the fixed Google revocation authority.
+Account IDs in list output are sensitive and must not be pasted into public diagnostics or review systems.
+
 ## Secret boundary
 
 Fields ending in `_env` contain only an environment-variable name matching `[A-Z_][A-Z0-9_]{0,127}`.

@@ -59,6 +59,16 @@ func (h *fakeHandle) GetProviderCredential(context.Context, storage.AccountID) (
 func (h *fakeHandle) CommitProviderCredential(context.Context, storage.ProviderCredentialCommit) error {
 	return nil
 }
+func (h *fakeHandle) ListAccounts(context.Context) ([]storage.AccountSummary, error) { return nil, nil }
+func (h *fakeHandle) GetAccountLifecycle(context.Context, storage.AccountID) (storage.AccountLifecycle, error) {
+	return storage.AccountLifecycle{}, nil
+}
+func (h *fakeHandle) CommitAccountLifecycle(context.Context, storage.LifecycleCommit) error {
+	return nil
+}
+func (h *fakeHandle) DeleteRevokedProviderCredential(context.Context, storage.RevokedCredentialDelete) error {
+	return nil
+}
 func (h *fakeHandle) Close() error { return nil }
 
 var _ storage.Adapter = (*fakeAdapter)(nil)

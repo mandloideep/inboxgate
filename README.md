@@ -7,9 +7,11 @@ The repository currently contains the contributor foundation, a minimal command-
 Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, and local service preflight are implemented.
 A replaceable Turso adapter, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, versioned authenticated encryption, and a one-shot Gmail OAuth enrollment command are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md).
 Credential persistence stores only validated ciphertext envelopes and is covered by the same credential-free literal-loopback restriction as migrations and account-cursor persistence.
-Only the one-shot `account add` command resolves its selected Google, encryption, and database environment values and reaches OAuth, cryptobox, and credential-free literal-loopback Turso persistence.
+Versioned account lifecycle state supports bounded listing, pause, resume, typed reauthorization markers, enrollment activation, and staged provider revocation with exact local credential deletion.
+The `account add` command resolves its selected Google, encryption, and database environment values and reaches OAuth, cryptobox, and credential-free literal-loopback Turso persistence.
+The `account list`, `account pause`, and `account resume` commands resolve only selected database environment values, while `account revoke` resolves the selected encryption key only after winning a durable revoked-attempting claim and makes at most one bounded fixed-authority provider request.
 The health-only service, doctor, configuration inspection, and capability inspection remain inert and do not resolve those values.
-Account lifecycle state, email synchronization, MCP, live OAuth approval, remote database activation, and deployment are intentionally not implemented yet.
+Email synchronization, MCP, live OAuth approval, remote database activation, and deployment are intentionally not implemented yet.
 
 ## Quick start
 
@@ -24,6 +26,7 @@ go run ./cmd/inboxgate --config config.example.yaml config effective
 go run ./cmd/inboxgate --config config.example.yaml capabilities
 go run ./cmd/inboxgate --config config.example.yaml doctor
 go run ./cmd/inboxgate --config config.example.yaml account add --help
+go run ./cmd/inboxgate --config config.example.yaml account list --help
 ```
 
 Development builds print `inboxgate dev`.

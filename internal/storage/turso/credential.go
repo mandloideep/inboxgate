@@ -8,7 +8,7 @@ import (
 
 const (
 	credentialLookupSQL = "WITH input(account_id) AS (VALUES (?)), account_match AS (SELECT inboxgate_accounts.account_id FROM inboxgate_accounts, input WHERE inboxgate_accounts.account_id = input.account_id), credential_match AS (SELECT inboxgate_provider_credentials.account_id, inboxgate_provider_credentials.key_id, inboxgate_provider_credentials.envelope FROM inboxgate_provider_credentials, input WHERE inboxgate_provider_credentials.account_id = input.account_id) SELECT 1, (SELECT COUNT(*) FROM account_match), (SELECT account_id FROM account_match), (SELECT COUNT(*) FROM credential_match), (SELECT account_id FROM credential_match), (SELECT key_id FROM credential_match), (SELECT envelope FROM credential_match)"
-	credentialCommitSQL = "INSERT INTO inboxgate_provider_credentials (account_id, key_id, envelope) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM inboxgate_accounts WHERE account_id = ?) AND (? IS NULL OR EXISTS (SELECT 1 FROM inboxgate_provider_credentials WHERE account_id = ? AND envelope = ?)) ON CONFLICT(account_id) DO UPDATE SET key_id = excluded.key_id, envelope = excluded.envelope WHERE ? IS NOT NULL AND inboxgate_provider_credentials.envelope = ?"
+	credentialCommitSQL = "INSERT INTO inboxgate_provider_credentials (account_id, key_id, envelope) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM inboxgate_accounts WHERE account_id = ?) AND EXISTS (SELECT 1 FROM inboxgate_account_lifecycle WHERE account_id = ? AND state <> 'revoked') AND (? IS NULL OR EXISTS (SELECT 1 FROM inboxgate_provider_credentials WHERE account_id = ? AND envelope = ?)) ON CONFLICT(account_id) DO UPDATE SET key_id = excluded.key_id, envelope = excluded.envelope WHERE ? IS NOT NULL AND inboxgate_provider_credentials.envelope = ?"
 )
 
 type credentialInspection struct {
@@ -47,6 +47,13 @@ func (h *handle) CommitProviderCredential(ctx context.Context, commit storage.Pr
 	}
 	operationCtx, cancel := context.WithTimeout(ctx, h.persistenceTimeout)
 	defer cancel()
+	lifecycle, lifecycleErr := h.inspectLifecycle(operationCtx, commit.AccountID)
+	if lifecycleErr != nil {
+		return lifecycleErr
+	}
+	if lifecycle.State == storage.AccountStateRevoked {
+		return storage.ErrLifecycleConflict
+	}
 	initial, err := h.inspectCredential(operationCtx, commit.AccountID)
 	if err != nil {
 		return err
@@ -63,7 +70,7 @@ func (h *handle) CommitProviderCredential(ctx context.Context, commit storage.Pr
 		expected = commit.Expected.String()
 	}
 	mutationResult, mutationErr := connection.ExecContext(operationCtx, credentialCommitSQL,
-		commit.AccountID.String(), commit.Next.KeyID().String(), commit.Next.String(), commit.AccountID.String(), expected, commit.AccountID.String(), expected, expected, expected)
+		commit.AccountID.String(), commit.Next.KeyID().String(), commit.Next.String(), commit.AccountID.String(), commit.AccountID.String(), expected, commit.AccountID.String(), expected, expected, expected)
 	mutationConfirmed := false
 	if mutationErr == nil {
 		rowsAffected, rowsAffectedErr := mutationResult.RowsAffected()
@@ -78,6 +85,9 @@ func (h *handle) CommitProviderCredential(ctx context.Context, commit storage.Pr
 	}
 	if success {
 		return nil
+	}
+	if lifecycle, lifecycleErr := h.inspectLifecycle(operationCtx, commit.AccountID); lifecycleErr == nil && lifecycle.State == storage.AccountStateRevoked {
+		return storage.ErrLifecycleConflict
 	}
 	return safePersistenceError(storage.ErrPersistenceUnknown, operationCtx)
 }

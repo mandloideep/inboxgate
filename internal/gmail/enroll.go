@@ -468,6 +468,21 @@ func providerGET(ctx context.Context, client *http.Client, endpoint string, acce
 }
 
 func (e *Enrollment) reconcile(ctx context.Context, account storage.Account, history storage.HistoryID, refreshToken []byte) error {
+	lifecycle, lifecycleErr := e.store.GetAccountLifecycle(ctx, account.ID)
+	if lifecycleErr != nil {
+		return ErrRecoveryRequired
+	}
+	if lifecycle.State == storage.AccountStateActive {
+		cursor, cursorErr := e.store.GetSynchronizationCursor(ctx, account.ID)
+		credential, credentialErr := e.store.GetProviderCredential(ctx, account.ID)
+		if cursorErr != nil || credentialErr != nil {
+			return ErrRecoveryRequired
+		}
+		return e.verifyComplete(ctx, account, cursor, credential)
+	}
+	if lifecycle.State != storage.AccountStatePending {
+		return ErrRecoveryRequired
+	}
 	cursor, cursorErr := e.store.GetSynchronizationCursor(ctx, account.ID)
 	credential, credentialErr := e.store.GetProviderCredential(ctx, account.ID)
 	hasCursor := cursorErr == nil
@@ -532,6 +547,26 @@ func (e *Enrollment) verifyComplete(ctx context.Context, account storage.Account
 		return ErrRecoveryRequired
 	}
 	clear(plaintext)
+	lifecycle, err := e.store.GetAccountLifecycle(ctx, account.ID)
+	if err != nil {
+		return ErrRecoveryRequired
+	}
+	if lifecycle.State == storage.AccountStateActive {
+		return nil
+	}
+	if lifecycle.State != storage.AccountStatePending {
+		return ErrRecoveryRequired
+	}
+	commit := storage.LifecycleCommit{
+		AccountID: account.ID, ExpectedState: lifecycle.State, ExpectedVersion: lifecycle.Version,
+		ExpectedRevocationStatus: lifecycle.RevocationStatus, NextState: storage.AccountStateActive, RevocationStatus: storage.RevocationStatusNone,
+	}
+	if err := e.store.CommitAccountLifecycle(ctx, commit); err != nil {
+		verified, verificationErr := e.store.GetAccountLifecycle(ctx, account.ID)
+		if verificationErr != nil || !storage.LifecycleMatchesCommit(verified, commit) {
+			return ErrRecoveryRequired
+		}
+	}
 	return nil
 }
 

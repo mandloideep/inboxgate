@@ -19,8 +19,8 @@ func TestEmbeddedCatalogIsCanonicalAndExactByteChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Catalog() error = %v", err)
 	}
-	if len(catalog) != 3 {
-		t.Fatalf("Catalog() count = %d, want 3", len(catalog))
+	if len(catalog) != 4 {
+		t.Fatalf("Catalog() count = %d, want 4", len(catalog))
 	}
 	migration := catalog[0]
 	if migration.Number != 1 || migration.Name != "0001_migration_ledger.sql" {
@@ -105,6 +105,45 @@ func TestEmbeddedCatalogIsCanonicalAndExactByteChecksummed(t *testing.T) {
 	} {
 		if !strings.Contains(credentialSchema.SQL, required) {
 			t.Fatalf("credential schema does not contain %q", required)
+		}
+	}
+	lifecycleSchema := catalog[3]
+	if lifecycleSchema.Number != 4 || lifecycleSchema.Name != "0004_account_lifecycle.sql" {
+		t.Fatalf("Catalog()[3] = %#v, want canonical migration 4", lifecycleSchema)
+	}
+	raw, err = fs.ReadFile(embedded, lifecycleSchema.Name)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	sum = sha256.Sum256(raw)
+	if got := hex.EncodeToString(sum[:]); lifecycleSchema.Checksum != got {
+		t.Fatalf("lifecycle checksum = %q, want exact-byte checksum %q", lifecycleSchema.Checksum, got)
+	}
+	if lifecycleSchema.SQL != string(raw) {
+		t.Fatal("lifecycle schema SQL differs from embedded bytes")
+	}
+	for _, required := range []string{
+		"CREATE TABLE inboxgate_account_lifecycle",
+		"state TEXT COLLATE BINARY NOT NULL",
+		"state_version INTEGER NOT NULL",
+		"state_version BETWEEN 1 AND 9223372036854775807",
+		"reauthorization_reason TEXT COLLATE BINARY",
+		"revocation_status TEXT COLLATE BINARY NOT NULL",
+		"state = 'reauthorization_required'",
+		"reason = 'refresh_invalid_grant'",
+		"reason = 'refresh_admin_policy_enforced'",
+		"reason = 'gmail_unauthorized_after_refresh'",
+		"reason = 'gmail_domain_policy'",
+		"revocation_status IN ('pending', 'attempting', 'confirmed', 'manual_action_required')",
+		"INSERT INTO inboxgate_account_lifecycle",
+		"WHEN EXISTS (SELECT 1 FROM inboxgate_synchronization_cursors",
+		"AND EXISTS (SELECT 1 FROM inboxgate_provider_credentials",
+		"CREATE TRIGGER inboxgate_accounts_lifecycle_after_insert",
+		"AFTER INSERT ON inboxgate_accounts",
+		"VALUES (NEW.account_id, 'pending', 1, NULL, 'none')",
+	} {
+		if !strings.Contains(lifecycleSchema.SQL, required) {
+			t.Fatalf("lifecycle schema does not contain %q", required)
 		}
 	}
 }
