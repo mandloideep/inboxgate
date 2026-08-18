@@ -20,6 +20,7 @@ type Store struct {
 	messages    map[storage.AccountID]map[string]mail.Message
 	records     map[string]messageNaturalKey
 	attempts    map[storage.AccountID]*currentDiscoveryAttempt
+	decisions   map[string]storage.GateDecision
 }
 
 type messageNaturalKey struct {
@@ -43,6 +44,7 @@ func New() *Store {
 		messages:    make(map[storage.AccountID]map[string]mail.Message),
 		records:     make(map[string]messageNaturalKey),
 		attempts:    make(map[storage.AccountID]*currentDiscoveryAttempt),
+		decisions:   make(map[string]storage.GateDecision),
 	}
 }
 
@@ -52,7 +54,7 @@ func (s *Store) Migrate(ctx context.Context) (storage.MigrationResult, error) {
 	if err := ctx.Err(); err != nil {
 		return storage.MigrationResult{}, err
 	}
-	return storage.MigrationResult{Current: 5}, nil
+	return storage.MigrationResult{Current: 6}, nil
 }
 
 func (s *Store) EnsureAccount(ctx context.Context, seed storage.AccountSeed) (storage.Account, error) {
@@ -408,6 +410,77 @@ func (s *Store) GetDiscoveredMessage(ctx context.Context, accountID storage.Acco
 		return mail.Message{}, storage.ErrCurrentDiscoveryRecoveryRequired
 	}
 	return decoded, nil
+}
+
+func (s *Store) GetGateDecision(ctx context.Context, accountID storage.AccountID, gmailMessageID string) (storage.GateDecisionState, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.GateDecisionState{}, err
+	}
+	if parsed, err := storage.ParseAccountID(accountID.String()); err != nil || parsed != accountID || storage.ValidateGmailMessageID(gmailMessageID) != nil {
+		return storage.GateDecisionState{}, storage.ErrInvalidValue
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.accounts[accountID]; !exists {
+		return storage.GateDecisionState{}, storage.ErrAccountNotFound
+	}
+	message, exists := s.messages[accountID][gmailMessageID]
+	if !exists {
+		return storage.GateDecisionState{}, storage.ErrMessageNotFound
+	}
+	decision, exists := s.decisions[message.RecordID()]
+	if !exists {
+		return storage.GateDecisionState{}, storage.ErrGateDecisionNotFound
+	}
+	decoded, err := storage.DecodeGateDecision(int64(decision.Version()), decision.SourceMetadataHash(), decision.InputHash(), decision.Outcome().String(), decision.ReasonJSON(), decision.EvaluatedAtUnixMS())
+	if err != nil || !decoded.Equal(decision) {
+		return storage.GateDecisionState{}, storage.ErrGateDecisionRecoveryRequired
+	}
+	return storage.GateDecisionState{Decision: decoded, Current: decoded.SourceMetadataHash() == message.MetadataHash()}, nil
+}
+
+func (s *Store) CommitGateDecision(ctx context.Context, commit storage.GateDecisionCommit) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	accountID := commit.SourceAccountID()
+	if parsed, err := storage.ParseAccountID(commit.Source.AccountID()); err != nil || parsed != accountID || storage.ValidateGmailMessageID(commit.SourceGmailMessageID()) != nil || !commit.Source.Valid() || !commit.Next.Valid() || (commit.Expected != nil && !commit.Expected.Valid()) {
+		return storage.ErrInvalidValue
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.accounts[accountID]; !exists {
+		return storage.ErrAccountNotFound
+	}
+	message, exists := s.messages[accountID][commit.SourceGmailMessageID()]
+	if !exists {
+		return storage.ErrMessageNotFound
+	}
+	if message.RecordID() != commit.Source.RecordID() || !message.MutableMetadataEqual(commit.Source) {
+		return storage.ErrGateDecisionStaleSource
+	}
+	if message.MetadataHash() != commit.Next.SourceMetadataHash() {
+		return storage.ErrInvalidValue
+	}
+	current, exists := s.decisions[message.RecordID()]
+	if exists && current.SemanticEqual(commit.Next) {
+		return nil
+	}
+	if !exists {
+		if commit.Expected != nil {
+			return storage.ErrGateDecisionConflict
+		}
+		s.decisions[message.RecordID()] = commit.Next
+		return nil
+	}
+	if current.Revision() == commit.Next.Revision() {
+		return storage.ErrGateDecisionConflict
+	}
+	if commit.Expected == nil || current.Revision() != *commit.Expected {
+		return storage.ErrGateDecisionConflict
+	}
+	s.decisions[message.RecordID()] = commit.Next
+	return nil
 }
 
 func (s *Store) finalizeCurrentDiscovery(prepared storage.PreparedCurrentDiscovery) error {

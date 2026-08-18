@@ -40,6 +40,8 @@ type Handle interface {
 	CommitCurrentDiscovery(context.Context, CurrentDiscoveryCommit) error
 	ReconcileCurrentDiscovery(context.Context, AccountID) error
 	GetDiscoveredMessage(context.Context, AccountID, string) (mail.Message, error)
+	GetGateDecision(context.Context, AccountID, string) (GateDecisionState, error)
+	CommitGateDecision(context.Context, GateDecisionCommit) error
 	Close() error
 }
 
