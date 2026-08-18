@@ -1007,6 +1007,109 @@ func TestConcurrentSameSubjectEnrollmentConvergesOnCompleteCanonicalState(t *tes
 	clear(plaintext)
 }
 
+func TestEnrollmentActivatesOnlyAfterFreshCompleteProof(t *testing.T) {
+	store := storagefake.New()
+	accountID, _ := storage.ParseAccountID("15151515151515151515151515151515")
+	subject, _ := storage.ParseProviderSubject(syntheticSubject)
+	account, err := store.EnsureAccount(context.Background(), storage.AccountSeed{ID: accountID, ProviderSubject: subject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := mustHistory(t, "99")
+	ring := syntheticKeyring(t)
+	if err := (&Enrollment{store: store, keyring: ring}).reconcile(context.Background(), account, history, []byte(syntheticRefreshToken)); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	lifecycle, err := store.GetAccountLifecycle(context.Background(), account.ID)
+	if err != nil || lifecycle.State != storage.AccountStateActive || lifecycle.Version.Int64() != 2 {
+		t.Fatalf("lifecycle after enrollment = (%#v, %v)", lifecycle, err)
+	}
+	credential, err := store.GetProviderCredential(context.Background(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := ring.DecryptRefreshToken(account.ID.String(), credential.Envelope.String())
+	if err != nil || string(plaintext) != syntheticRefreshToken {
+		t.Fatalf("credential proof = %v", err)
+	}
+	clear(plaintext)
+}
+
+func TestEnrollmentResumesCompletePendingWithoutReplacingAndRejectsNonEnrollmentStates(t *testing.T) {
+	for _, state := range []storage.AccountState{storage.AccountStatePending, storage.AccountStatePaused, storage.AccountStateReauthorizationRequired, storage.AccountStateRevoked} {
+		t.Run(state.String(), func(t *testing.T) {
+			base := storagefake.New()
+			accountID, _ := storage.ParseAccountID("16161616161616161616161616161616")
+			subject, _ := storage.ParseProviderSubject(syntheticSubject)
+			account, _ := base.EnsureAccount(context.Background(), storage.AccountSeed{ID: accountID, ProviderSubject: subject})
+			history := mustHistory(t, "100")
+			if err := base.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: account.ID, Next: history}); err != nil {
+				t.Fatal(err)
+			}
+			ring := syntheticKeyring(t)
+			envelopeText, _ := ring.EncryptRefreshToken(account.ID.String(), []byte(syntheticRefreshToken))
+			envelope, _ := storage.ParseCredentialEnvelope(envelopeText)
+			if err := base.CommitProviderCredential(context.Background(), storage.ProviderCredentialCommit{AccountID: account.ID, Next: envelope}); err != nil {
+				t.Fatal(err)
+			}
+			pending, _ := base.GetAccountLifecycle(context.Background(), account.ID)
+			if state != storage.AccountStatePending {
+				nextReason := (*storage.ReauthorizationReason)(nil)
+				nextRevocation := storage.RevocationStatusNone
+				if state == storage.AccountStateReauthorizationRequired {
+					reason := storage.ReauthorizationReasonGmailDomainPolicy
+					nextReason = &reason
+				}
+				if state == storage.AccountStateRevoked {
+					nextRevocation = storage.RevocationStatusPending
+				}
+				if state == storage.AccountStatePaused || state == storage.AccountStateReauthorizationRequired {
+					if err := base.CommitAccountLifecycle(context.Background(), storage.LifecycleCommit{AccountID: account.ID, ExpectedState: pending.State, ExpectedVersion: pending.Version, ExpectedRevocationStatus: pending.RevocationStatus, NextState: storage.AccountStateActive, RevocationStatus: storage.RevocationStatusNone}); err != nil {
+						t.Fatal(err)
+					}
+					pending, _ = base.GetAccountLifecycle(context.Background(), account.ID)
+				}
+				if err := base.CommitAccountLifecycle(context.Background(), storage.LifecycleCommit{AccountID: account.ID, ExpectedState: pending.State, ExpectedVersion: pending.Version, ExpectedRevocationStatus: pending.RevocationStatus, NextState: state, ReauthorizationReason: nextReason, RevocationStatus: nextRevocation}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store := &activationObservedStore{Handle: base}
+			err := (&Enrollment{store: store, keyring: ring}).reconcile(context.Background(), account, mustHistory(t, "101"), []byte("replacement-must-not-be-written"))
+			if state == storage.AccountStatePending {
+				if err != nil || store.cursorWrites != 0 || store.credentialWrites != 0 || store.lifecycleWrites != 1 {
+					t.Fatalf("pending restart = %v, writes cursor=%d credential=%d lifecycle=%d", err, store.cursorWrites, store.credentialWrites, store.lifecycleWrites)
+				}
+				return
+			}
+			if !errors.Is(err, ErrRecoveryRequired) || store.cursorWrites != 0 || store.credentialWrites != 0 || store.lifecycleWrites != 0 {
+				t.Fatalf("state %s reconcile = %v, writes cursor=%d credential=%d lifecycle=%d", state, err, store.cursorWrites, store.credentialWrites, store.lifecycleWrites)
+			}
+		})
+	}
+}
+
+type activationObservedStore struct {
+	storage.Handle
+	cursorWrites     int
+	credentialWrites int
+	lifecycleWrites  int
+}
+
+func (s *activationObservedStore) CommitSynchronization(ctx context.Context, commit storage.SynchronizationCommit) error {
+	s.cursorWrites++
+	return s.Handle.CommitSynchronization(ctx, commit)
+}
+
+func (s *activationObservedStore) CommitProviderCredential(ctx context.Context, commit storage.ProviderCredentialCommit) error {
+	s.credentialWrites++
+	return s.Handle.CommitProviderCredential(ctx, commit)
+}
+
+func (s *activationObservedStore) CommitAccountLifecycle(ctx context.Context, commit storage.LifecycleCommit) error {
+	s.lifecycleWrites++
+	return s.Handle.CommitAccountLifecycle(ctx, commit)
+}
+
 func mustHistory(t *testing.T, value string) storage.HistoryID {
 	t.Helper()
 	history, err := storage.ParseHistoryID(value)

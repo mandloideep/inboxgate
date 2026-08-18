@@ -367,6 +367,9 @@ type accountAddProtocolServer struct {
 	historyID  string
 	keyID      string
 	envelope   string
+	state      string
+	version    int64
+	revocation string
 	requests   []string
 	categories []string
 }
@@ -459,7 +462,29 @@ func (s *accountAddProtocolServer) execute(statement string, args []string) ([][
 		return [][]any{row}, cliColumns("sentinel", "id_count", "id_account_id", "id_provider", "id_subject", "subject_count", "subject_account_id", "subject_provider", "subject"), 0, "account_lookup"
 	case strings.HasPrefix(statement, "INSERT INTO inboxgate_accounts"):
 		s.accountID, s.subject = args[0], args[1]
+		s.state, s.version, s.revocation = "pending", 1, "none"
 		return nil, nil, 1, "account_insert"
+	case strings.HasPrefix(statement, "WITH input(account_id) AS (VALUES (?)) SELECT 1, (SELECT COUNT(*) FROM inboxgate_accounts"):
+		row := []any{cliInteger(1), cliInteger(1), cliInteger(1), cliText(s.accountID), cliText(s.state), cliInteger(s.version), cliNull(), cliText("none")}
+		if s.state == "reauthorization_required" {
+			row[6] = cliText("refresh_invalid_grant")
+		}
+		if s.state == "revoked" {
+			row[7] = cliText(s.revocation)
+		}
+		return [][]any{row}, cliColumns("sentinel", "account_count", "lifecycle_count", "account_id", "state", "state_version", "reauthorization_reason", "revocation_status"), 0, "lifecycle_lookup"
+	case strings.HasPrefix(statement, "SELECT a.account_id, a.provider, l.state"):
+		row := []any{cliText(s.accountID), cliText("gmail"), cliText(s.state), cliInteger(s.version), cliNull(), cliText("none"), cliInteger(0), cliInteger(0)}
+		if s.historyID != "" {
+			row[6] = cliInteger(1)
+		}
+		if s.envelope != "" {
+			row[7] = cliInteger(1)
+		}
+		if s.state == "revoked" {
+			row[5] = cliText(s.revocation)
+		}
+		return [][]any{row}, cliColumns("account_id", "provider", "state", "state_version", "reauthorization_reason", "revocation_status", "cursor_present", "credential_present"), 0, "account_list"
 	case strings.Contains(statement, "cursor_match AS"):
 		row := []any{cliInteger(1), cliInteger(1), cliText(s.accountID), cliInteger(0), cliNull(), cliNull()}
 		if s.historyID != "" {
@@ -476,8 +501,25 @@ func (s *accountAddProtocolServer) execute(statement string, args []string) ([][
 		}
 		return [][]any{row}, cliColumns("sentinel", "account_count", "account_id", "credential_count", "credential_account_id", "key_id", "envelope"), 0, "credential_lookup"
 	case strings.HasPrefix(statement, "INSERT INTO inboxgate_provider_credentials"):
+		if s.state == "revoked" {
+			return nil, nil, 0, "credential_insert"
+		}
 		s.keyID, s.envelope = args[1], args[2]
 		return nil, nil, 1, "credential_insert"
+	case strings.HasPrefix(statement, "UPDATE inboxgate_account_lifecycle SET state"):
+		if s.state == args[4] && strconv.FormatInt(s.version, 10) == args[5] && s.revocation == args[6] {
+			s.state = args[0]
+			s.version++
+			s.revocation = args[2]
+			return nil, nil, 1, "lifecycle_update"
+		}
+		return nil, nil, 0, "lifecycle_update"
+	case strings.HasPrefix(statement, "DELETE FROM inboxgate_provider_credentials"):
+		if s.accountID == args[0] && s.envelope == args[1] && s.state == "revoked" {
+			s.keyID, s.envelope = "", ""
+			return nil, nil, 1, "credential_delete"
+		}
+		return nil, nil, 0, "credential_delete"
 	default:
 		return nil, nil, 0, "unexpected"
 	}
@@ -487,11 +529,11 @@ func (s *accountAddProtocolServer) assertComplete(t *testing.T) {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	want := []string{"account_lookup", "account_insert", "account_lookup", "cursor_lookup", "credential_lookup", "cursor_lookup", "cursor_insert", "cursor_lookup", "credential_lookup", "credential_insert", "credential_lookup", "account_lookup", "cursor_lookup", "credential_lookup"}
+	want := []string{"account_lookup", "account_insert", "account_lookup", "lifecycle_lookup", "cursor_lookup", "credential_lookup", "cursor_lookup", "cursor_insert", "cursor_lookup", "lifecycle_lookup", "credential_lookup", "credential_insert", "credential_lookup", "account_lookup", "cursor_lookup", "credential_lookup", "lifecycle_lookup", "lifecycle_lookup", "cursor_lookup", "credential_lookup", "lifecycle_update", "lifecycle_lookup"}
 	if fmt.Sprint(s.categories) != fmt.Sprint(want) {
 		t.Fatalf("storage SQL sequence = %#v, want %#v", s.categories, want)
 	}
-	if s.accountID == "" || s.subject != "cli-synthetic-subject" || s.historyID != "12345" || s.keyID != "active" || s.envelope == "" || strings.Contains(s.envelope, cliRefreshToken) {
+	if s.accountID == "" || s.subject != "cli-synthetic-subject" || s.historyID != "12345" || s.keyID != "active" || s.envelope == "" || s.state != "active" || s.version != 2 || strings.Contains(s.envelope, cliRefreshToken) {
 		t.Fatal("durable synthetic account, cursor, or ciphertext state is incomplete")
 	}
 }
