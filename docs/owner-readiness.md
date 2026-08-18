@@ -6,7 +6,7 @@ Complete a provider step only after the corresponding implementation issue is ac
 
 ## Current blocker
 
-No owner credential or provider setup is blocking the next fake-server OAuth enrollment implementation issue.
+No owner credential or provider setup is required to implement, review, merge, or synthetically validate Gmail OAuth enrollment.
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official `turso.tech/database/tursogo-serverless` remote driver behind a narrow inert adapter.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner restricted to credential-free literal-loopback tests.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) adds minimum Gmail identity and synchronization-cursor persistence under the same credential-free literal-loopback restriction.
@@ -24,7 +24,7 @@ The owner accepts five unresolved driver risks for the exact selected version.
 
 These items remain open in the [known-risk register](known-risks.md) and are not fixed by the adapter.
 The encryption and credential-persistence slice uses synthetic keys and ciphertext only and requires no owner action.
-The next code issue can implement OAuth enrollment against fake OAuth and Gmail servers without owner credentials.
+The implemented one-shot enrollment flow remains restricted to fake OAuth, OpenID Connect, Gmail, and credential-free loopback storage until explicit owner approval and database runtime activation.
 Production setup, credential creation, live connectivity, and database writes remain blocked until a separate approved issue requests them and the owner explicitly authorizes them.
 
 ## What you can decide now
@@ -54,7 +54,7 @@ Use these status meanings throughout this runbook.
 | --- | --- | --- | --- |
 | Turso architecture | `Resolved for synthetic migrations, account cursors, and ciphertext credentials` | Review ADR 0004 through ADR 0007 and the known-risk register | A later superseding decision only if the driver or architecture changes |
 | Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | An approved production-readiness issue with explicit owner authorization |
-| Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | OAuth enrollment implementation and explicit owner approval |
+| Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | Explicit owner approval and approved live storage activation |
 | Encryption key | `Future owner action` | Do not generate or provide a key yet | Runtime secret resolution, an approved credential rotation workflow, and explicit owner approval |
 | MCP and Hermes | `Future owner action` | Reserve a private connectivity design, without creating a token | Authenticated MCP transport and an approved integration issue |
 | Private deployment | `Future owner action` | Identify the intended private host, firewall owner, TLS boundary, and recovery owner | Hardened deployment guidance and explicit deployment approval |
@@ -100,7 +100,8 @@ Credential values belong only in the approved runtime secret store.
 Explicitly non-secret endpoint configuration may use the approved runtime configuration store.
 Never store credential values in plain service files, unit files, tracked or untracked environment files, command arguments, or repository files.
 InboxGate YAML contains environment-variable names only, never their values.
-The current binary does not read any YAML-named Turso, Google, MCP, or encryption environment variable.
+Only `inboxgate account add` resolves its YAML-selected Turso, Google, and encryption environment-variable names.
+Configuration validation and effective output, capabilities, doctor, and the health-only service do not resolve those values, and no command resolves the selected MCP token name.
 It reads only `INBOXGATE_CONFIG` for configuration-path selection when that variable is explicitly set.
 
 The `_env` names below are compiled defaults, not fixed schema names.
@@ -147,14 +148,14 @@ Live credentials must never be used to compensate for an untestable boundary.
 ## Step-by-step Google OAuth and Gmail preparation
 
 Do not begin consent or account enrollment until the OAuth enrollment feature is merged and the owner explicitly approves access to the selected test account.
-InboxGate must request only the Gmail read-only scope and must never mutate a mailbox.
+InboxGate must request the identity-only `openid` scope plus only the Gmail read-only data scope and must never mutate a mailbox.
 Google currently classifies `https://www.googleapis.com/auth/gmail.readonly` as a Restricted scope.
 Audience eligibility, verification exemptions, and security-assessment applicability must be rechecked against current Google policy when the OAuth issue becomes active.
 
 1. Choose an owner-controlled Google Cloud project and determine whether the consent audience is internal to a Google Workspace organization or external.
 2. Enable the Gmail API in that project by following the [Gmail API guide](https://developers.google.com/workspace/gmail/api/guides).
 3. Configure the OAuth consent screen with the minimum information required by Google.
-4. Request only `https://www.googleapis.com/auth/gmail.readonly`, as described in the [Gmail authorization scope reference](https://developers.google.com/workspace/gmail/api/auth/scopes).
+4. Request `openid https://www.googleapis.com/auth/gmail.readonly`, where `openid` supplies stable identity and `gmail.readonly` is the sole Gmail data scope, as described in the [Gmail authorization scope reference](https://developers.google.com/workspace/gmail/api/auth/scopes).
 5. Recheck the current [Google OAuth 2.0 policies](https://developers.google.com/identity/protocols/oauth2/policies) and [Restricted scope verification guidance](https://support.google.com/cloud/answer/13464321?hl=en) for the selected audience and use case.
 6. Determine whether current rules require verification, a Restricted scope security assessment for server-side storage or transmission, an approved exemption, Workspace administrator approval, or a testing-user limit.
 7. When required, prepare an accurate public homepage and privacy policy on an owned domain that is verified and authorized through Google controls.
@@ -163,12 +164,12 @@ Audience eligibility, verification exemptions, and security-assessment applicabi
 10. Before choosing private routing, validate the proposed redirect URI against the current [Google web-server OAuth rules](https://developers.google.com/identity/protocols/oauth2/web-server).
 11. Under the current rules, require an exact redirect URI match, HTTPS except for permitted literal localhost test cases, no raw non-localhost IP address, a host on a public suffix, and an owned or authorized domain.
 12. Treat a private IP, internal suffix, or Tailscale-only hostname as potentially ineligible even when it is privately reachable.
-13. Wait for the merged enrollment implementation to select the OAuth client type, then create only that exact type.
+13. After merge and explicit approval, create only a confidential Web application OAuth client.
 14. Register the exact accepted callback URL documented by that implementation and reject wildcard or fallback callback URLs.
 15. Put the client ID into the approved runtime secret store under the validated configuration name (default: `GOOGLE_OAUTH_CLIENT_ID`).
 16. Put the client secret into the approved runtime secret store under the validated configuration name (default: `GOOGLE_OAUTH_CLIENT_SECRET`).
 17. Inject the exact callback URL outside tracked YAML through the runtime configuration store under the validated configuration name (default: `GOOGLE_OAUTH_REDIRECT_URL`).
-18. Start enrollment only through the future operator command and confirm that the browser displays the expected project, read-only scope, and selected account.
+18. Start enrollment only through `inboxgate account add` after database runtime activation and explicit owner approval, then confirm that the browser displays the expected project, read-only scope, and selected account.
 19. Authorize each Gmail or Google Workspace account separately.
 20. Verify through the future redacted account-listing command that the account is enrolled without sharing the account address, Google subject ID, token, or browser output.
 21. Revoke the grant from the Google account security controls if the displayed project, callback, scope, or account is unexpected.
@@ -178,7 +179,7 @@ An access token or refresh token must never be copied from the service for troub
 
 ## Step-by-step encryption-key preparation
 
-The accepted format is now defined by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md), but the current runtime does not resolve the key or use the encrypted store.
+The accepted format is defined by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md), and only the one-shot `account add` command resolves the selected key and uses the encrypted store after its credential-free loopback storage gate.
 Do not generate a production key until a later approved runtime issue supplies the exact private secret-manager workflow, rotation command, durable-record verification, and explicit owner approval.
 
 1. In the approved deployment secret manager, use its cryptographically secure binary generator to create one 32-byte AES key without exposing its value to a terminal, clipboard, log, file, issue, pull request, chat, or agent.
