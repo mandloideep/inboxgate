@@ -6,16 +6,17 @@ Complete a provider step only after the corresponding implementation issue is ac
 
 ## Current blocker
 
-No owner credential or provider setup is required to implement, review, merge, or synthetically validate Gmail OAuth enrollment.
+No owner credential or provider setup is required to implement, review, merge, or synthetically validate Gmail OAuth enrollment or current discovery.
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official `turso.tech/database/tursogo-serverless` remote driver behind a narrow inert adapter.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner restricted to credential-free literal-loopback tests.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) adds minimum Gmail identity and synchronization-cursor persistence under the same credential-free literal-loopback restriction.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) adds standard-library versioned authenticated encryption and ciphertext-only provider-credential persistence under the same restriction.
 [ADR 0009](adr/0009-account-lifecycle-and-revocation.md) adds strict lifecycle persistence, bounded operator commands, and synthetic provider revocation.
 [ADR 0010](adr/0010-atomic-current-discovery-staging.md) adds bounded atomic current-discovery staging and canonical metadata persistence under the same restriction.
+[ADR 0011](adr/0011-bounded-gmail-current-discovery.md) adds one bounded internal Gmail current-discovery invocation against synthetic OAuth and Gmail providers and fake or credential-free literal-loopback storage.
 The adapter is connected only to one-shot account enrollment and lifecycle commands after a credential-free literal-loopback endpoint check.
-The current-discovery operations remain inert and have no command, Gmail, scheduler, service, health, capability, HTTP, or MCP caller.
-It remains disconnected from service startup, health, configuration inspection, capabilities, doctor, synchronization, MCP, remote database endpoints, and production credentials.
+The current-discovery use case remains inert and has no command, scheduler, service, health, capability, HTTP, or MCP caller.
+It remains disconnected from service startup, health, configuration inspection, capabilities, doctor, executable synchronization, MCP, remote database endpoints, and production credentials.
 
 The owner accepts five unresolved driver risks for the exact selected version.
 
@@ -29,6 +30,9 @@ The owner accepts five unresolved driver risks for the exact selected version.
 These items remain open in the [known-risk register](known-risks.md) and are not fixed by the adapter.
 The encryption and credential-persistence slice uses synthetic keys and ciphertext only and requires no owner action.
 The atomic current-discovery slice uses synthetic untrusted metadata and a credential-free loopback protocol model and requires no owner action.
+The bounded Gmail discovery slice uses synthetic refresh material, synthetic account and message data, fixed loopback provider transports, and fake or credential-free literal-loopback storage and requires no owner action.
+It performs one synthetic access-token refresh, at most ten bounded history pages, body-excluding projected message metadata reads, and one atomic storage commit.
+No owner should create, inject, reveal, or test a Google, Gmail, Turso, encryption, private-endpoint, or production value for this slice.
 The model does not execute a Turso Database engine and does not prove the 514-parameter statement, strict tables, trigger rollback, writer serialization, or concurrent finalization.
 A supplementary credential-free local SQLite execution proves commitment mismatch rollback with an unchanged cursor, no canonical insert, and retained sealed recovery state, but it does not replace Turso Database engine evidence.
 The implemented one-shot enrollment flow remains restricted to fake OAuth, OpenID Connect, Gmail, and credential-free loopback storage until explicit owner approval and database runtime activation.
@@ -59,7 +63,7 @@ Use these status meanings throughout this runbook.
 
 | Area | Status | What the owner should do now | What unblocks it |
 | --- | --- | --- | --- |
-| Turso architecture | `Resolved for synthetic migrations and inert typed persistence` | Review ADR 0004 through ADR 0010 and the known-risk register | A later superseding decision only if the driver or architecture changes |
+| Turso architecture | `Resolved for synthetic migrations and inert typed persistence` | Review ADR 0004 through ADR 0011 and the known-risk register | A later superseding decision only if the driver or architecture changes |
 | Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | An approved production-readiness issue with explicit owner authorization |
 | Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | Explicit owner approval and approved live storage activation |
 | Encryption key | `Future owner action` | Do not generate or provide a key yet | Runtime secret resolution, an approved credential rotation workflow, and explicit owner approval |
@@ -76,6 +80,7 @@ They are listed so the owner can recognize the safe next action when the relevan
 | --- | --- | --- |
 | Accepted Turso driver risks | Before any runtime activation, credential use, migration, or new query path | Review `TURSO-001` through `TURSO-005`, keep the use within the explicit acceptance, and require a new decision if the surface broadens |
 | Current-discovery engine semantics unproven | Before remote migration `0005` or live email metadata storage | Require pinned credential-free engine evidence or approve a redacted owner-run check for the exact 514-parameter statement, ordered `group_concat` witness reconstruction, strict tables, trigger rollback, writer serialization, and competing finalization without sharing database or message data |
+| Stale Gmail history cursor | Before executable synchronization or release | Require a later approved slice to persist bounded stale status and perform restart-safe full reconciliation without silently resetting the cursor or starting an unlimited backfill |
 | Google testing-mode refresh-token expiration | During OAuth enrollment testing for an external app that remains in testing mode | Review Google's current testing-mode policy and plan reauthorization or approved publication without sharing tokens or user identities |
 | Google Workspace administrator restrictions | Before authorizing a managed Workspace account | Ask the Workspace administrator to review the exact read-only scope and app policy through Google controls |
 | Google OAuth verification requirement | Before use outside an exempt, permitted testing, or eligible internal audience | Recheck audience applicability and exemptions, then complete Google's owner-managed verification process when required |

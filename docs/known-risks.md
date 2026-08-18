@@ -3,8 +3,12 @@
 This register records unresolved security and reliability risks that the repository owner has explicitly accepted so work can continue.
 An accepted risk is not a fixed risk and must not be described as a security control.
 
-The current acceptance applies only to the exact dependency version and adapter selected by [ADR 0004](adr/0004-turso-serverless-adapter.md), as extended for credential-free loopback migrations by [ADR 0005](adr/0005-append-only-migration-protocol.md), minimum account-cursor persistence by [ADR 0006](adr/0006-minimum-account-cursor-persistence.md), ciphertext-only provider-credential persistence by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md), synthetic OAuth enrollment reconciliation by [ADR 0008](adr/0008-google-oauth2-client.md), account lifecycle persistence by [ADR 0009](adr/0009-account-lifecycle-and-revocation.md), and atomic current-discovery staging by [ADR 0010](adr/0010-atomic-current-discovery-staging.md).
+The current acceptance applies only to the exact dependency version and adapter selected by [ADR 0004](adr/0004-turso-serverless-adapter.md), as extended for credential-free loopback migrations by [ADR 0005](adr/0005-append-only-migration-protocol.md), minimum account-cursor persistence by [ADR 0006](adr/0006-minimum-account-cursor-persistence.md), ciphertext-only provider-credential persistence by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md), synthetic OAuth enrollment reconciliation by [ADR 0008](adr/0008-google-oauth2-client.md), account lifecycle persistence by [ADR 0009](adr/0009-account-lifecycle-and-revocation.md), atomic current-discovery staging by [ADR 0010](adr/0010-atomic-current-discovery-staging.md), and inert bounded Gmail orchestration by [ADR 0011](adr/0011-bounded-gmail-current-discovery.md).
 It does not authorize production credentials, runtime activation, remote migrations, live account data, plaintext provider data, live email metadata, or live Turso Cloud access.
+
+ADR 0011 reaches credential, lifecycle, cursor, reconciliation, canonical-message lookup, and atomic current-discovery operations from a broader internal Gmail use case without adding SQL.
+The use case reconciles before provider work, maps storage failures to fixed outer categories, makes one aggregate commit without same-invocation replay, preserves every existing row and value bound, and stays limited to fake or credential-free literal-loopback storage.
+Those controls contain the new call path but do not close `TURSO-001` through `TURSO-005` or supply Turso Database engine evidence.
 
 ## Register
 
