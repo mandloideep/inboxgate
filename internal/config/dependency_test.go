@@ -17,7 +17,9 @@ func TestModuleGraphContainsOnlyReviewedDirectDependencies(t *testing.T) {
 	got := strings.Split(strings.TrimSpace(string(output)), "\n")
 	want := []string{
 		"github.com/mandloideep/inboxgate",
+		"cloud.google.com/go/compute/metadata v0.3.0",
 		"go.yaml.in/yaml/v3 v3.0.5",
+		"golang.org/x/oauth2 v0.36.0",
 		"turso.tech/database/tursogo-serverless v0.0.0-20260817122138-24adc316cdc4",
 	}
 	if !reflect.DeepEqual(got, want) {
