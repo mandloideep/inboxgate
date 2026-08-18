@@ -589,6 +589,13 @@ Valid outcomes are:
 
 Store the gate version, outcome, reason codes, evaluated timestamp, and the input-field hash.
 Do not store free-form model prose in this table.
+The implemented gate version 1 binds the canonical metadata hash, both gate booleans, and all six byte-sorted policy lists through a domain-separated length-framed SHA-256 input hash.
+The implemented durable result has a closed outcome vocabulary, a closed sorted reason-code vocabulary, canonical bounded reason JSON, and an exact prior version and input-hash compare-and-swap identity.
+An exact persisted semantic result retains its original evaluation timestamp.
+Sender policy parses one mailbox and derives its domain after the final `@`, urgent terms produce urgency only with an allow-domain signal, and blank canonical recipient entries never create direct-recipient evidence.
+Literal term matching canonicalizes Unicode simple folds once per value and is limited to 512 searches over a folded subject of at most 16,384 bytes with each folded term limited to 512 bytes.
+Each candidate-term and urgent-term list rejects Unicode case-fold-equivalent duplicates while input-hash list ordering remains byte-canonical.
+After a reported commit success, evaluation returns a fresh exact durable read rather than the local proposal timestamp.
 
 ### 9.5 Review decisions
 
@@ -933,8 +940,8 @@ Create a new Turso Database rather than a legacy libSQL database.
 The operator should use the Turso database-engine creation option documented at implementation time and record the resulting engine type in the deployment runbook.
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official remote `tursogo-serverless` driver behind the narrow repository-owned storage adapter.
-The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, typed ciphertext-only provider-credential compare-and-swap operations, bounded typed account-lifecycle operations, and a typed atomic current-discovery aggregate.
-Migration, account-cursor, ciphertext-credential, lifecycle, and current-discovery execution are restricted to credential-free literal-loopback endpoints.
+The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, typed ciphertext-only provider-credential compare-and-swap operations, bounded typed account-lifecycle operations, a typed atomic current-discovery aggregate, and typed gate-decision compare-and-swap.
+Migration, account-cursor, ciphertext-credential, lifecycle, current-discovery, and gate-decision execution are restricted to credential-free literal-loopback endpoints.
 The one-shot `account add` command connects configuration-selected runtime values, OAuth enrollment, and typed persistence operations.
 The `account list`, `account pause`, `account resume`, and confirmed `account revoke` commands connect only the minimum selected database and encryption values required for their operation.
 Live Turso credentials and remote database activation remain prohibited.
@@ -958,7 +965,7 @@ Create unique constraints for all provider identifiers and idempotency keys.
 Set conservative connection limits from the validated configuration.
 The accepted adapter requires HTTPS with standard TLS certificate and hostname verification and rejects cleartext remote URLs before driver construction.
 Plain HTTP may be used only with a literal loopback endpoint in credential-free tests, with no bearer token or production-derived secret attached.
-The current adapter maps ping, migration, account, cursor, credential, lifecycle, current-discovery, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
+The current adapter maps ping, migration, account, cursor, credential, lifecycle, current-discovery, gate-decision, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
 Authority handling, redirect behavior, successful-response body, cursor-line, row and value limits, and caller-controlled commit, rollback and close cancellation remain accepted unresolved risks.
 The credential-free migration contract verifies parameterized ledger inspection, an exact bounded atomic pipeline sequence, `BEGIN IMMEDIATE` locking, transaction-local validation of the exact row total and every expected pair with null rejection, internally rendered numeric and lowercase-hex catalog metadata, exact checksum drift rejection, bounded rollback attempts with unknown outcomes, no same-invocation replay, and fresh-run reconciliation after an uncertain sequence.
 Every purportedly successful migration commit requires a same-session savepoint sequence that acquires main-database writer serialization through a bounded ledger self-assignment, revalidates the same exact null-rejecting ledger prefix, and refuses to regress a concurrently advanced code-owned `PRAGMA user_version` marker, followed by separate-connection visibility of both the exact ledger and marker while the apply connection remains reserved.
@@ -970,7 +977,7 @@ Do not automatically replay a statement after a transport failure because its se
 Migrations are append-only numbered SQL files.
 The migration runner records the migration number and checksum.
 It must refuse to run if an already applied migration has a different checksum.
-The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, appends strict account lifecycle state in `0004_account_lifecycle.sql`, appends atomic current-discovery staging in `0005_current_discovery_atomic_commit.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
+The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, appends strict account lifecycle state in `0004_account_lifecycle.sql`, appends atomic current-discovery staging in `0005_current_discovery_atomic_commit.sql`, appends strict gate decisions in `0006_gate_decisions.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
 The runner inspects current state outside a transaction, sends pending work as one bounded no-argument `BEGIN IMMEDIATE` through `COMMIT` pipeline sequence, verifies the exact prefix row total and every expected pair under the writer lock while rejecting nulls, proves terminal session state without marker regression through the code-owned `user_version` marker and a separate physical connection, and applies at most one pending migration per transaction.
 The sequence accepts no caller data and renders only a bounded code-derived migration number and validated lowercase-hex checksum as SQL literals because the driver's sequence request cannot carry arguments.
 The prefix guard renders only bounded catalog numbers and validated lowercase-hex checksums, and none of those literals come from users, providers, configuration, or database rows.
@@ -1183,6 +1190,7 @@ The YAML package is the only runtime dependency approved in this phase.
 [ADR 0009](adr/0009-account-lifecycle-and-revocation.md) implements durable account lifecycle state and credential-free synthetic revocation.
 [ADR 0010](adr/0010-atomic-current-discovery-staging.md) implements canonical metadata persistence and transactional cursor movement through bounded staging.
 [ADR 0011](adr/0011-bounded-gmail-current-discovery.md) implements one inert bounded current-discovery invocation against synthetic providers and fake or credential-free literal-loopback storage.
+[ADR 0012](adr/0012-deterministic-persisted-gate.md) implements one inert deterministic classifier and typed persisted decision boundary with synthetic fixtures only.
 Do not activate live credentials or production database writes without a separately approved issue and explicit owner approval.
 Do not add email or review tables until their vertical slices require them.
 
@@ -1194,13 +1202,13 @@ The enrollment and lifecycle commands do not call Gmail message endpoints.
 ### Phase 4: One current-mail discovery slice
 
 Current history discovery for one account, normalized metadata persistence, duplicate handling, bounded retry behavior, and transactional cursor movement are implemented as an inert internal prerequisite.
-Durable stale-history status, a runtime caller, and deterministic gate decisions remain to be implemented.
+Durable stale-history status and a runtime caller remain to be implemented.
 Do not implement historical backfill yet.
 
 ### Phase 5: Deterministic gate
 
-Test and implement the smallest useful gate for obvious bulk mail and ambiguous direct mail.
-Persist decisions and reason codes.
+The smallest useful gate for obvious bulk mail and ambiguous direct mail is implemented as an inert internal prerequisite.
+Decisions and stable reason codes persist through fake or credential-free literal-loopback storage.
 Do not add model calls.
 
 ### Phase 6: Read-only MCP

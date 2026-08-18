@@ -5,7 +5,7 @@ The first release will connect multiple Gmail and Google Workspace accounts with
 
 The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, and bounded process-health serving.
 Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, and local service preflight are implemented.
-A replaceable Turso adapter, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, versioned authenticated encryption, a one-shot Gmail OAuth enrollment command, and an inert bounded Gmail current-discovery use case are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md).
+A replaceable Turso adapter, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, versioned authenticated encryption, a one-shot Gmail OAuth enrollment command, an inert bounded Gmail current-discovery use case, and an inert deterministic persisted gate are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md).
 Credential persistence stores only validated ciphertext envelopes and is covered by the same credential-free literal-loopback restriction as migrations and account-cursor persistence.
 Versioned account lifecycle state supports bounded listing, pause, resume, typed reauthorization markers, enrollment activation, and staged provider revocation with exact local credential deletion.
 The `account add` command resolves its selected Google, encryption, and database environment values and reaches OAuth, cryptobox, and credential-free literal-loopback Turso persistence.
@@ -14,7 +14,9 @@ The health-only service, doctor, configuration inspection, and capability inspec
 The current-discovery use case reconciles storage before provider work, refreshes one access token once, reads at most ten fixed Gmail history pages, fetches body-excluding projected metadata for at most 5,000 unique messages, and advances the exact cursor only with canonical message promotion.
 It treats stale history separately from authorization failure, omits vanished messages, applies four-attempt bounded retry rules only to documented transient failures, and never fetches message bodies or attachment bytes.
 It remains credential-free and disconnected from commands, service startup, health, capabilities, scheduling, MCP, remote Turso, and every executable runtime path.
-Executable Gmail polling, deterministic gating, MCP, live OAuth approval, remote database activation, and deployment are intentionally not implemented yet.
+The gate classifies canonical metadata with one versioned fixed-precedence policy, persists a closed outcome and sorted reason vocabulary through exact compare-and-swap, and reconciles uncertain writes without replay.
+It remains credential-free and disconnected from executable Gmail polling, commands, scheduling, service startup, health, capabilities, MCP, and remote Turso.
+Executable Gmail polling, review retrieval, MCP, live OAuth approval, remote database activation, and deployment are intentionally not implemented yet.
 
 ## Quick start
 
