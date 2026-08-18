@@ -103,7 +103,7 @@ func TestFakeConcurrentEnsureAccountConverges(t *testing.T) {
 	}
 }
 
-func TestFakeSynchronizationCursorCASRules(t *testing.T) {
+func TestFakeSynchronizationCursorInitializationRules(t *testing.T) {
 	t.Parallel()
 
 	handle := storagefake.New()
@@ -112,8 +112,6 @@ func TestFakeSynchronizationCursorCASRules(t *testing.T) {
 		t.Fatalf("EnsureAccount() error = %v", err)
 	}
 	one := historyID(t, "1")
-	two := historyID(t, "2")
-	three := historyID(t, "3")
 	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: seed.ID, Next: one}); err != nil {
 		t.Fatalf("initial CommitSynchronization() error = %v", err)
 	}
@@ -121,17 +119,11 @@ func TestFakeSynchronizationCursorCASRules(t *testing.T) {
 	if err != nil || cursor.HistoryID != one {
 		t.Fatalf("GetSynchronizationCursor() = (%#v, %v), want history 1", cursor, err)
 	}
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: seed.ID, Expected: &one, Next: two}); err != nil {
-		t.Fatalf("advance CommitSynchronization() error = %v", err)
+	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: seed.ID, Next: one}); !errors.Is(err, storage.ErrCursorConflict) {
+		t.Fatalf("present cursor initialization error = %v, want ErrCursorConflict", err)
 	}
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: seed.ID, Expected: &one, Next: two}); err != nil {
-		t.Fatalf("idempotent CommitSynchronization() error = %v", err)
-	}
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: seed.ID, Expected: &one, Next: three}); !errors.Is(err, storage.ErrCursorConflict) {
-		t.Fatalf("stale CommitSynchronization() error = %v, want ErrCursorConflict", err)
-	}
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: seed.ID, Expected: &two, Next: one}); !errors.Is(err, storage.ErrCursorRegression) {
-		t.Fatalf("regressing CommitSynchronization() error = %v, want ErrCursorRegression", err)
+	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: seed.ID, Expected: &one, Next: one}); !errors.Is(err, storage.ErrInvalidValue) {
+		t.Fatalf("non-nil expected initialization error = %v, want ErrInvalidValue", err)
 	}
 	missing := accountID(t, "55555555555555555555555555555555")
 	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: missing, Next: one}); !errors.Is(err, storage.ErrAccountNotFound) {

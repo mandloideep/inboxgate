@@ -132,12 +132,11 @@ func TestEnsureAccountUncertainWritesAreProvedOrReconciledWithoutReplay(t *testi
 	}
 }
 
-func TestSynchronizationCursorExactCASAndDurabilityContract(t *testing.T) {
+func TestSynchronizationCursorInitializationAndDurabilityContract(t *testing.T) {
 	server := newMigrationProtocolServer(t)
 	server.seedAccount(accountIDA, subjectA)
 	handle := openPersistenceContractHandle(t, server.URL)
 	one := persistenceHistoryID(t, "1")
-	two := persistenceHistoryID(t, "2")
 	commit := storage.SynchronizationCommit{AccountID: persistenceAccountID(t, accountIDA), Next: one}
 	if err := handle.CommitSynchronization(context.Background(), commit); err != nil {
 		t.Fatalf("initial CommitSynchronization() error = %v", err)
@@ -146,28 +145,21 @@ func TestSynchronizationCursorExactCASAndDurabilityContract(t *testing.T) {
 	if err != nil || cursor.HistoryID != one {
 		t.Fatalf("GetSynchronizationCursor() = (%#v, %v), want history 1", cursor, err)
 	}
-	commit = storage.SynchronizationCommit{AccountID: commit.AccountID, Expected: &one, Next: two}
-	if err := handle.CommitSynchronization(context.Background(), commit); err != nil {
-		t.Fatalf("advance CommitSynchronization() error = %v", err)
-	}
-	if err := handle.CommitSynchronization(context.Background(), commit); err != nil {
-		t.Fatalf("idempotent CommitSynchronization() error = %v", err)
+	if err := handle.CommitSynchronization(context.Background(), commit); !errors.Is(err, storage.ErrCursorConflict) {
+		t.Fatalf("present-cursor initialization error = %v", err)
 	}
 	records := server.persistenceRecords()
-	if got := countPersistenceSQL(records, cursorCommitSQL); got != 2 {
-		t.Fatalf("cursor mutation attempts = %d, want initial and advance only", got)
+	if got := countPersistenceSQL(records, cursorCommitSQL); got != 1 {
+		t.Fatalf("cursor mutation attempts = %d, want one initialization only", got)
 	}
-	mutations := make([]migrationRequest, 0, 2)
+	mutations := make([]migrationRequest, 0, 1)
 	for _, record := range records {
 		if record.sql == cursorCommitSQL {
 			mutations = append(mutations, record)
 		}
 	}
 	assertProtocolStatement(t, mutations[0], cursorCommitSQL, []protocolValue{
-		textProtocolValue(accountIDA), textProtocolValue("1"), textProtocolValue(accountIDA), nullProtocolValue(), nullProtocolValue(), nullProtocolValue(),
-	})
-	assertProtocolStatement(t, mutations[1], cursorCommitSQL, []protocolValue{
-		textProtocolValue(accountIDA), textProtocolValue("2"), textProtocolValue(accountIDA), textProtocolValue("1"), textProtocolValue("1"), textProtocolValue("1"),
+		textProtocolValue(accountIDA), textProtocolValue("1"), textProtocolValue(accountIDA), textProtocolValue(accountIDA), textProtocolValue(accountIDA),
 	})
 	for index, record := range records {
 		if record.sql == cursorCommitSQL && index+1 < len(records) && records[index+1].sql == cursorLookupSQL {
@@ -184,25 +176,24 @@ func TestSynchronizationCursorExactCASAndDurabilityContract(t *testing.T) {
 	}
 }
 
-func TestSynchronizationCursorRejectsMissingStaleAndRegressionBeforeMutation(t *testing.T) {
+func TestSynchronizationCursorRejectsExpectedPresentAndMissingBeforeMutation(t *testing.T) {
 	server := newMigrationProtocolServer(t)
 	server.seedAccount(accountIDA, subjectA)
 	server.seedAccount(accountIDB, "synthetic-subject-B")
 	server.seedCursor(accountIDA, "10")
 	handle := openPersistenceContractHandle(t, server.URL)
 	id := persistenceAccountID(t, accountIDA)
-	nine := persistenceHistoryID(t, "9")
 	ten := persistenceHistoryID(t, "10")
 	eleven := persistenceHistoryID(t, "11")
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: id, Expected: &ten, Next: nine}); !errors.Is(err, storage.ErrCursorRegression) {
-		t.Fatalf("regression error = %v, want ErrCursorRegression", err)
+	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: id, Expected: &ten, Next: eleven}); !errors.Is(err, storage.ErrInvalidValue) {
+		t.Fatalf("expected-cursor initialization error = %v, want ErrInvalidValue", err)
 	}
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: id, Expected: &nine, Next: eleven}); !errors.Is(err, storage.ErrCursorConflict) {
-		t.Fatalf("stale error = %v, want ErrCursorConflict", err)
+	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: id, Next: eleven}); !errors.Is(err, storage.ErrCursorConflict) {
+		t.Fatalf("present cursor error = %v, want ErrCursorConflict", err)
 	}
 	missing := persistenceAccountID(t, accountIDB)
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: missing, Expected: &nine, Next: eleven}); !errors.Is(err, storage.ErrCursorConflict) {
-		t.Fatalf("absent-cursor non-nil expected error = %v, want ErrCursorConflict", err)
+	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: missing, Expected: &ten, Next: eleven}); !errors.Is(err, storage.ErrInvalidValue) {
+		t.Fatalf("non-nil expected error = %v, want ErrInvalidValue", err)
 	}
 	unknown := persistenceAccountID(t, "cccccccccccccccccccccccccccccccc")
 	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: unknown, Next: eleven}); !errors.Is(err, storage.ErrAccountNotFound) {
@@ -246,8 +237,12 @@ func TestCursorUncertainWritesUseSeparateVisibilityAndNoSameInvocationReplay(t *
 			if got := countPersistenceSQL(server.persistenceRecords(), cursorCommitSQL); got != 1 {
 				t.Fatalf("same-invocation cursor attempts = %d, want 1", got)
 			}
-			if err := handle.CommitSynchronization(context.Background(), commit); err != nil {
-				t.Fatalf("fresh CommitSynchronization() error = %v", err)
+			freshErr := handle.CommitSynchronization(context.Background(), commit)
+			if tt.wantSuccess && !errors.Is(freshErr, storage.ErrCursorConflict) {
+				t.Fatalf("fresh durable initialization error = %v, want conflict", freshErr)
+			}
+			if !tt.wantSuccess && freshErr != nil {
+				t.Fatalf("fresh unresolved initialization error = %v", freshErr)
 			}
 			wantAttempts := 1
 			if !tt.wantSuccess {
@@ -673,10 +668,6 @@ func TestConcurrentAccountAndCursorOperationsConverge(t *testing.T) {
 		t.Fatalf("concurrent identities = %q and %q, want convergence", first.ID, second.ID)
 	}
 
-	one := persistenceHistoryID(t, "1")
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: first.ID, Next: one}); err != nil {
-		t.Fatalf("initial CommitSynchronization() error = %v", err)
-	}
 	two, three := persistenceHistoryID(t, "2"), persistenceHistoryID(t, "3")
 	start := make(chan struct{})
 	commitErrors := make(chan error, 2)
@@ -686,7 +677,7 @@ func TestConcurrentAccountAndCursorOperationsConverge(t *testing.T) {
 		go func(next storage.HistoryID) {
 			ready.Done()
 			<-start
-			commitErrors <- handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: first.ID, Expected: &one, Next: next})
+			commitErrors <- handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: first.ID, Next: next})
 		}(next)
 	}
 	ready.Wait()
@@ -695,9 +686,7 @@ func TestConcurrentAccountAndCursorOperationsConverge(t *testing.T) {
 	for range 2 {
 		if err := <-commitErrors; err == nil {
 			successes++
-		} else if !errors.Is(err, storage.ErrCursorConflict) &&
-			!errors.Is(err, storage.ErrCursorRegression) &&
-			!errors.Is(err, storage.ErrPersistenceUnknown) {
+		} else if !errors.Is(err, storage.ErrCursorConflict) && !errors.Is(err, storage.ErrPersistenceUnknown) {
 			t.Fatalf("concurrent CommitSynchronization() error = %v", err)
 		}
 	}
@@ -723,8 +712,8 @@ func runAccountCursorBehaviorContract(t *testing.T, handle storage.Handle) {
 		t.Fatalf("absent GetSynchronizationCursor() error = %v, want ErrCursorNotFound", err)
 	}
 	one := persistenceHistoryID(t, "1")
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountB.ID, Expected: &one, Next: one}); !errors.Is(err, storage.ErrCursorConflict) {
-		t.Fatalf("absent cursor non-nil expected error = %v, want ErrCursorConflict", err)
+	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountB.ID, Expected: &one, Next: one}); !errors.Is(err, storage.ErrInvalidValue) {
+		t.Fatalf("non-nil expected initialization error = %v, want ErrInvalidValue", err)
 	}
 	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountA.ID, Next: one}); err != nil {
 		t.Fatalf("initial CommitSynchronization() error = %v", err)
@@ -733,30 +722,19 @@ func runAccountCursorBehaviorContract(t *testing.T, handle storage.Handle) {
 	if err != nil || cursor.HistoryID != one {
 		t.Fatalf("GetSynchronizationCursor() = (%#v, %v), want history 1", cursor, err)
 	}
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountA.ID, Next: one}); err != nil {
-		t.Fatalf("idempotent CommitSynchronization() error = %v", err)
+	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountA.ID, Next: one}); !errors.Is(err, storage.ErrCursorConflict) {
+		t.Fatalf("present-cursor initialization error = %v", err)
 	}
 	two := persistenceHistoryID(t, "2")
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountA.ID, Expected: &one, Next: two}); err != nil {
-		t.Fatalf("advance CommitSynchronization() error = %v", err)
-	}
 	three := persistenceHistoryID(t, "3")
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountA.ID, Expected: &one, Next: three}); !errors.Is(err, storage.ErrCursorConflict) {
-		t.Fatalf("stale CommitSynchronization() error = %v, want ErrCursorConflict", err)
-	}
-	if err := handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountA.ID, Expected: &two, Next: one}); !errors.Is(err, storage.ErrCursorRegression) {
-		t.Fatalf("regressing CommitSynchronization() error = %v, want ErrCursorRegression", err)
-	}
-
-	four := persistenceHistoryID(t, "4")
 	start := make(chan struct{})
 	ready := make(chan struct{}, 2)
 	results := make(chan error, 2)
-	for _, next := range []storage.HistoryID{three, four} {
+	for _, next := range []storage.HistoryID{two, three} {
 		go func(next storage.HistoryID) {
 			ready <- struct{}{}
 			<-start
-			results <- handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountA.ID, Expected: &two, Next: next})
+			results <- handle.CommitSynchronization(context.Background(), storage.SynchronizationCommit{AccountID: accountB.ID, Next: next})
 		}(next)
 	}
 	<-ready
@@ -769,16 +747,16 @@ func runAccountCursorBehaviorContract(t *testing.T, handle storage.Handle) {
 			successes++
 			continue
 		}
-		if !errors.Is(err, storage.ErrCursorConflict) && !errors.Is(err, storage.ErrCursorRegression) && !errors.Is(err, storage.ErrPersistenceUnknown) {
+		if !errors.Is(err, storage.ErrCursorConflict) && !errors.Is(err, storage.ErrPersistenceUnknown) {
 			t.Fatalf("concurrent CommitSynchronization() error = %v", err)
 		}
 	}
 	if successes != 1 {
 		t.Fatalf("concurrent CommitSynchronization() successes = %d, want 1", successes)
 	}
-	cursor, err = handle.GetSynchronizationCursor(context.Background(), accountA.ID)
-	if err != nil || (cursor.HistoryID != three && cursor.HistoryID != four) {
-		t.Fatalf("final GetSynchronizationCursor() = (%#v, %v), want history 3 or 4", cursor, err)
+	cursor, err = handle.GetSynchronizationCursor(context.Background(), accountB.ID)
+	if err != nil || (cursor.HistoryID != two && cursor.HistoryID != three) {
+		t.Fatalf("final GetSynchronizationCursor() = (%#v, %v), want history 2 or 3", cursor, err)
 	}
 }
 

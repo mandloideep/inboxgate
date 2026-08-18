@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/mandloideep/inboxgate/internal/mail"
 	"github.com/mandloideep/inboxgate/internal/storage"
 )
 
@@ -68,6 +69,13 @@ func (h *fakeHandle) CommitAccountLifecycle(context.Context, storage.LifecycleCo
 }
 func (h *fakeHandle) DeleteRevokedProviderCredential(context.Context, storage.RevokedCredentialDelete) error {
 	return nil
+}
+func (h *fakeHandle) CommitCurrentDiscovery(context.Context, storage.CurrentDiscoveryCommit) error {
+	return nil
+}
+func (h *fakeHandle) ReconcileCurrentDiscovery(context.Context, storage.AccountID) error { return nil }
+func (h *fakeHandle) GetDiscoveredMessage(context.Context, storage.AccountID, string) (mail.Message, error) {
+	return mail.Message{}, nil
 }
 func (h *fakeHandle) Close() error { return nil }
 
