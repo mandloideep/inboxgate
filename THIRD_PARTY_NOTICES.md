@@ -34,6 +34,22 @@ The upstream `NOTICE` file also states:
 
 Copyright 2011-2016 Canonical Ltd.
 
+## Go OAuth 2.0
+
+InboxGate includes `golang.org/x/oauth2` v0.36.0 under the BSD 3-Clause License.
+
+Copyright 2009 The Go Authors.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the copyright notice, conditions, and disclaimer are retained.
+Neither Google LLC nor contributor names may be used to endorse derived products without specific prior permission.
+The software is provided without warranties, and its authors are not liable for damages arising from its use.
+
+## Google Compute metadata module
+
+The OAuth module requires `cloud.google.com/go/compute/metadata` v0.3.0.
+That module is licensed under the Apache License 2.0, available at <https://www.apache.org/licenses/LICENSE-2.0>.
+It is provided without warranties or conditions of any kind.
+
 ## Turso serverless Go driver
 
 InboxGate includes `turso.tech/database/tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4.
