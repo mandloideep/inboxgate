@@ -513,6 +513,12 @@ Migration `0003_provider_credentials.sql` stores one versioned authenticated cip
 It stores only the account ID, envelope key identifier, and ciphertext envelope and never accepts or persists plaintext token bytes.
 The envelope and stored key identifier must agree structurally before a storage request is made and again after every database read.
 
+Migration `0004_account_lifecycle.sql` stores one strict versioned lifecycle row per account and creates a pending version 1 row in the same transaction as every later account insert.
+It backfills an existing account as active only when both its synchronization cursor and encrypted provider credential exist, and otherwise backfills pending.
+The implemented graph is pending to active, active to paused or reauthorization-required, paused to active, and every non-revoked state to revoked-pending, followed by revoked-attempting and then only revoked-confirmed or revoked-manual-action-required.
+The exact reauthorization reasons are `refresh_invalid_grant`, `refresh_admin_policy_enforced`, `gmail_unauthorized_after_refresh`, and `gmail_domain_policy`.
+Activation and resume require durable cursor and credential presence, every non-idempotent transition increments the version once, and revoked is terminal.
+
 ### 9.2 Synchronization cursors
 
 Each account has an incremental Gmail history cursor.
@@ -628,6 +634,19 @@ Enrollment resolves the stable OpenID Connect subject before creating or adoptin
 It initializes the cursor before encrypting and initializing the refresh token, never replaces an existing cursor or credential, and reports success only after fresh account, cursor, ciphertext, and authenticated-decryption checks.
 Account-only and cursor-only states are restartable, credential-only state requires recovery, and the protocol does not claim three-record atomicity.
 A concurrent same-subject initializer adopts any valid cursor that won durable initialization and never replays the losing cursor write in the same attempt.
+Enrollment reads lifecycle state before staged persistence, activates only after fresh complete-state and decryption proof, treats active as complete, and rejects paused, reauthorization-required, or revoked accounts without changing cursor or credential state.
+
+The implemented operator surface provides bounded canonical `account list`, idempotent `account pause`, complete-state `account resume`, and confirmed `account revoke` commands.
+Revocation durably records revoked-pending intent, wins an exact status-and-version transition to revoked-attempting, and freshly reads the credential before decrypting or sending the refresh token.
+Only a process with a proven attempting claim may contact Google, and credential persistence atomically rejects insertion or replacement after the lifecycle becomes revoked.
+It sends one form-encoded POST to the fixed Google revocation endpoint with an owned redirect-rejecting transport, no retry, a 15-second deadline, and a 16,384-byte response limit.
+Only HTTP 200 records confirmed, while every other proven provider outcome records manual-action-required, and both outcomes exact-compare-delete the encrypted local credential under an independent bounded cleanup context.
+If credential inspection fails after the attempting claim, the operation remains attempting and returns recovery-required rather than creating a terminal row with unverified residual ciphertext.
+A restart from revoked-pending may make one bounded provider attempt only after winning the attempting claim.
+A restart from revoked-attempting never repeats the provider call and instead finalizes manual-action-required and exact-deletes any remaining ciphertext.
+A finalized restart makes no provider request and only reconciles deletion.
+Before any revocation mutation or provider work, the manager reserves three lifecycle increments for a non-revoked row, two for revoked-pending, or one for revoked-attempting.
+Confirmed and manual-action-required rows require no further lifecycle increment and may reconcile residual ciphertext at the maximum version.
 
 Encrypt refresh tokens before persistence with an application master key supplied through the runtime secret store.
 Use standard-library AES-256-GCM with a 32-byte key, a fresh 12-byte nonce read completely from `crypto/rand.Reader`, and the 16-byte authentication tag.
@@ -873,10 +892,12 @@ Create a new Turso Database rather than a legacy libSQL database.
 The operator should use the Turso database-engine creation option documented at implementation time and record the resulting engine type in the deployment runbook.
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official remote `tursogo-serverless` driver behind the narrow repository-owned storage adapter.
-The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, and typed ciphertext-only provider-credential compare-and-swap operations.
-Migration, account-cursor, and ciphertext-credential execution are restricted to credential-free literal-loopback endpoints.
-Only the one-shot `account add` command connects configuration-selected runtime values, OAuth enrollment, and these typed persistence operations, while live Turso credentials and remote database activation remain prohibited.
-The health-only service, capability inspection, and other commands do not activate this persistence boundary.
+The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, typed ciphertext-only provider-credential compare-and-swap operations, and bounded typed account-lifecycle operations.
+Migration, account-cursor, ciphertext-credential, and lifecycle execution are restricted to credential-free literal-loopback endpoints.
+The one-shot `account add` command connects configuration-selected runtime values, OAuth enrollment, and typed persistence operations.
+The `account list`, `account pause`, `account resume`, and confirmed `account revoke` commands connect only the minimum selected database and encryption values required for their operation.
+Live Turso credentials and remote database activation remain prohibited.
+The health-only service, capability inspection, configuration inspection, and doctor do not activate this persistence boundary.
 
 The owner accepts the unresolved `base_url` authority, raw remote diagnostic, transaction completion, close context, terminal acknowledgement, private HTTP client and redirect policy, and successful-response bound risks recorded in the [known-risk register](known-risks.md).
 That acceptance permits focused storage implementation to continue but does not describe the risks as fixed.
@@ -908,7 +929,7 @@ Do not automatically replay a statement after a transport failure because its se
 Migrations are append-only numbered SQL files.
 The migration runner records the migration number and checksum.
 It must refuse to run if an already applied migration has a different checksum.
-The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
+The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, appends strict account lifecycle state in `0004_account_lifecycle.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
 The runner inspects current state outside a transaction, sends pending work as one bounded no-argument `BEGIN IMMEDIATE` through `COMMIT` pipeline sequence, verifies the exact prefix row total and every expected pair under the writer lock while rejecting nulls, proves terminal session state without marker regression through the code-owned `user_version` marker and a separate physical connection, and applies at most one pending migration per transaction.
 The sequence accepts no caller data and renders only a bounded code-derived migration number and validated lowercase-hex checksum as SQL literals because the driver's sequence request cannot carry arguments.
 The prefix guard renders only bounded catalog numbers and validated lowercase-hex checksums, and none of those literals come from users, providers, configuration, or database rows.
@@ -934,6 +955,13 @@ The mutation connection remains reserved until a separate physical connection ob
 Only an exact one-row affected acknowledgement plus exact separate visibility allows that connection to return to the pool, while incomplete or zero-row acknowledgements force discard even when visibility proves the requested ciphertext durable.
 Unknown outcomes discard the mutation session and never replay in the same invocation.
 The no-SQL fake implements the same typed behavior for credential-free higher-layer tests.
+
+Lifecycle persistence exposes only a bounded ordered account summary, one typed state-status-version compare-and-swap, one typed lifecycle lookup, and one revoked-only exact ciphertext compare-and-delete.
+Lifecycle and credential-deletion mutations use fixed parameterized SQL, one mutation attempt, a reserved apply connection, separate physical visibility, session discard on uncertainty, and no same-invocation replay.
+Credential initialization and replacement use a fixed atomic lifecycle predicate that rejects every revoked account.
+Account listing reads at most 101 rows, rejects more than 100, and fails closed if an account lacks its required lifecycle row or if any returned value is malformed.
+The exact-driver fixtures exercise dropped and incomplete responses before and after durability, fresh reconciliation, redirect and authority behavior, oversized values, fixed diagnostics, and session discard while keeping `TURSO-001` through `TURSO-005` open.
+The credential-free literal-loopback fixture asserts exact migration bytes and driver protocol behavior but does not execute SQLite, so dependency-free catalog tests additionally assert the exact lifecycle constraint shape.
 
 Test restoration by creating a fresh service instance from only the repository, runtime secrets, and Turso database.
 Do not treat Turso as the only place OAuth encryption keys exist.
@@ -1088,14 +1116,14 @@ The YAML package is the only runtime dependency approved in this phase.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) implements the credential-free append-only migration runner and checksum protection.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) implements minimum Gmail account identity and synchronization-cursor persistence with synthetic fixtures only.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) implements versioned authenticated encryption and ciphertext-only typed credential persistence with synthetic fixtures only.
-Next, implement one-account Gmail OAuth enrollment against fake OAuth and Gmail servers.
+[ADR 0008](adr/0008-google-oauth2-client.md) implements one-account Gmail OAuth enrollment against fake OAuth and Gmail servers.
+[ADR 0009](adr/0009-account-lifecycle-and-revocation.md) implements durable account lifecycle state and credential-free synthetic revocation.
 Do not activate live credentials or production database writes without a separately approved issue and explicit owner approval.
 Do not add email or review tables until their vertical slices require them.
 
 ### Phase 3: OAuth enrollment
 
-Test and implement one Gmail account enrollment through the operator CLI and callback endpoint.
-Implement OAuth state protection, identity lookup, encrypted refresh-token persistence, account listing, and revocation state.
+One Gmail account enrollment, OAuth state protection, identity lookup, encrypted refresh-token persistence, bounded account listing, durable pause and resume, typed reauthorization state, and staged revocation are implemented with synthetic fixtures.
 Do not call Gmail messages endpoints yet.
 
 ### Phase 4: One current-mail discovery slice

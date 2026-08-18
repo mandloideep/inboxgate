@@ -29,6 +29,10 @@ type Handle interface {
 	CommitSynchronization(context.Context, SynchronizationCommit) error
 	GetProviderCredential(context.Context, AccountID) (ProviderCredential, error)
 	CommitProviderCredential(context.Context, ProviderCredentialCommit) error
+	ListAccounts(context.Context) ([]AccountSummary, error)
+	GetAccountLifecycle(context.Context, AccountID) (AccountLifecycle, error)
+	CommitAccountLifecycle(context.Context, LifecycleCommit) error
+	DeleteRevokedProviderCredential(context.Context, RevokedCredentialDelete) error
 	Close() error
 }
 

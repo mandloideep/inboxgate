@@ -11,7 +11,9 @@ No owner credential or provider setup is required to implement, review, merge, o
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner restricted to credential-free literal-loopback tests.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) adds minimum Gmail identity and synchronization-cursor persistence under the same credential-free literal-loopback restriction.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) adds standard-library versioned authenticated encryption and ciphertext-only provider-credential persistence under the same restriction.
-The adapter is not connected to configuration, commands, service startup, repositories, remote endpoints, or production credentials.
+[ADR 0009](adr/0009-account-lifecycle-and-revocation.md) adds strict lifecycle persistence, bounded operator commands, and synthetic provider revocation.
+The adapter is connected only to one-shot account enrollment and lifecycle commands after a credential-free literal-loopback endpoint check.
+It remains disconnected from service startup, health, configuration inspection, capabilities, doctor, synchronization, MCP, remote database endpoints, and production credentials.
 
 The owner accepts five unresolved driver risks for the exact selected version.
 
@@ -76,7 +78,7 @@ They are listed so the owner can recognize the safe next action when the relevan
 | Separate testing and production projects | When Google's current policies or the approved rollout require environment isolation | Keep testing credentials and users in an owner-controlled testing project and production consent and credentials in a separately approved production project |
 | Exact OAuth callback URI mismatch or rejection | Before choosing callback routing, creating the OAuth client, or enrolling an account | Validate the proposed URI against Google's current web-server rules, then compare the registered and runtime values privately character for character |
 | Private callback routing unavailable or ineligible | Before an operator can complete OAuth enrollment | Confirm Google accepts the callback host before building private routing because a private IP, internal suffix, or Tailscale-only hostname may be rejected even when routing works |
-| Secret format or rotation behavior not implemented | Before generating the master key, MCP token, database token, or production OAuth material | Wait for merged format, lifecycle, and recovery requirements, then use the approved secret manager |
+| Secret format or required runtime activation not approved | Before generating the master key, MCP token, database token, or production OAuth material | Wait for the relevant merged format and activation requirements plus explicit owner approval, then use the approved secret manager |
 | Private network reachability unavailable | Before Hermes, OAuth callback traffic, private health checks, or database egress can work | Validate private DNS, routing, firewall, TLS, and egress policy using synthetic endpoints and sanitized results |
 | GitHub Actions disabled or owner permission missing | Before a manual release can be dispatched | Enable Actions or obtain the required repository permission through the repository owner without creating a personal token for the workflow |
 | Immutable releases not confirmed | Immediately before release dispatch | Open `Settings > Releases`, confirm immutable releases are enabled, and do not dispatch if they are not |
@@ -100,7 +102,10 @@ Credential values belong only in the approved runtime secret store.
 Explicitly non-secret endpoint configuration may use the approved runtime configuration store.
 Never store credential values in plain service files, unit files, tracked or untracked environment files, command arguments, or repository files.
 InboxGate YAML contains environment-variable names only, never their values.
-Only `inboxgate account add` resolves its YAML-selected Turso, Google, and encryption environment-variable names.
+`inboxgate account add` resolves its YAML-selected Turso, Google, and encryption environment-variable names.
+`inboxgate account list`, `account pause`, and `account resume` resolve only the selected Turso URL and optional token names.
+`inboxgate account revoke` resolves the selected encryption key only after it has won and separately observed a durable revoked-attempting claim and a fresh read proves an encrypted credential is present.
+Live remote Turso endpoints and bearer tokens remain rejected, so these command paths are for credential-free literal-loopback validation only until a later activation decision and explicit owner approval.
 Configuration validation and effective output, capabilities, doctor, and the health-only service do not resolve those values, and no command resolves the selected MCP token name.
 It reads only `INBOXGATE_CONFIG` for configuration-path selection when that variable is explicitly set.
 
@@ -179,7 +184,8 @@ An access token or refresh token must never be copied from the service for troub
 
 ## Step-by-step encryption-key preparation
 
-The accepted format is defined by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md), and only the one-shot `account add` command resolves the selected key and uses the encrypted store after its credential-free loopback storage gate.
+The accepted format is defined by [ADR 0007](adr/0007-versioned-provider-credential-encryption.md).
+The one-shot `account add` command resolves the selected key after its credential-free loopback storage gate, and confirmed `account revoke` resolves it only after a proven revoked-attempting claim and fresh encrypted-credential presence.
 Do not generate a production key until a later approved runtime issue supplies the exact private secret-manager workflow, rotation command, durable-record verification, and explicit owner approval.
 
 1. In the approved deployment secret manager, use its cryptographically secure binary generator to create one 32-byte AES key without exposing its value to a terminal, clipboard, log, file, issue, pull request, chat, or agent.
