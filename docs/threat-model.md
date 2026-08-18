@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: accepted credential-free loopback minimum account-cursor persistence with known upstream risks for issue #22.
+Status: accepted versioned provider-credential encryption and credential-free loopback ciphertext persistence with known upstream risks for issue #24.
 
 ## Security objectives
 
@@ -21,7 +21,7 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 | Operator to CLI and configuration | Arguments, paths, YAML, environment names, capability policy | Strict parsing, bounded input, structural secret avoidance, path omission, deterministic output, fail-closed capability validation |
 | Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
-| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, credentials, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration and account-cursor execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, cursor compare-and-swap, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
+| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, ciphertext credentials, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration, account-cursor, and ciphertext-credential execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, typed compare-and-swap, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
 | Hermes to MCP | Authentication, tool inputs, pagination | Authentication, explicit schemas, bounds, allowlisted capabilities, audit events |
 | Runtime to logs and health endpoints | Errors, state, identifiers | Redaction, minimal readiness detail, private binding, no credentials or message bodies |
 | Owner to release workflow | Version, expected commit, dispatch identity, immutable-release setting | Exact input syntax, owner-only manual dispatch, immediate manual settings check, current-main and successful-CI gates |
@@ -130,13 +130,14 @@ Retries, duplicate Gmail history, concurrent work, or a crash could skip mail or
 Durable writes and cursor movement must be transactional.
 External and review operations require stable idempotency keys, valid state transitions, bounded retries, and restart tests.
 
-### Accepted database adapter, synthetic migration, and account-cursor boundary
+### Accepted database adapter, synthetic migration, account-cursor, and ciphertext-credential boundary
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
 The adapter is present in code but is not reachable from configuration, commands, service startup, health endpoints, capabilities, Gmail, OAuth, or MCP.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner that can execute only against a credential-free literal-loopback endpoint.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) appends minimum account identity and synchronization-cursor tables and exposes only typed account and cursor operations under the same restriction.
-No production URL, live token, real account record, email record, account lifecycle state, display metadata, or credential material is introduced by these decisions.
+[ADR 0007](adr/0007-versioned-provider-credential-encryption.md) appends a ciphertext-only provider-credential table and exposes only typed credential lookup and compare-and-swap under the same restriction.
+No production URL, live token, real account record, email record, account lifecycle state, display metadata, plaintext credential, or runtime secret is introduced by these decisions.
 
 The adapter validates the initial endpoint before driver construction.
 It keeps URL and token values separate, normalizes `turso` to HTTPS, requires standard verified HTTPS for remote endpoints, rejects credentials in URLs, and limits cleartext HTTP to credential-free literal IPv4 or IPv6 loopback tests.
@@ -152,7 +153,7 @@ An unproven apply session is rollback-attempted and forcibly discarded from the 
 A marker ahead of the ledger is rejected as drift.
 Every failed sequence attempts rollback but returns unknown because the driver cannot confirm rollback completion even when the rollback call returns nil.
 The runner revalidates the exact expected ledger prefix through a separate physical connection after every purported commit.
-Returned ping, migration, account, cursor, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
+Returned ping, migration, account, cursor, credential, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
 
 These controls do not fix the driver properties reproduced during the earlier evaluation.
 The driver can still trust an arbitrary scheme and authority from a protocol-provided `base_url` and send the bearer token to a changed authority or over cleartext HTTP after an HTTPS-to-HTTP downgrade.
@@ -175,6 +176,19 @@ Account creation never updates identity and attempts at most one fixed parameter
 Cursor mutation is available only through one fixed parameterized implicit-transaction compare-and-swap statement that explicitly checks account existence and cannot lower a cursor.
 The mutation connection remains reserved while a separate physical connection verifies the exact durable account or next cursor.
 An unproven outcome discards the mutation session, returns a bounded unknown category, and is never replayed in the same invocation.
+
+Provider refresh tokens are treated as secret bytes before encryption and as sensitive ciphertext after encryption.
+The cryptobox accepts only the canonical bounded keyring grammar and uses standard-library AES-256-GCM with a complete fresh 12-byte nonce read for every encryption.
+Authenticated additional data binds the fixed envelope header, internal account ID, provider `gmail`, and purpose `oauth_refresh_token`, so moving a ciphertext between accounts or purposes fails authentication.
+The envelope authenticates its version, algorithm, key identifier, nonce, ciphertext, and tag.
+Decryption returns fixed invalid-envelope, unknown-key, or authentication categories and never reflects ciphertext, plaintext, account ID, key bytes, or cryptographic diagnostics.
+Rotation retains decrypt-only keys until every durable envelope has been re-encrypted and restart-verified under the new active key.
+Keyring close overwrites repository-owned key arrays and temporary plaintext buffers where practical, but Go does not guarantee elimination of compiler, stack, register, garbage-collector, or library-internal copies.
+The storage boundary accepts only structurally validated ciphertext envelopes, derives the stored key identifier from the envelope, and has no plaintext parameter or field.
+Migration `0003` enforces byte bounds, embedded-NUL rejection, canonical key identifier characters, the `igc1.` prefix, and a restrictive ciphertext alphabet before accepting durable text.
+These structural database checks do not replace AES-GCM authentication before a credential is used.
+Credential replacement preserves a source row only for a nil expected envelope or the same account's exact durable expected envelope, and the conflict update repeats the expected-envelope comparison.
+The adapter returns a mutation session to the pool only after an exact one-row acknowledgement and separate exact visibility, while ambiguous or zero-row acknowledgements force discard.
 
 ### Resource exhaustion
 

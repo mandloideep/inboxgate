@@ -53,6 +53,12 @@ func (h *fakeHandle) GetSynchronizationCursor(context.Context, storage.AccountID
 func (h *fakeHandle) CommitSynchronization(context.Context, storage.SynchronizationCommit) error {
 	return nil
 }
+func (h *fakeHandle) GetProviderCredential(context.Context, storage.AccountID) (storage.ProviderCredential, error) {
+	return storage.ProviderCredential{}, nil
+}
+func (h *fakeHandle) CommitProviderCredential(context.Context, storage.ProviderCredentialCommit) error {
+	return nil
+}
 func (h *fakeHandle) Close() error { return nil }
 
 var _ storage.Adapter = (*fakeAdapter)(nil)
