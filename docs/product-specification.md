@@ -526,10 +526,16 @@ Store the last committed `historyId`, the most recent mailbox time observed, the
 
 The minimum cursor slice stores only a canonical positive uint64 Gmail `historyId` as decimal text.
 An absent row means uninitialized, and zero, empty, signed, padded, or out-of-range values are invalid.
-Mailbox times, leases, retry metadata, stale-cursor state, and message-coupled advancement remain future work.
+Migration `0005_current_discovery_atomic_commit.sql` adds message-coupled current-discovery advancement without adding mailbox times, leases, retry metadata, or stale-cursor state.
+The cursor-only commit initializes an absent enrollment cursor and rejects a present cursor or durable current-discovery attempt.
 
 Advance a cursor only in the same transaction that commits the discovered message metadata.
 Never advance a cursor after a partial failed page.
+
+The current-discovery storage aggregate accepts one active account, an exact current cursor, a strictly greater next cursor, and at most 5,000 normalized messages.
+It sorts messages by Gmail message ID, collapses exact duplicates, rejects conflicting duplicates, and limits the canonical aggregate encoding to 16,777,216 bytes.
+It promotes canonical message metadata and advances the cursor through one fixed trigger-backed finalization statement or changes neither.
+Every explicit reconciliation completes or safely removes only bounded durable staging without contacting Gmail.
 
 If Gmail reports that a history cursor is too old, mark the cursor stale and run bounded reconciliation.
 Do not silently restart an unlimited full backfill.
@@ -892,8 +898,8 @@ Create a new Turso Database rather than a legacy libSQL database.
 The operator should use the Turso database-engine creation option documented at implementation time and record the resulting engine type in the deployment runbook.
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official remote `tursogo-serverless` driver behind the narrow repository-owned storage adapter.
-The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, typed ciphertext-only provider-credential compare-and-swap operations, and bounded typed account-lifecycle operations.
-Migration, account-cursor, ciphertext-credential, and lifecycle execution are restricted to credential-free literal-loopback endpoints.
+The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, typed ciphertext-only provider-credential compare-and-swap operations, bounded typed account-lifecycle operations, and a typed atomic current-discovery aggregate.
+Migration, account-cursor, ciphertext-credential, lifecycle, and current-discovery execution are restricted to credential-free literal-loopback endpoints.
 The one-shot `account add` command connects configuration-selected runtime values, OAuth enrollment, and typed persistence operations.
 The `account list`, `account pause`, `account resume`, and confirmed `account revoke` commands connect only the minimum selected database and encryption values required for their operation.
 Live Turso credentials and remote database activation remain prohibited.
@@ -917,7 +923,7 @@ Create unique constraints for all provider identifiers and idempotency keys.
 Set conservative connection limits from the validated configuration.
 The accepted adapter requires HTTPS with standard TLS certificate and hostname verification and rejects cleartext remote URLs before driver construction.
 Plain HTTP may be used only with a literal loopback endpoint in credential-free tests, with no bearer token or production-derived secret attached.
-The current adapter maps ping, migration, account, cursor, credential, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
+The current adapter maps ping, migration, account, cursor, credential, lifecycle, current-discovery, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
 Authority handling, redirect behavior, successful-response body, cursor-line, row and value limits, and caller-controlled commit, rollback and close cancellation remain accepted unresolved risks.
 The credential-free migration contract verifies parameterized ledger inspection, an exact bounded atomic pipeline sequence, `BEGIN IMMEDIATE` locking, transaction-local validation of the exact row total and every expected pair with null rejection, internally rendered numeric and lowercase-hex catalog metadata, exact checksum drift rejection, bounded rollback attempts with unknown outcomes, no same-invocation replay, and fresh-run reconciliation after an uncertain sequence.
 Every purportedly successful migration commit requires a same-session savepoint sequence that acquires main-database writer serialization through a bounded ledger self-assignment, revalidates the same exact null-rejecting ledger prefix, and refuses to regress a concurrently advanced code-owned `PRAGMA user_version` marker, followed by separate-connection visibility of both the exact ledger and marker while the apply connection remains reserved.
@@ -929,7 +935,7 @@ Do not automatically replay a statement after a transport failure because its se
 Migrations are append-only numbered SQL files.
 The migration runner records the migration number and checksum.
 It must refuse to run if an already applied migration has a different checksum.
-The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, appends strict account lifecycle state in `0004_account_lifecycle.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
+The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, appends strict account lifecycle state in `0004_account_lifecycle.sql`, appends atomic current-discovery staging in `0005_current_discovery_atomic_commit.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
 The runner inspects current state outside a transaction, sends pending work as one bounded no-argument `BEGIN IMMEDIATE` through `COMMIT` pipeline sequence, verifies the exact prefix row total and every expected pair under the writer lock while rejecting nulls, proves terminal session state without marker regression through the code-owned `user_version` marker and a separate physical connection, and applies at most one pending migration per transaction.
 The sequence accepts no caller data and renders only a bounded code-derived migration number and validated lowercase-hex checksum as SQL literals because the driver's sequence request cannot carry arguments.
 The prefix guard renders only bounded catalog numbers and validated lowercase-hex checksums, and none of those literals come from users, providers, configuration, or database rows.
@@ -939,8 +945,8 @@ Credentialed and non-loopback migration execution is rejected before any migrati
 The storage contract accepts a pre-generated validated account ID and an opaque validated provider subject while fixing the provider to `gmail` internally.
 The durable schema measures these text forms as bytes and explicitly rejects embedded NUL bytes rather than relying on SQLite text length or glob behavior.
 Account creation is idempotent by binary `(provider, provider_subject)` uniqueness, never updates identity, and attempts at most one fixed parameterized insertion per invocation.
-The cursor mutation contract accepts only an account ID, optional exact expected history ID, and required greater next history ID.
-It uses one fixed parameterized implicit-transaction compare-and-swap statement that explicitly checks account existence, initializes only from an absent cursor, advances only from the exact expected cursor, never regresses, and performs no delete or reset.
+The cursor initialization contract accepts only an account ID, an absent expected history ID, and a required initial history ID.
+`CommitSynchronization` uses one fixed parameterized implicit-transaction statement that explicitly checks account existence, initializes only from an absent cursor, rejects every present cursor, never advances an existing cursor, and performs no delete or reset.
 Account and cursor lookups require exactly one semantic sentinel row, validate all decoded columns and values, and reject a clean end of stream as inspection failure rather than absence.
 Every attempted product-state mutation keeps its connection reserved until a separate physical connection observes the exact durable account identity or next cursor.
 Successful-looking responses without visible state and uncertain failures without visible state return a bounded unknown outcome, discard the mutation session, and never trigger same-invocation replay.
@@ -962,6 +968,28 @@ Credential initialization and replacement use a fixed atomic lifecycle predicate
 Account listing reads at most 101 rows, rejects more than 100, and fails closed if an account lacks its required lifecycle row or if any returned value is malformed.
 The exact-driver fixtures exercise dropped and incomplete responses before and after durability, fresh reconciliation, redirect and authority behavior, oversized values, fixed diagnostics, and session discard while keeping `TURSO-001` through `TURSO-005` open.
 The credential-free literal-loopback fixture asserts exact migration bytes and driver protocol behavior but does not execute SQLite, so dependency-free catalog tests additionally assert the exact lifecycle constraint shape.
+
+Current discovery persists only normalized metadata version 1 and excludes bodies, snippets, raw MIME, attachment bytes, link targets, OAuth data, raw provider JSON, and arbitrary headers.
+The record ID is a full domain-separated SHA-256 digest of the validated account ID and Gmail message ID.
+The attempt ID and manifest hash are separate domain-separated full SHA-256 digests of exact length-prefixed canonical inputs.
+The durable `manifest_witness` is lowercase hexadecimal of the complete manifest-hash preimage and binds every ordinal-ordered staged field through schema-verifiable `row_witness` values.
+One account has at most one open or sealed attempt, and each staging request uses 64 fixed slots and exactly 514 positional parameters.
+Unused final slots use a zero presence flag and null non-control values.
+The fixed staging insert reconstructs `row_witness` from every live field, and schema triggers reject every staging update.
+Seal and finalization reconstruct each row witness from the live columns and reconstruct the complete ordinal-ordered manifest witness before canonical or cursor mutation.
+The adapter decodes and re-encodes canonical metadata, verifies its SHA-256 metadata hash, and verifies the derived record ID before it requests finalization.
+The maximum serialized stage request is 40 MiB.
+The write-only finalization view requires a sealed complete witness-bound manifest, active lifecycle, exact cursor, stable thread identity, and collision-free canonical keys.
+The trigger does not recompute any SHA-256-derived identity.
+Its trigger promotes canonical messages, updates only bounded mutable metadata, advances the exact cursor, and removes only that attempt's staging rows as one database statement.
+Open and sealed staging never changes canonical messages or the cursor before successful finalization.
+Pause and reauthorization-required retain staging and block finalization, while transition to revoked removes only noncanonical attempt state and preserves canonical messages.
+Every current-discovery mutation is attempted at most once per invocation, keeps its connection reserved during separate-connection proof, discards an unproven session, and requires a fresh explicit invocation for reconciliation.
+The exact-driver loopback model verifies fixed SQL, 514 arguments, chunk bounds, uncertainty boundaries, separate visibility, concurrency outcomes, cancellation, fixed diagnostics, and no same-invocation replay.
+It does not execute a database engine and therefore does not prove Turso Database support for 514 parameters, strict tables, triggers, constraint rollback, writer serialization, or concurrent finalization.
+The manifest witness is bounded at 33,554,510 bytes, while all row witnesses together can add another 33,554,432 bytes of hexadecimal text in addition to the live staging fields and database overhead.
+This deliberate integrity control amplifies bounded storage and successful-response size, so runtime activation requires later pinned engine evidence or owner-approved sanitized evidence for the exact parameter limit, ordered witness reconstruction, allocation behavior, trigger rollback, writer serialization, and concurrency properties without sharing an endpoint, token, database identity, account identity, message metadata, cursor, or provider response.
+Arbitrary raw-SQL authority could create a self-consistent attempt that the trigger cannot distinguish from application-created state, but InboxGate exposes no raw-SQL surface.
 
 Test restoration by creating a fresh service instance from only the repository, runtime secrets, and Turso database.
 Do not treat Turso as the only place OAuth encryption keys exist.

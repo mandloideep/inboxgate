@@ -139,7 +139,41 @@ Retries, duplicate Gmail history, concurrent work, or a crash could skip mail or
 Durable writes and cursor movement must be transactional.
 External and review operations require stable idempotency keys, valid state transitions, bounded retries, and restart tests.
 
-### Accepted database adapter, synthetic migration, account-cursor, ciphertext-credential, and lifecycle boundary
+### Atomic current-discovery staging
+
+Normalized Gmail identifiers, addresses, subjects, selected headers, labels, hashes, cursors, attempts, and staging rows are sensitive attacker-controlled data.
+They remain data only and never become instructions, SQL text, diagnostics, logs, health output, configuration output, capability output, or a public read surface.
+The current slice stores no body, snippet, raw MIME, attachment bytes, link target, OAuth value, credential, raw provider JSON, or arbitrary header map.
+
+The storage boundary validates and canonicalizes every message before deriving full domain-separated SHA-256 record, attempt, and manifest identifiers.
+The aggregate is limited to 5,000 unique messages and 16,777,216 bytes of canonical length-prefixed encoding.
+Each staging statement is fixed parameterized SQL with 64 slots and exactly 514 arguments, including inert padding that cannot create a row.
+One account can have only one bounded open or sealed attempt.
+The fixed insert reconstructs an exact hexadecimal `row_witness` from every live staging field, and schema triggers reject every staging update.
+The immutable `manifest_witness` binds the manifest domain, message count, and every ordinal-ordered row witness.
+
+Before finalization, the adapter decodes and re-encodes canonical metadata, verifies the metadata SHA-256, and verifies the record ID derived from the account and Gmail message IDs.
+Finalization is one fixed insert into a write-only view whose trigger verifies the sealed manifest witness, active lifecycle, exact current cursor, stable thread identity, key collisions, row count, ordinal sequence, encoded byte total, every schema-reconstructed row witness, and the complete ordinal-ordered manifest witness.
+The schema prevents sealed attempt insertion, mutation of attempt commitments, and every staging update.
+SQLite does not recompute SHA-256-derived identities, so arbitrary raw-SQL authority could still create a completely self-consistent forged attempt and witness.
+InboxGate exposes no raw-SQL surface and keeps remote activation gated on exact engine behavior.
+Canonical message promotion, bounded mutable metadata updates, cursor advancement, and staging cleanup succeed or roll back together.
+Pause and reauthorization-required block finalization and retain bounded staging.
+Revocation removes only noncanonical staging in the lifecycle statement and preserves canonical messages.
+
+The manifest witness is bounded at 33,554,510 bytes, and the row witnesses can add another 33,554,432 bytes of hexadecimal text per maximum attempt before live staging fields and database overhead.
+Remote activation therefore requires exact engine evidence for ordered witness reconstruction, trigger rollback, parameter limits, allocation behavior, writer serialization, and concurrency under this bounded storage amplification.
+
+Every mutation is attempted once per invocation and is followed by exact separate-connection visibility while the mutation connection remains reserved.
+Unproven sessions are discarded and never replayed in the same invocation.
+A fresh explicit reconciliation may finalize a valid sealed attempt or abort a well-formed open attempt with an unchanged cursor without contacting Gmail.
+Malformed, oversized, mixed, or cursor-divergent state fails closed for recovery.
+
+The literal-loopback exact-driver model does not execute SQLite or the Turso Database engine.
+It therefore cannot prove the remote engine's 514-parameter limit, strict-table behavior, trigger execution, constraint rollback, writer serialization, or concurrent finalization.
+Remote execution remains prohibited until later approved evidence proves those properties without exposing credentials or sensitive stored data.
+
+### Accepted database adapter and inert typed persistence boundary
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
 The adapter is reachable from `account add`, `account list`, `account pause`, `account resume`, and confirmed `account revoke` after environment-selector separation and a credential-free literal-loopback endpoint check.
@@ -148,6 +182,8 @@ It remains unreachable from service startup, health endpoints, doctor, configura
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) appends minimum account identity and synchronization-cursor tables and exposes only typed account and cursor operations under the same restriction.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) appends a ciphertext-only provider-credential table and exposes only typed credential lookup and compare-and-swap under the same restriction.
 [ADR 0009](adr/0009-account-lifecycle-and-revocation.md) appends strict versioned account lifecycle state and exposes only bounded listing, typed lifecycle compare-and-swap, and revoked-only exact ciphertext deletion under the same restriction.
+[ADR 0010](adr/0010-atomic-current-discovery-staging.md) appends canonical message, attempt, and staging state and exposes only one bounded aggregate commit, reconciliation, and canonical message lookup under the same restriction.
+The current-discovery operations remain unreachable from every runtime caller.
 No production URL, live token, real account record, email record, display metadata, plaintext credential, or runtime secret is introduced by these decisions.
 
 The adapter validates the initial endpoint before driver construction.
