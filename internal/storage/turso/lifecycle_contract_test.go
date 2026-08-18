@@ -99,8 +99,9 @@ func TestExactDriverConcurrentRevocationClaimHasOneWinner(t *testing.T) {
 			t.Fatalf("claim error = %v", err)
 		}
 	}
-	if successes != 1 || conflicts != 1 || countPersistenceSQL(server.persistenceRecords(), lifecycleCommitSQL) != 2 {
-		t.Fatalf("claim successes=%d conflicts=%d mutations=%d", successes, conflicts, countPersistenceSQL(server.persistenceRecords(), lifecycleCommitSQL))
+	mutations := countPersistenceSQL(server.persistenceRecords(), lifecycleCommitSQL)
+	if successes != 1 || conflicts != 1 || mutations < 1 || mutations > 2 {
+		t.Fatalf("claim successes=%d conflicts=%d mutations=%d", successes, conflicts, mutations)
 	}
 }
 

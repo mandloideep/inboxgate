@@ -71,6 +71,19 @@ var expectedLifecycleMigrationChecksum = func() string {
 	return hex.EncodeToString(sum[:])
 }()
 
+var expectedCurrentDiscoveryMigrationSQL = func() string {
+	catalog, err := migrations.Catalog()
+	if err != nil || len(catalog) < 5 {
+		panic("embedded current discovery migration unavailable")
+	}
+	return catalog[4].SQL
+}()
+
+var expectedCurrentDiscoveryMigrationChecksum = func() string {
+	sum := sha256.Sum256([]byte(expectedCurrentDiscoveryMigrationSQL))
+	return hex.EncodeToString(sum[:])
+}()
+
 var expectedMigrationSequence = beginImmediateSQL + ";\n" + expectedMigrationSQL +
 	"CREATE TEMP TABLE " + guardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
 	"INSERT INTO " + guardTable + " (valid) SELECT CASE WHEN (SELECT COUNT(*) FROM " + ledgerTable + ") = 0 THEN 1 ELSE 0 END;\n" +
@@ -111,6 +124,12 @@ var expectedLifecycleMigrationSequence = beginImmediateSQL + ";\n" + expectedLif
 	"DROP TABLE temp." + guardTable + ";\n" +
 	sequenceInsertSQL + "4, '" + expectedLifecycleMigrationChecksum + "');\n" + commitSQL + ";"
 
+var expectedCurrentDiscoveryMigrationSequence = beginImmediateSQL + ";\n" + expectedCurrentDiscoveryMigrationSQL +
+	"CREATE TEMP TABLE " + guardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
+	"INSERT INTO " + guardTable + " (valid) SELECT CASE WHEN (SELECT COUNT(*) FROM " + ledgerTable + ") = 4 AND NOT EXISTS (SELECT 1 FROM " + ledgerTable + " WHERE number IS NULL OR checksum IS NULL) AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 1 AND checksum = '" + expectedMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 2 AND checksum = '" + expectedAccountMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 3 AND checksum = '" + expectedCredentialMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 4 AND checksum = '" + expectedLifecycleMigrationChecksum + "') = 1 THEN 1 ELSE 0 END;\n" +
+	"DROP TABLE temp." + guardTable + ";\n" +
+	sequenceInsertSQL + "5, '" + expectedCurrentDiscoveryMigrationChecksum + "');\n" + commitSQL + ";"
+
 var expectedTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";\n" +
 	"UPDATE " + ledgerTable + " SET checksum = checksum WHERE number = 1;\n" +
 	"CREATE TEMP TABLE " + terminalGuardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
@@ -139,6 +158,13 @@ var expectedLifecycleTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";\n"
 	"DROP TABLE temp." + terminalGuardTable + ";\n" +
 	"PRAGMA user_version = 4;\nRELEASE SAVEPOINT " + terminalSavepoint + ";"
 
+var expectedCurrentDiscoveryTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";\n" +
+	"UPDATE " + ledgerTable + " SET checksum = checksum WHERE number = 5;\n" +
+	"CREATE TEMP TABLE " + terminalGuardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
+	"INSERT INTO " + terminalGuardTable + " (valid) SELECT CASE WHEN (SELECT COUNT(*) FROM " + ledgerTable + ") = 5 AND NOT EXISTS (SELECT 1 FROM " + ledgerTable + " WHERE number IS NULL OR checksum IS NULL) AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 1 AND checksum = '" + expectedMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 2 AND checksum = '" + expectedAccountMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 3 AND checksum = '" + expectedCredentialMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 4 AND checksum = '" + expectedLifecycleMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 5 AND checksum = '" + expectedCurrentDiscoveryMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM pragma_user_version) = 1 AND (SELECT user_version FROM pragma_user_version) BETWEEN 0 AND 5 THEN 1 ELSE 0 END;\n" +
+	"DROP TABLE temp." + terminalGuardTable + ";\n" +
+	"PRAGMA user_version = 5;\nRELEASE SAVEPOINT " + terminalSavepoint + ";"
+
 func TestMigrationContractEmptyApplication(t *testing.T) {
 
 	server := newMigrationProtocolServer(t)
@@ -148,8 +174,8 @@ func TestMigrationContractEmptyApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
-		t.Fatalf("Migrate() result = %#v, want four applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
+		t.Fatalf("Migrate() result = %#v, want five applied migrations", result)
 	}
 	server.assertCommittedCatalog(t)
 	server.assertSeparateVerificationStream(t)
@@ -160,7 +186,7 @@ func TestMigrationContractEmptyApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 0, Current: 4}) {
+	if result != (storage.MigrationResult{Applied: 0, Current: 5}) {
 		t.Fatalf("second Migrate() result = %#v, want bounded no-op", result)
 	}
 	if got := server.mutationCount(); got != firstMutationCount {
@@ -174,7 +200,7 @@ func TestMigrationFromAccountSchemaSendsExactCredentialSchemaBytes(t *testing.T)
 	server.seedLedger(2, expectedAccountMigrationChecksum)
 	handle := openMigrationContractHandle(t, server.URL)
 	result, err := handle.Migrate(context.Background())
-	if err != nil || result.Applied != 2 || result.Current != 4 {
+	if err != nil || result.Applied != 3 || result.Current != 5 {
 		t.Fatalf("Migrate() = (%#v, %v), want one credential migration", result, err)
 	}
 	server.mu.Lock()
@@ -386,10 +412,10 @@ func TestMigrationContractDroppedCommitDoesNotReplayAndFreshRunReconciles(t *tes
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 3, Current: 4}) {
+	if result != (storage.MigrationResult{Applied: 4, Current: 5}) {
 		t.Fatalf("fresh Migrate() result = %#v, want durable reconciliation", result)
 	}
-	if got := server.sequenceCount(); got != 4 {
+	if got := server.sequenceCount(); got != 5 {
 		t.Fatalf("sequence requests after reconciliation = %d, want only pending migrations 2 and 3", got)
 	}
 }
@@ -412,11 +438,11 @@ func TestMigrationContractDroppedCommitBeforeDurabilityAppliesOnceOnFreshRun(t *
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
+	if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
 		t.Fatalf("fresh Migrate() result = %#v, want three newly durable migrations", result)
 	}
-	if got := server.sequenceCount(); got != 5 {
-		t.Fatalf("sequence requests across explicit invocations = %d, want 5", got)
+	if got := server.sequenceCount(); got != 6 {
+		t.Fatalf("sequence requests across explicit invocations = %d, want 6", got)
 	}
 	server.assertCommittedCatalog(t)
 }
@@ -430,14 +456,14 @@ func TestMigrationHeaderOnlyStandaloneCommitPathIsNotUsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
-		t.Fatalf("Migrate() result = %#v, want four atomic sequences", result)
+	if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
+		t.Fatalf("Migrate() result = %#v, want five atomic sequences", result)
 	}
 	if got := server.commitCount(); got != 0 {
 		t.Fatalf("standalone commit requests = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 4 {
-		t.Fatalf("sequence requests = %d, want 4", got)
+	if got := server.sequenceCount(); got != 5 {
+		t.Fatalf("sequence requests = %d, want 5", got)
 	}
 }
 
@@ -450,8 +476,8 @@ func TestMigrationHeaderOnlyBeginCannotMoveWritesToAutocommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
-		t.Fatalf("Migrate() result = %#v, want four atomic sequences", result)
+	if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
+		t.Fatalf("Migrate() result = %#v, want five atomic sequences", result)
 	}
 	if got := server.countSQL(beginImmediateSQL); got != 0 {
 		t.Fatalf("standalone begin requests = %d, want 0", got)
@@ -459,8 +485,8 @@ func TestMigrationHeaderOnlyBeginCannotMoveWritesToAutocommit(t *testing.T) {
 	if got := server.migrationStatementCount(); got != 0 {
 		t.Fatalf("standalone migration requests = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 4 {
-		t.Fatalf("sequence requests = %d, want 4", got)
+	if got := server.sequenceCount(); got != 5 {
+		t.Fatalf("sequence requests = %d, want 5", got)
 	}
 }
 
@@ -473,8 +499,8 @@ func TestMigrationHeaderOnlyPendingStatementCannotCreateFalseLedgerSuccess(t *te
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
-		t.Fatalf("Migrate() result = %#v, want four atomic sequences", result)
+	if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
+		t.Fatalf("Migrate() result = %#v, want five atomic sequences", result)
 	}
 	if got := server.migrationStatementCount(); got != 0 {
 		t.Fatalf("standalone migration requests = %d, want 0", got)
@@ -482,8 +508,8 @@ func TestMigrationHeaderOnlyPendingStatementCannotCreateFalseLedgerSuccess(t *te
 	if got := server.insertCount(); got != 0 {
 		t.Fatalf("standalone ledger inserts = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 4 {
-		t.Fatalf("sequence requests = %d, want 4", got)
+	if got := server.sequenceCount(); got != 5 {
+		t.Fatalf("sequence requests = %d, want 5", got)
 	}
 }
 
@@ -505,8 +531,8 @@ func TestMigrationDroppedSequenceReturnsUnknownWithoutReplayAndFreshRunReconcile
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
-		t.Fatalf("fresh Migrate() result = %#v, want four applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
+		t.Fatalf("fresh Migrate() result = %#v, want five applied migrations", result)
 	}
 }
 
@@ -554,11 +580,11 @@ func TestMigrationRejectsIncompleteSequenceResultsAndReconcilesFresh(t *testing.
 			if err != nil {
 				t.Fatalf("fresh Migrate() error = %v", err)
 			}
-			if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
-				t.Fatalf("fresh Migrate() result = %#v, want three atomic migrations", result)
+			if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
+				t.Fatalf("fresh Migrate() result = %#v, want five atomic migrations", result)
 			}
-			if got := server.sequenceCount(); got != 5 {
-				t.Fatalf("sequence requests across explicit invocations = %d, want 5", got)
+			if got := server.sequenceCount(); got != 6 {
+				t.Fatalf("sequence requests across explicit invocations = %d, want 6", got)
 			}
 		})
 	}
@@ -583,14 +609,14 @@ func TestMigrationSequenceResponseRequiresSemanticTerminalProof(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Migrate() error = %v", err)
 			}
-			if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
-				t.Fatalf("Migrate() result = %#v, want four semantically proven migrations", result)
+			if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
+				t.Fatalf("Migrate() result = %#v, want five semantically proven migrations", result)
 			}
-			if got := server.terminalSequenceCount(); got != 4 {
-				t.Fatalf("terminal proof sequences = %d, want 4", got)
+			if got := server.terminalSequenceCount(); got != 5 {
+				t.Fatalf("terminal proof sequences = %d, want 5", got)
 			}
-			if got := server.userVersionValue(); got != 4 {
-				t.Fatalf("durable user_version = %d, want 4", got)
+			if got := server.userVersionValue(); got != 5 {
+				t.Fatalf("durable user_version = %d, want 5", got)
 			}
 		})
 	}
@@ -622,11 +648,11 @@ func TestMigrationUnprovenApplySessionIsDiscardedBeforeFreshReconciliation(t *te
 	if err != nil {
 		t.Fatalf("fresh explicit Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
-		t.Fatalf("fresh explicit Migrate() result = %#v, want four applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
+		t.Fatalf("fresh explicit Migrate() result = %#v, want five applied migrations", result)
 	}
-	if got := server.sequenceCount(); got != 5 {
-		t.Fatalf("migration sequences across explicit invocations = %d, want 5", got)
+	if got := server.sequenceCount(); got != 6 {
+		t.Fatalf("migration sequences across explicit invocations = %d, want 6", got)
 	}
 }
 
@@ -640,7 +666,7 @@ func TestMigrationRepairsCommittedLedgerWithoutTerminalMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 4}) {
+	if result != (storage.MigrationResult{Current: 5}) {
 		t.Fatalf("Migrate() result = %#v, want marker-only reconciliation", result)
 	}
 	if got := server.sequenceCount(); got != 0 {
@@ -649,8 +675,8 @@ func TestMigrationRepairsCommittedLedgerWithoutTerminalMarker(t *testing.T) {
 	if got := server.terminalSequenceCount(); got != 1 {
 		t.Fatalf("terminal sequences = %d, want one marker repair", got)
 	}
-	if got := server.userVersionValue(); got != 4 {
-		t.Fatalf("durable user_version = %d, want 4", got)
+	if got := server.userVersionValue(); got != 5 {
+		t.Fatalf("durable user_version = %d, want 5", got)
 	}
 }
 
@@ -673,7 +699,7 @@ func TestMigrationMarkerRepairDoesNotOverwriteConcurrentAdvance(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("marker repair did not reach the locked race point")
 	}
-	server.setUserVersion(5)
+	server.setUserVersion(6)
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case err := <-result:
@@ -683,8 +709,8 @@ func TestMigrationMarkerRepairDoesNotOverwriteConcurrentAdvance(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("marker repair did not return after race release")
 	}
-	if got := server.userVersionValue(); got != 5 {
-		t.Fatalf("durable user_version = %d, want concurrent value 5 preserved", got)
+	if got := server.userVersionValue(); got != 6 {
+		t.Fatalf("durable user_version = %d, want concurrent value 6 preserved", got)
 	}
 
 	fresh := openMigrationContractHandle(t, server.URL)
@@ -787,11 +813,11 @@ func TestMigrationTerminalSequenceResponsesRequireSeparateMarkerVisibility(t *te
 				if err != nil {
 					t.Fatalf("Migrate() error = %v", err)
 				}
-				if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
+				if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
 					t.Fatalf("Migrate() result = %#v, want proven migration", result)
 				}
-				if got := server.userVersionValue(); got != 4 {
-					t.Fatalf("durable user_version = %d, want 4", got)
+				if got := server.userVersionValue(); got != 5 {
+					t.Fatalf("durable user_version = %d, want 5", got)
 				}
 				return
 			}
@@ -812,11 +838,11 @@ func TestMigrationTerminalSequenceResponsesRequireSeparateMarkerVisibility(t *te
 			if freshErr != nil {
 				t.Fatalf("fresh Migrate() error = %v", freshErr)
 			}
-			if freshResult != (storage.MigrationResult{Applied: 3, Current: 4}) {
+			if freshResult != (storage.MigrationResult{Applied: 4, Current: 5}) {
 				t.Fatalf("fresh Migrate() result = %#v, want marker repair and migrations 2 through 4", freshResult)
 			}
-			if got := server.sequenceCount(); got != 4 {
-				t.Fatalf("migration sequences after fresh reconciliation = %d, want only migrations 2 through 4 after no schema replay", got)
+			if got := server.sequenceCount(); got != 5 {
+				t.Fatalf("migration sequences after fresh reconciliation = %d, want only migrations 2 through 5 after no schema replay", got)
 			}
 		})
 	}
@@ -871,7 +897,7 @@ func TestMigrationCurrentSchemaAvoidsAmbiguousFinalCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 4}) {
+	if result != (storage.MigrationResult{Current: 5}) {
 		t.Fatalf("Migrate() result = %#v, want current migration 3", result)
 	}
 	if got := server.countSQL(beginImmediateSQL); got != 0 {
@@ -961,11 +987,11 @@ func TestMigrationStatementFailureAttemptsRollbackAndReturnsUnknown(t *testing.T
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 4, Current: 4}) {
+	if result != (storage.MigrationResult{Applied: 5, Current: 5}) {
 		t.Fatalf("fresh Migrate() result = %#v, want atomic reconciliation", result)
 	}
-	if got := server.sequenceCount(); got != 5 {
-		t.Fatalf("sequence requests across explicit invocations = %d, want 5", got)
+	if got := server.sequenceCount(); got != 6 {
+		t.Fatalf("sequence requests across explicit invocations = %d, want 6", got)
 	}
 }
 
@@ -1398,11 +1424,11 @@ func TestMigrationStalledWriteCommitAndCleanupAreNotReplayed(t *testing.T) {
 			if freshErr != nil {
 				t.Fatalf("fresh Migrate() error = %v", freshErr)
 			}
-			wantFresh := storage.MigrationResult{Applied: 4, Current: 4}
-			wantSequences := 5
+			wantFresh := storage.MigrationResult{Applied: 5, Current: 5}
+			wantSequences := 6
 			if tt.wantDurable {
-				wantFresh = storage.MigrationResult{Applied: 3, Current: 4}
-				wantSequences = 4
+				wantFresh = storage.MigrationResult{Applied: 4, Current: 5}
+				wantSequences = 5
 			}
 			if freshResult != wantFresh {
 				t.Fatalf("fresh Migrate() result = %#v, want %#v", freshResult, wantFresh)
@@ -1483,11 +1509,11 @@ func TestMigrationRollbackCleanupUsesIndependentContext(t *testing.T) {
 	if freshErr != nil {
 		t.Fatalf("fresh Migrate() error = %v", freshErr)
 	}
-	if freshResult != (storage.MigrationResult{Applied: 4, Current: 4}) {
+	if freshResult != (storage.MigrationResult{Applied: 5, Current: 5}) {
 		t.Fatalf("fresh Migrate() result = %#v, want four applied migrations", freshResult)
 	}
-	if got := server.sequenceCount(); got != 5 {
-		t.Fatalf("migration sequences after fresh reconciliation = %d, want 5", got)
+	if got := server.sequenceCount(); got != 6 {
+		t.Fatalf("migration sequences after fresh reconciliation = %d, want 6", got)
 	}
 }
 
@@ -1529,11 +1555,11 @@ func TestConcurrentMigrationSequencesConvergeAfterUnknownLockOutcome(t *testing.
 	if err != nil {
 		t.Fatalf("reconciliation Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 4}) {
+	if result != (storage.MigrationResult{Current: 5}) {
 		t.Fatalf("reconciliation result = %#v, want current migration 3", result)
 	}
-	if got := server.sequenceCount(); got != 5 {
-		t.Fatalf("sequence requests = %d, want four successful and one rejected sequence", got)
+	if got := server.sequenceCount(); got != 6 {
+		t.Fatalf("sequence requests = %d, want five successful and one rejected sequence", got)
 	}
 }
 
@@ -1659,72 +1685,82 @@ func (d *failNthConnectionDatabase) Conn(ctx context.Context) (*sql.Conn, error)
 type migrationProtocolServer struct {
 	*httptest.Server
 
-	testing                 *testing.T
-	mu                      sync.Mutex
-	ledger                  map[int]string
-	pending                 map[int]string
-	userVersion             int
-	pendingUserVersion      int
-	inTxn                   bool
-	exists                  bool
-	pendingExists           bool
-	pendingSecondSchema     bool
-	pendingThirdSchema      bool
-	pendingCredentialSchema bool
-	pendingLifecycleSchema  bool
-	drop                    bool
-	dropBeforeCommit        bool
-	headerOnlyCommit        bool
-	headerOnlyRollback      bool
-	headerOnlyBegin         bool
-	headerOnlyMigration     bool
-	malformedSequence       bool
-	omitSequenceResult      bool
-	malformedAutocommit     bool
-	omitSequencePayload     bool
-	wrongSequencePayload    bool
-	falseAutocommit         bool
-	holdTransaction         bool
-	terminalMalformed       bool
-	terminalOmitResult      bool
-	terminalBadAuto         bool
-	terminalFalseAuto       bool
-	terminalOmitPayload     bool
-	terminalWrongPayload    bool
-	terminalSkipMarker      bool
-	ignoredRollbacks        int
-	ignoredCloses           int
-	failSQL                 string
-	failSQLSkip             int
-	ledgerRowsOverride      [][]any
-	stallSQL                string
-	stallStarted            chan struct{}
-	stallRelease            chan struct{}
-	stallFinished           chan struct{}
-	beforeSequenceStart     chan struct{}
-	beforeSequenceAllow     chan struct{}
-	beforeTerminalStart     chan struct{}
-	beforeTerminalAllow     chan struct{}
-	secondSchema            bool
-	thirdSchema             bool
-	credentialSchema        bool
-	lifecycleSchema         bool
-	accounts                map[string]string
-	cursors                 map[string]string
-	credentials             map[string]syntheticCredential
-	lifecycles              map[string]syntheticLifecycle
-	persistenceMode         string
-	persistenceStatement    string
-	persistenceStarted      chan struct{}
-	persistenceRelease      chan struct{}
-	persistenceRows         map[string][][]any
-	persistenceColumns      map[string][]any
-	nextCursorBaseURL       string
-	nextCursorBaton         int
-	closedCursorAt          map[string]int
-	closedCursorCount       map[string]int
-	records                 []migrationRequest
-	pipelineRecords         []migrationPipelineRequest
+	testing                       *testing.T
+	mu                            sync.Mutex
+	ledger                        map[int]string
+	pending                       map[int]string
+	userVersion                   int
+	pendingUserVersion            int
+	inTxn                         bool
+	exists                        bool
+	pendingExists                 bool
+	pendingSecondSchema           bool
+	pendingThirdSchema            bool
+	pendingCredentialSchema       bool
+	pendingLifecycleSchema        bool
+	pendingCurrentDiscoverySchema bool
+	drop                          bool
+	dropBeforeCommit              bool
+	headerOnlyCommit              bool
+	headerOnlyRollback            bool
+	headerOnlyBegin               bool
+	headerOnlyMigration           bool
+	malformedSequence             bool
+	omitSequenceResult            bool
+	malformedAutocommit           bool
+	omitSequencePayload           bool
+	wrongSequencePayload          bool
+	falseAutocommit               bool
+	holdTransaction               bool
+	terminalMalformed             bool
+	terminalOmitResult            bool
+	terminalBadAuto               bool
+	terminalFalseAuto             bool
+	terminalOmitPayload           bool
+	terminalWrongPayload          bool
+	terminalSkipMarker            bool
+	ignoredRollbacks              int
+	ignoredCloses                 int
+	failSQL                       string
+	failSQLSkip                   int
+	ledgerRowsOverride            [][]any
+	stallSQL                      string
+	stallStarted                  chan struct{}
+	stallRelease                  chan struct{}
+	stallFinished                 chan struct{}
+	beforeSequenceStart           chan struct{}
+	beforeSequenceAllow           chan struct{}
+	beforeTerminalStart           chan struct{}
+	beforeTerminalAllow           chan struct{}
+	secondSchema                  bool
+	thirdSchema                   bool
+	credentialSchema              bool
+	lifecycleSchema               bool
+	currentDiscoverySchema        bool
+	accounts                      map[string]string
+	cursors                       map[string]string
+	credentials                   map[string]syntheticCredential
+	lifecycles                    map[string]syntheticLifecycle
+	currentAttempts               map[string]*syntheticCurrentDiscoveryAttempt
+	discoveredMessages            map[string]map[string]syntheticDiscoveredMessage
+	discoveredRecords             map[string]syntheticDiscoveredMessage
+	persistenceMode               string
+	persistenceStatement          string
+	persistenceStarted            chan struct{}
+	persistenceRelease            chan struct{}
+	barrierSQL                    string
+	barrierTarget                 int
+	barrierArrived                int
+	barrierStarted                chan struct{}
+	barrierRelease                chan struct{}
+	persistenceRows               map[string][][]any
+	persistenceColumns            map[string][]any
+	nextCursorBaseURL             string
+	nextCursorBaton               int
+	closedCursorAt                map[string]int
+	closedCursorCount             map[string]int
+	records                       []migrationRequest
+	pipelineRecords               []migrationPipelineRequest
 }
 
 type migrationProtocolHost struct {
@@ -1743,6 +1779,7 @@ type migrationRequest struct {
 	args          []protocolValue
 	namedArgCount int
 	wantRows      bool
+	bodyBytes     int
 }
 
 type migrationPipelineRequest struct {
@@ -1755,6 +1792,49 @@ type syntheticLifecycle struct {
 	version    int64
 	reason     *string
 	revocation string
+}
+
+type syntheticCurrentDiscoveryAttempt struct {
+	attemptID       string
+	expected        string
+	next            string
+	messageCount    int
+	encodedBytes    int64
+	manifestHash    string
+	manifestWitness string
+	state           string
+	staging         map[int]syntheticDiscoveredMessage
+}
+
+type syntheticDiscoveredMessage struct {
+	recordID     string
+	accountID    string
+	messageID    string
+	threadID     string
+	version      int64
+	metadataJSON string
+	metadataHash string
+	encodedBytes int64
+	rowWitness   string
+}
+
+func syntheticRowWitness(message syntheticDiscoveredMessage) string {
+	return fmt.Sprintf("%08x%s%08x%s%08x%s%08x%08x%s%08x%s",
+		len(message.recordID), hex.EncodeToString([]byte(message.recordID)),
+		len(message.messageID), hex.EncodeToString([]byte(message.messageID)),
+		len(message.threadID), hex.EncodeToString([]byte(message.threadID)),
+		message.version, len(message.metadataJSON), hex.EncodeToString([]byte(message.metadataJSON)),
+		len(message.metadataHash), hex.EncodeToString([]byte(message.metadataHash)))
+}
+
+func syntheticManifestWitness(attempt *syntheticCurrentDiscoveryAttempt) string {
+	var witness strings.Builder
+	witness.WriteString("696e626f78676174652f63757272656e742d73796e632d6d616e69666573742f763100")
+	_, _ = fmt.Fprintf(&witness, "%08x", attempt.messageCount)
+	for ordinal := 0; ordinal < attempt.messageCount; ordinal++ {
+		witness.WriteString(attempt.staging[ordinal].rowWitness)
+	}
+	return witness.String()
 }
 
 type migrationStreamRequest struct {
@@ -1802,6 +1882,9 @@ func newMigrationProtocolServer(t *testing.T) *migrationProtocolServer {
 		cursors:            make(map[string]string),
 		credentials:        make(map[string]syntheticCredential),
 		lifecycles:         make(map[string]syntheticLifecycle),
+		currentAttempts:    make(map[string]*syntheticCurrentDiscoveryAttempt),
+		discoveredMessages: make(map[string]map[string]syntheticDiscoveredMessage),
+		discoveredRecords:  make(map[string]syntheticDiscoveredMessage),
 		persistenceRows:    make(map[string][][]any),
 		persistenceColumns: make(map[string][]any),
 		closedCursorAt:     make(map[string]int),
@@ -1860,7 +1943,7 @@ func (s *migrationProtocolServer) serveHTTP(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *migrationProtocolServer) serveCursor(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, storage.MaximumCurrentDiscoveryStageWireBytes+1))
 	if err != nil {
 		s.testing.Errorf("read cursor request: %v", err)
 		http.Error(w, "invalid synthetic request", http.StatusBadRequest)
@@ -1881,6 +1964,7 @@ func (s *migrationProtocolServer) serveCursor(w http.ResponseWriter, r *http.Req
 		args:          statement.Args,
 		namedArgCount: len(statement.NamedArgs),
 		wantRows:      statement.WantRows,
+		bodyBytes:     len(body),
 	})
 	responseBaton := ""
 	if request.Baton == nil {
@@ -1908,7 +1992,20 @@ func (s *migrationProtocolServer) serveCursor(w http.ResponseWriter, r *http.Req
 		s.writeStatementFailure(w, true, responseBaton)
 		return
 	}
-	if s.persistenceStatement == statement.SQL && s.persistenceStarted != nil {
+	if s.barrierSQL == statement.SQL && s.barrierArrived < s.barrierTarget {
+		s.barrierArrived++
+		if s.barrierArrived == s.barrierTarget {
+			close(s.barrierStarted)
+		}
+		release := s.barrierRelease
+		s.mu.Unlock()
+		select {
+		case <-release:
+		case <-time.After(time.Second):
+		}
+		s.mu.Lock()
+	}
+	if s.persistenceStatement == statement.SQL && s.persistenceStarted != nil && s.persistenceMode != "body-stall" {
 		started := s.persistenceStarted
 		release := s.persistenceRelease
 		s.persistenceStarted = nil
@@ -1999,8 +2096,15 @@ func (s *migrationProtocolServer) serveCursor(w http.ResponseWriter, r *http.Req
 	rows, affected, drop := s.execute(statement.SQL, statement.Args)
 	overrideColumns := append([]any(nil), s.persistenceColumns[statement.SQL]...)
 	persistenceMode := ""
+	var bodyStarted, bodyRelease chan struct{}
 	if s.persistenceStatement == statement.SQL {
 		persistenceMode = s.persistenceMode
+		if persistenceMode == "body-stall" {
+			bodyStarted = s.persistenceStarted
+			bodyRelease = s.persistenceRelease
+			s.persistenceStarted = nil
+			s.persistenceRelease = nil
+		}
 		s.persistenceMode = ""
 		s.persistenceStatement = ""
 	}
@@ -2033,6 +2137,17 @@ func (s *migrationProtocolServer) serveCursor(w http.ResponseWriter, r *http.Req
 		baseURL = responseBaseURL
 	}
 	_ = encoder.Encode(map[string]any{"baton": responseBaton, "base_url": baseURL})
+	if bodyStarted != nil {
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		close(bodyStarted)
+		select {
+		case <-bodyRelease:
+		case <-r.Context().Done():
+			return
+		}
+	}
 	columns := []any{}
 	if statement.SQL == ledgerExistsSQL {
 		columns = []any{map[string]any{"name": "exists", "decltype": "INTEGER"}}
@@ -2095,6 +2210,68 @@ func (s *migrationProtocolServer) serveCursor(w http.ResponseWriter, r *http.Req
 			map[string]any{"name": "revocation_status", "decltype": "TEXT"},
 			map[string]any{"name": "cursor_present", "decltype": "INTEGER"},
 			map[string]any{"name": "credential_present", "decltype": "INTEGER"},
+		}
+	} else if statement.SQL == currentDiscoveryAttemptLookupSQL {
+		columns = []any{
+			map[string]any{"name": "sentinel", "decltype": "INTEGER"},
+			map[string]any{"name": "account_count", "decltype": "INTEGER"},
+			map[string]any{"name": "attempt_count", "decltype": "INTEGER"},
+			map[string]any{"name": "account_id", "decltype": "TEXT"},
+			map[string]any{"name": "attempt_id", "decltype": "TEXT"},
+			map[string]any{"name": "expected_history_id", "decltype": "TEXT"},
+			map[string]any{"name": "next_history_id", "decltype": "TEXT"},
+			map[string]any{"name": "message_count", "decltype": "INTEGER"},
+			map[string]any{"name": "encoded_bytes", "decltype": "INTEGER"},
+			map[string]any{"name": "manifest_hash", "decltype": "TEXT"},
+			map[string]any{"name": "manifest_witness", "decltype": "TEXT"},
+			map[string]any{"name": "state", "decltype": "TEXT"},
+		}
+	} else if statement.SQL == currentDiscoveryStageLookupSQL {
+		columns = []any{
+			map[string]any{"name": "sentinel", "decltype": "INTEGER"},
+			map[string]any{"name": "attempt_id", "decltype": "TEXT"},
+			map[string]any{"name": "ordinal", "decltype": "INTEGER"},
+			map[string]any{"name": "record_id", "decltype": "TEXT"},
+			map[string]any{"name": "gmail_message_id", "decltype": "TEXT"},
+			map[string]any{"name": "gmail_thread_id", "decltype": "TEXT"},
+			map[string]any{"name": "metadata_version", "decltype": "INTEGER"},
+			map[string]any{"name": "metadata_json", "decltype": "TEXT"},
+			map[string]any{"name": "metadata_hash", "decltype": "TEXT"},
+			map[string]any{"name": "encoded_bytes", "decltype": "INTEGER"},
+			map[string]any{"name": "row_witness", "decltype": "TEXT"},
+		}
+	} else if statement.SQL == currentDiscoveryNaturalKeyLookupSQL {
+		columns = []any{
+			map[string]any{"name": "sentinel", "decltype": "INTEGER"},
+			map[string]any{"name": "message_count", "decltype": "INTEGER"},
+			map[string]any{"name": "record_id", "decltype": "TEXT"},
+			map[string]any{"name": "gmail_thread_id", "decltype": "TEXT"},
+		}
+	} else if statement.SQL == currentDiscoveryMessageLookupSQL {
+		columns = []any{
+			map[string]any{"name": "sentinel", "decltype": "INTEGER"},
+			map[string]any{"name": "account_count", "decltype": "INTEGER"},
+			map[string]any{"name": "message_count", "decltype": "INTEGER"},
+			map[string]any{"name": "record_id", "decltype": "TEXT"},
+			map[string]any{"name": "account_id", "decltype": "TEXT"},
+			map[string]any{"name": "gmail_message_id", "decltype": "TEXT"},
+			map[string]any{"name": "gmail_thread_id", "decltype": "TEXT"},
+			map[string]any{"name": "metadata_version", "decltype": "INTEGER"},
+			map[string]any{"name": "metadata_json", "decltype": "TEXT"},
+			map[string]any{"name": "metadata_hash", "decltype": "TEXT"},
+		}
+	} else if statement.SQL == currentDiscoveryRecordLookupSQL {
+		columns = []any{
+			map[string]any{"name": "sentinel", "decltype": "INTEGER"},
+			map[string]any{"name": "message_count", "decltype": "INTEGER"},
+			map[string]any{"name": "account_id", "decltype": "TEXT"},
+			map[string]any{"name": "gmail_message_id", "decltype": "TEXT"},
+		}
+	} else if statement.SQL == currentDiscoveryProofSQL || statement.SQL == currentDiscoveryStageProofSQL {
+		columns = []any{
+			map[string]any{"name": "sentinel", "decltype": "INTEGER"},
+			map[string]any{"name": "expected_count", "decltype": "INTEGER"},
+			map[string]any{"name": "matched_count", "decltype": "INTEGER"},
 		}
 	}
 	if overrideColumns != nil {
@@ -2213,6 +2390,8 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 		s.secondSchema = s.pendingSecondSchema
 		s.thirdSchema = s.pendingThirdSchema
 		s.credentialSchema = s.pendingCredentialSchema
+		s.lifecycleSchema = s.pendingLifecycleSchema
+		s.currentDiscoverySchema = s.pendingCurrentDiscoverySchema
 		s.inTxn = false
 		if s.drop {
 			s.drop = false
@@ -2231,6 +2410,7 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 		s.pendingThirdSchema = false
 		s.pendingCredentialSchema = false
 		s.pendingLifecycleSchema = false
+		s.pendingCurrentDiscoverySchema = false
 		s.inTxn = false
 		return nil, 0, false
 	case accountLookupSQL:
@@ -2296,16 +2476,10 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 	case cursorCommitSQL:
 		accountID := parseProtocolValue(args[0])
 		next := parseProtocolValue(args[1])
-		if _, ok := s.accounts[accountID]; !ok {
+		if _, ok := s.accounts[accountID]; !ok || s.currentAttempts[accountID] != nil {
 			return nil, 0, false
 		}
-		current, exists := s.cursors[accountID]
-		expected := parseProtocolValue(args[4])
-		if !exists && expected == "" {
-			s.cursors[accountID] = next
-			return nil, 1, false
-		}
-		if exists && expected == current && historyTextLess(current, next) {
+		if _, exists := s.cursors[accountID]; !exists {
 			s.cursors[accountID] = next
 			return nil, 1, false
 		}
@@ -2419,6 +2593,9 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 		}
 		current.revocation = revocation
 		s.lifecycles[accountID] = current
+		if nextState == "revoked" {
+			delete(s.currentAttempts, accountID)
+		}
 		return nil, 1, false
 	case revokedCredentialDeleteSQL:
 		accountID := parseProtocolValue(args[0])
@@ -2430,6 +2607,219 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 		}
 		delete(s.credentials, accountID)
 		return nil, 1, false
+	case currentDiscoveryAttemptLookupSQL:
+		accountID := parseProtocolValue(args[0])
+		accountCount := int64(0)
+		if _, ok := s.accounts[accountID]; ok {
+			accountCount = 1
+		}
+		row := []any{integerValue(1), integerValue(accountCount), integerValue(0), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue()}
+		if attempt := s.currentAttempts[accountID]; attempt != nil {
+			row[2] = integerValue(1)
+			row[3] = textValue(accountID)
+			row[4] = textValue(attempt.attemptID)
+			row[5] = textValue(attempt.expected)
+			row[6] = textValue(attempt.next)
+			row[7] = integerValue(int64(attempt.messageCount))
+			row[8] = integerValue(attempt.encodedBytes)
+			row[9] = textValue(attempt.manifestHash)
+			row[10] = textValue(attempt.manifestWitness)
+			row[11] = textValue(attempt.state)
+		}
+		return [][]any{row}, 0, false
+	case currentDiscoveryStageLookupSQL:
+		accountID := parseProtocolValue(args[0])
+		attempt := s.currentAttempts[accountID]
+		if attempt == nil {
+			return [][]any{{integerValue(1), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue()}}, 0, false
+		}
+		ordinals := make([]int, 0, len(attempt.staging))
+		for ordinal := range attempt.staging {
+			ordinals = append(ordinals, ordinal)
+		}
+		sort.Ints(ordinals)
+		if len(ordinals) == 0 {
+			return [][]any{{integerValue(1), textValue(attempt.attemptID), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue()}}, 0, false
+		}
+		rows := make([][]any, 0, len(ordinals))
+		for _, ordinal := range ordinals {
+			message := attempt.staging[ordinal]
+			rows = append(rows, []any{integerValue(1), textValue(attempt.attemptID), integerValue(int64(ordinal)), textValue(message.recordID), textValue(message.messageID), textValue(message.threadID), integerValue(message.version), textValue(message.metadataJSON), textValue(message.metadataHash), integerValue(message.encodedBytes), textValue(message.rowWitness)})
+		}
+		return rows, 0, false
+	case currentDiscoveryAttemptCreateSQL:
+		accountID := parseProtocolValue(args[0])
+		lifecycle := s.lifecycles[accountID]
+		if _, ok := s.accounts[accountID]; !ok || s.currentAttempts[accountID] != nil || lifecycle.state != "active" || s.cursors[accountID] != parseProtocolValue(args[2]) {
+			return nil, 0, false
+		}
+		messageCount, countErr := strconv.Atoi(parseProtocolValue(args[4]))
+		encodedBytes, bytesErr := strconv.ParseInt(parseProtocolValue(args[5]), 10, 64)
+		if countErr != nil || bytesErr != nil {
+			return nil, 0, false
+		}
+		s.currentAttempts[accountID] = &syntheticCurrentDiscoveryAttempt{
+			attemptID: parseProtocolValue(args[1]), expected: parseProtocolValue(args[2]), next: parseProtocolValue(args[3]),
+			messageCount: messageCount, encodedBytes: encodedBytes, manifestHash: parseProtocolValue(args[6]), manifestWitness: parseProtocolValue(args[7]), state: "open", staging: make(map[int]syntheticDiscoveredMessage),
+		}
+		return nil, 1, false
+	case currentDiscoveryStageSQL:
+		accountID := parseProtocolValue(args[0])
+		attempt := s.currentAttempts[accountID]
+		if attempt == nil || attempt.attemptID != parseProtocolValue(args[1]) || attempt.state != "open" || len(args) != storage.CurrentDiscoveryStageParameters {
+			return nil, 0, false
+		}
+		affected := int64(0)
+		for slot := 0; slot < storage.CurrentDiscoveryStageChunkMessages; slot++ {
+			base := 2 + slot*8
+			present, _ := strconv.ParseInt(parseProtocolValue(args[base]), 10, 64)
+			if present == 0 {
+				continue
+			}
+			ordinal, ordinalErr := strconv.Atoi(parseProtocolValue(args[base+1]))
+			version, versionErr := strconv.ParseInt(parseProtocolValue(args[base+5]), 10, 64)
+			if present != 1 || ordinalErr != nil || versionErr != nil || ordinal < 0 || ordinal >= attempt.messageCount {
+				return nil, 0, false
+			}
+			message := syntheticDiscoveredMessage{
+				recordID: parseProtocolValue(args[base+2]), accountID: accountID, messageID: parseProtocolValue(args[base+3]), threadID: parseProtocolValue(args[base+4]),
+				version: version, metadataJSON: parseProtocolValue(args[base+6]), metadataHash: parseProtocolValue(args[base+7]),
+			}
+			message.encodedBytes = int64(4 + len(message.recordID) + 4 + len(message.messageID) + 4 + len(message.threadID) + 4 + 4 + len(message.metadataJSON) + 4 + len(message.metadataHash))
+			message.rowWitness = syntheticRowWitness(message)
+			if existing, ok := attempt.staging[ordinal]; ok {
+				if existing != message {
+					return nil, 0, false
+				}
+			} else {
+				attempt.staging[ordinal] = message
+			}
+			affected++
+		}
+		return nil, affected, false
+	case currentDiscoverySealSQL:
+		accountID := parseProtocolValue(args[0])
+		attempt := s.currentAttempts[accountID]
+		if attempt == nil || attempt.attemptID != parseProtocolValue(args[1]) || attempt.state != "open" || attempt.expected != parseProtocolValue(args[2]) || attempt.next != parseProtocolValue(args[3]) || attempt.manifestHash != parseProtocolValue(args[6]) || attempt.manifestWitness != parseProtocolValue(args[7]) || len(attempt.staging) != attempt.messageCount {
+			return nil, 0, false
+		}
+		var total int64
+		for ordinal := 0; ordinal < attempt.messageCount; ordinal++ {
+			message, ok := attempt.staging[ordinal]
+			if !ok {
+				return nil, 0, false
+			}
+			total += message.encodedBytes
+		}
+		if total != attempt.encodedBytes || syntheticManifestWitness(attempt) != attempt.manifestWitness {
+			return nil, 0, false
+		}
+		attempt.state = "sealed"
+		return nil, 1, false
+	case currentDiscoveryFinalizeSQL:
+		accountID := parseProtocolValue(args[0])
+		attempt := s.currentAttempts[accountID]
+		lifecycle := s.lifecycles[accountID]
+		if attempt == nil || attempt.attemptID != parseProtocolValue(args[1]) || attempt.manifestHash != parseProtocolValue(args[2]) || attempt.state != "sealed" || lifecycle.state != "active" || s.cursors[accountID] != attempt.expected || len(attempt.staging) != attempt.messageCount || syntheticManifestWitness(attempt) != attempt.manifestWitness {
+			return nil, 0, false
+		}
+		for ordinal := 0; ordinal < attempt.messageCount; ordinal++ {
+			message, ok := attempt.staging[ordinal]
+			if !ok || message.rowWitness != syntheticRowWitness(message) {
+				return nil, 0, false
+			}
+			if occupied, ok := s.discoveredRecords[message.recordID]; ok && (occupied.accountID != accountID || occupied.messageID != message.messageID) {
+				return nil, 0, false
+			}
+			if existing, ok := s.discoveredMessages[accountID][message.messageID]; ok && (existing.recordID != message.recordID || existing.threadID != message.threadID) {
+				return nil, 0, false
+			}
+		}
+		if s.discoveredMessages[accountID] == nil {
+			s.discoveredMessages[accountID] = make(map[string]syntheticDiscoveredMessage)
+		}
+		for ordinal := 0; ordinal < attempt.messageCount; ordinal++ {
+			message := attempt.staging[ordinal]
+			s.discoveredMessages[accountID][message.messageID] = message
+			s.discoveredRecords[message.recordID] = message
+		}
+		s.cursors[accountID] = attempt.next
+		delete(s.currentAttempts, accountID)
+		return nil, 1, false
+	case currentDiscoveryAbortSQL:
+		accountID := parseProtocolValue(args[0])
+		attempt := s.currentAttempts[accountID]
+		if attempt == nil || attempt.attemptID != parseProtocolValue(args[1]) || attempt.state != "open" || s.cursors[accountID] != attempt.expected || s.lifecycles[accountID].state != "active" {
+			return nil, 0, false
+		}
+		delete(s.currentAttempts, accountID)
+		return nil, 1, false
+	case currentDiscoveryProofSQL, currentDiscoveryStageProofSQL:
+		accountID := parseProtocolValue(args[0])
+		attemptID := parseProtocolValue(args[1])
+		var expected, matched int64
+		for slot := 0; slot < storage.CurrentDiscoveryStageChunkMessages; slot++ {
+			base := 2 + slot*8
+			present, _ := strconv.ParseInt(parseProtocolValue(args[base]), 10, 64)
+			if present != 1 {
+				continue
+			}
+			expected++
+			messageID := parseProtocolValue(args[base+3])
+			version, _ := strconv.ParseInt(parseProtocolValue(args[base+5]), 10, 64)
+			message, ok := s.discoveredMessages[accountID][messageID]
+			if statement == currentDiscoveryStageProofSQL {
+				attempt := s.currentAttempts[accountID]
+				ordinal, _ := strconv.Atoi(parseProtocolValue(args[base+1]))
+				if attempt == nil || attempt.attemptID != attemptID || attempt.state != "open" {
+					ok = false
+				} else {
+					message, ok = attempt.staging[ordinal]
+				}
+			}
+			if ok && message.recordID == parseProtocolValue(args[base+2]) && message.threadID == parseProtocolValue(args[base+4]) && message.version == version && message.metadataJSON == parseProtocolValue(args[base+6]) && message.metadataHash == parseProtocolValue(args[base+7]) {
+				matched++
+			}
+		}
+		return [][]any{{integerValue(1), integerValue(expected), integerValue(matched)}}, 0, false
+	case currentDiscoveryMessageLookupSQL:
+		accountID := parseProtocolValue(args[0])
+		messageID := parseProtocolValue(args[1])
+		accountCount := int64(0)
+		if _, ok := s.accounts[accountID]; ok {
+			accountCount = 1
+		}
+		row := []any{integerValue(1), integerValue(accountCount), integerValue(0), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue()}
+		if message, ok := s.discoveredMessages[accountID][messageID]; ok {
+			row[2] = integerValue(1)
+			row[3] = textValue(message.recordID)
+			row[4] = textValue(accountID)
+			row[5] = textValue(message.messageID)
+			row[6] = textValue(message.threadID)
+			row[7] = integerValue(message.version)
+			row[8] = textValue(message.metadataJSON)
+			row[9] = textValue(message.metadataHash)
+		}
+		return [][]any{row}, 0, false
+	case currentDiscoveryRecordLookupSQL:
+		recordID := parseProtocolValue(args[0])
+		row := []any{integerValue(1), integerValue(0), nullValue(), nullValue()}
+		if message, ok := s.discoveredRecords[recordID]; ok {
+			row[1] = integerValue(1)
+			row[2] = textValue(message.accountID)
+			row[3] = textValue(message.messageID)
+		}
+		return [][]any{row}, 0, false
+	case currentDiscoveryNaturalKeyLookupSQL:
+		accountID := parseProtocolValue(args[0])
+		messageID := parseProtocolValue(args[1])
+		row := []any{integerValue(1), integerValue(0), nullValue(), nullValue()}
+		if message, ok := s.discoveredMessages[accountID][messageID]; ok {
+			row[1] = integerValue(1)
+			row[2] = textValue(message.recordID)
+			row[3] = textValue(message.threadID)
+		}
+		return [][]any{row}, 0, false
 	default:
 		if strings.HasPrefix(statement, "CREATE TABLE inboxgate_schema_migrations") {
 			if s.inTxn {
@@ -2662,6 +3052,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	s.pendingThirdSchema = s.thirdSchema
 	s.pendingCredentialSchema = s.credentialSchema
 	s.pendingLifecycleSchema = s.lifecycleSchema
+	s.pendingCurrentDiscoverySchema = s.currentDiscoverySchema
 	s.stallSequenceStage("sequence", beginImmediateSQL)
 	if s.failSequenceStage(beginImmediateSQL) {
 		s.mu.Unlock()
@@ -2671,6 +3062,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	migrationNumber := 0
 	credentialMigration := false
 	lifecycleMigration := false
+	currentDiscoveryMigration := false
 	switch {
 	case strings.Contains(sequence, expectedMigrationSQL):
 		migrationNumber = 1
@@ -2682,6 +3074,9 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	case strings.Contains(sequence, expectedLifecycleMigrationSQL):
 		migrationNumber = 4
 		lifecycleMigration = true
+	case strings.Contains(sequence, expectedCurrentDiscoveryMigrationSQL):
+		migrationNumber = 5
+		currentDiscoveryMigration = true
 	case strings.Contains(sequence, expectedSecondMigrationSQL):
 		migrationNumber = 2
 	case strings.Contains(sequence, expectedThirdMigrationSQL):
@@ -2711,6 +3106,8 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 		s.pendingCredentialSchema = true
 	} else if lifecycleMigration {
 		s.pendingLifecycleSchema = true
+	} else if currentDiscoveryMigration {
+		s.pendingCurrentDiscoverySchema = true
 	} else {
 		s.pendingThirdSchema = true
 	}
@@ -2740,6 +3137,8 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 		s.pendingSecondSchema = false
 		s.pendingThirdSchema = false
 		s.pendingCredentialSchema = false
+		s.pendingLifecycleSchema = false
+		s.pendingCurrentDiscoverySchema = false
 		s.mu.Unlock()
 		writeDroppedPipelineResponse(w)
 		return
@@ -2775,6 +3174,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	s.thirdSchema = s.pendingThirdSchema
 	s.credentialSchema = s.pendingCredentialSchema
 	s.lifecycleSchema = s.pendingLifecycleSchema
+	s.currentDiscoverySchema = s.pendingCurrentDiscoverySchema
 	s.inTxn = false
 	s.pending = nil
 	s.pendingExists = false
@@ -2783,6 +3183,8 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	s.pendingThirdSchema = false
 	s.pendingCredentialSchema = false
 	s.pendingLifecycleSchema = false
+	s.pendingCurrentDiscoverySchema = false
+	s.pendingCurrentDiscoverySchema = false
 	s.stallSequenceStage(commitAfterDurabilityStage)
 	if s.drop {
 		s.drop = false
@@ -2988,10 +3390,12 @@ func (s *migrationProtocolServer) seedEmbeddedCatalog() {
 	s.ledger[2] = expectedAccountMigrationChecksum
 	s.ledger[3] = expectedCredentialMigrationChecksum
 	s.ledger[4] = expectedLifecycleMigrationChecksum
+	s.ledger[5] = expectedCurrentDiscoveryMigrationChecksum
 	s.secondSchema = true
 	s.credentialSchema = true
 	s.lifecycleSchema = true
-	s.userVersion = 4
+	s.currentDiscoverySchema = true
+	s.userVersion = 5
 }
 
 func (s *migrationProtocolServer) dropNextCommit() {
@@ -3210,7 +3614,7 @@ func (s *migrationProtocolServer) assertCommittedCatalog(t *testing.T) {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.exists || s.ledger[1] != expectedMigrationChecksum || s.ledger[2] != expectedAccountMigrationChecksum || s.ledger[3] != expectedCredentialMigrationChecksum || s.ledger[4] != expectedLifecycleMigrationChecksum {
+	if !s.exists || s.ledger[1] != expectedMigrationChecksum || s.ledger[2] != expectedAccountMigrationChecksum || s.ledger[3] != expectedCredentialMigrationChecksum || s.ledger[4] != expectedLifecycleMigrationChecksum || s.ledger[5] != expectedCurrentDiscoveryMigrationChecksum {
 		t.Fatalf("durable ledger = %#v, want exact embedded catalog", s.ledger)
 	}
 }
@@ -3219,6 +3623,9 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 	t.Helper()
 	expected := []migrationRequest{
 		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
+		{sql: userVersionSQL, wantRows: true},
+		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
+		{sql: ledgerRowsSQL, args: []protocolValue{integerProtocolValue(expectedMaximumMigrationCount + 1)}, wantRows: true},
 		{sql: userVersionSQL, wantRows: true},
 		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
 		{sql: ledgerRowsSQL, args: []protocolValue{integerProtocolValue(expectedMaximumMigrationCount + 1)}, wantRows: true},
@@ -3255,8 +3662,8 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 			}
 		}
 	}
-	if len(s.pipelineRecords) != 8 {
-		t.Fatalf("pipeline request shape = %#v, want four apply and terminal sequence pairs", s.pipelineRecords)
+	if len(s.pipelineRecords) != 10 {
+		t.Fatalf("pipeline request shape = %#v, want five apply and terminal sequence pairs", s.pipelineRecords)
 	}
 	for index := range s.pipelineRecords {
 		if len(s.pipelineRecords[index].requests) != 2 {
@@ -3306,6 +3713,14 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 	if lifecycleTerminal.Type != "sequence" || lifecycleTerminal.SQL != expectedLifecycleTerminalSequence || len(lifecycleTerminal.Args) != 0 || len(lifecycleTerminal.NamedArgs) != 0 {
 		t.Fatal("lifecycle pipeline terminal sequence differs from exact reviewed proof bytes")
 	}
+	currentDiscoverySequence := s.pipelineRecords[8].requests[0]
+	if currentDiscoverySequence.Type != "sequence" || currentDiscoverySequence.SQL != expectedCurrentDiscoveryMigrationSequence || len(currentDiscoverySequence.Args) != 0 || len(currentDiscoverySequence.NamedArgs) != 0 {
+		t.Fatal("current discovery pipeline sequence differs from exact reviewed transaction bytes")
+	}
+	currentDiscoveryTerminal := s.pipelineRecords[9].requests[0]
+	if currentDiscoveryTerminal.Type != "sequence" || currentDiscoveryTerminal.SQL != expectedCurrentDiscoveryTerminalSequence || len(currentDiscoveryTerminal.Args) != 0 || len(currentDiscoveryTerminal.NamedArgs) != 0 {
+		t.Fatal("current discovery pipeline terminal sequence differs from exact reviewed proof bytes")
+	}
 }
 
 func textProtocolValue(value string) protocolValue {
@@ -3322,7 +3737,7 @@ func (s *migrationProtocolServer) assertSeparateVerificationStream(t *testing.T)
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.records) != 14 || s.records[0].baton != nil {
+	if len(s.records) != 17 || s.records[0].baton != nil {
 		t.Fatal("first migration request did not start a fresh physical stream")
 	}
 	if s.records[1].baton == nil {
@@ -3548,16 +3963,47 @@ func (s *migrationProtocolServer) stallPersistence(statement string) (chan struc
 	return started, release
 }
 
+func (s *migrationProtocolServer) barrierPersistence(statement string, target int) (chan struct{}, chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	s.barrierSQL = statement
+	s.barrierTarget = target
+	s.barrierArrived = 0
+	s.barrierStarted = started
+	s.barrierRelease = release
+	return started, release
+}
+
+func (s *migrationProtocolServer) stallPersistenceBody(statement string) (chan struct{}, chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	s.persistenceStatement = statement
+	s.persistenceMode = "body-stall"
+	s.persistenceStarted = started
+	s.persistenceRelease = release
+	return started, release
+}
+
 func (s *migrationProtocolServer) persistenceRecords() []migrationRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	records := make([]migrationRequest, 0, len(s.records))
 	for _, record := range s.records {
-		if record.sql == accountLookupSQL || record.sql == accountInsertSQL || record.sql == cursorLookupSQL || record.sql == cursorCommitSQL || record.sql == credentialLookupSQL || record.sql == credentialCommitSQL || record.sql == lifecycleLookupSQL || record.sql == accountListSQL || record.sql == lifecycleCommitSQL || record.sql == revokedCredentialDeleteSQL {
+		if record.sql == accountLookupSQL || record.sql == accountInsertSQL || record.sql == cursorLookupSQL || record.sql == cursorCommitSQL || record.sql == credentialLookupSQL || record.sql == credentialCommitSQL || record.sql == lifecycleLookupSQL || record.sql == accountListSQL || record.sql == lifecycleCommitSQL || record.sql == revokedCredentialDeleteSQL || record.sql == currentDiscoveryAttemptLookupSQL || record.sql == currentDiscoveryAttemptCreateSQL || record.sql == currentDiscoveryStageLookupSQL || record.sql == currentDiscoveryStageSQL || record.sql == currentDiscoveryStageProofSQL || record.sql == currentDiscoverySealSQL || record.sql == currentDiscoveryFinalizeSQL || record.sql == currentDiscoveryAbortSQL || record.sql == currentDiscoveryMessageLookupSQL || record.sql == currentDiscoveryRecordLookupSQL || record.sql == currentDiscoveryNaturalKeyLookupSQL || record.sql == currentDiscoveryProofSQL {
 			records = append(records, record)
 		}
 	}
 	return records
+}
+
+func (s *migrationProtocolServer) rawRecords() []migrationRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]migrationRequest(nil), s.records...)
 }
 
 func (s *migrationProtocolServer) cursorSessionWasClosedWithoutReuse(baton string) bool {

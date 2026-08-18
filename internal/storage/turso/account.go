@@ -13,7 +13,7 @@ const (
 	accountLookupSQL = "WITH input(account_id, provider, provider_subject) AS (VALUES (?, ?, ?)), by_id AS (SELECT inboxgate_accounts.account_id, inboxgate_accounts.provider, inboxgate_accounts.provider_subject FROM inboxgate_accounts, input WHERE inboxgate_accounts.account_id = input.account_id), by_subject AS (SELECT inboxgate_accounts.account_id, inboxgate_accounts.provider, inboxgate_accounts.provider_subject FROM inboxgate_accounts, input WHERE inboxgate_accounts.provider = input.provider AND inboxgate_accounts.provider_subject = input.provider_subject) SELECT 1, (SELECT COUNT(*) FROM by_id), (SELECT account_id FROM by_id), (SELECT provider FROM by_id), (SELECT provider_subject FROM by_id), (SELECT COUNT(*) FROM by_subject), (SELECT account_id FROM by_subject), (SELECT provider FROM by_subject), (SELECT provider_subject FROM by_subject)"
 	accountInsertSQL = "INSERT INTO inboxgate_accounts (account_id, provider, provider_subject) VALUES (?, 'gmail', ?) ON CONFLICT DO NOTHING"
 	cursorLookupSQL  = "WITH input(account_id) AS (VALUES (?)), account_match AS (SELECT inboxgate_accounts.account_id FROM inboxgate_accounts, input WHERE inboxgate_accounts.account_id = input.account_id), cursor_match AS (SELECT inboxgate_synchronization_cursors.account_id, inboxgate_synchronization_cursors.history_id FROM inboxgate_synchronization_cursors, input WHERE inboxgate_synchronization_cursors.account_id = input.account_id) SELECT 1, (SELECT COUNT(*) FROM account_match), (SELECT account_id FROM account_match), (SELECT COUNT(*) FROM cursor_match), (SELECT account_id FROM cursor_match), (SELECT history_id FROM cursor_match)"
-	cursorCommitSQL  = "INSERT INTO inboxgate_synchronization_cursors (account_id, history_id) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM inboxgate_accounts WHERE account_id = ?) AND ? IS NULL ON CONFLICT(account_id) DO UPDATE SET history_id = excluded.history_id WHERE ? IS NOT NULL AND inboxgate_synchronization_cursors.history_id = ? AND (length(inboxgate_synchronization_cursors.history_id) < length(excluded.history_id) OR (length(inboxgate_synchronization_cursors.history_id) = length(excluded.history_id) AND inboxgate_synchronization_cursors.history_id < excluded.history_id))"
+	cursorCommitSQL  = "INSERT INTO inboxgate_synchronization_cursors (account_id, history_id) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM inboxgate_accounts WHERE account_id = ?) AND NOT EXISTS (SELECT 1 FROM inboxgate_synchronization_cursors WHERE account_id = ?) AND NOT EXISTS (SELECT 1 FROM inboxgate_current_sync_attempts WHERE account_id = ?) ON CONFLICT DO NOTHING"
 )
 
 func (h *handle) EnsureAccount(ctx context.Context, seed storage.AccountSeed) (storage.Account, error) {
@@ -278,12 +278,8 @@ func (h *handle) CommitSynchronization(ctx context.Context, commit storage.Synch
 	if err != nil {
 		return safePersistenceError(storage.ErrPersistenceAcquire, operationCtx)
 	}
-	var expected any
-	if commit.Expected != nil {
-		expected = commit.Expected.String()
-	}
 	_, mutationErr := connection.ExecContext(operationCtx, cursorCommitSQL,
-		commit.AccountID.String(), commit.Next.String(), commit.AccountID.String(), expected, expected, expected)
+		commit.AccountID.String(), commit.Next.String(), commit.AccountID.String(), commit.AccountID.String(), commit.AccountID.String())
 	verified, verificationErr := h.inspectCursor(operationCtx, commit.AccountID)
 	success := verificationErr == nil && verified.historyID != nil && *verified.historyID == commit.Next
 	if mutationErr != nil || !success {
@@ -293,6 +289,9 @@ func (h *handle) CommitSynchronization(ctx context.Context, commit storage.Synch
 	}
 	if success {
 		return nil
+	}
+	if inspection, inspectErr := h.inspectCurrentDiscovery(operationCtx, commit.AccountID); inspectErr == nil && inspection.attemptExists {
+		return storage.ErrCursorConflict
 	}
 	return safePersistenceError(storage.ErrPersistenceUnknown, operationCtx)
 }
@@ -307,17 +306,7 @@ func classifyCursorCommit(commit storage.SynchronizationCommit, inspection curso
 		}
 		return nil, false
 	}
-	current := *inspection.historyID
-	if current == commit.Next {
-		return nil, true
-	}
-	if commit.Next.Compare(current) < 0 {
-		return storage.ErrCursorRegression, true
-	}
-	if commit.Expected == nil || *commit.Expected != current {
-		return storage.ErrCursorConflict, true
-	}
-	return nil, false
+	return storage.ErrCursorConflict, true
 }
 
 func discardPersistenceConnection(connection *sql.Conn) {

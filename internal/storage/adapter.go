@@ -2,7 +2,11 @@
 // InboxGate persistence implementations.
 package storage
 
-import "context"
+import (
+	"context"
+
+	"github.com/mandloideep/inboxgate/internal/mail"
+)
 
 // Endpoint carries connection material acquired by a caller.
 //
@@ -33,6 +37,9 @@ type Handle interface {
 	GetAccountLifecycle(context.Context, AccountID) (AccountLifecycle, error)
 	CommitAccountLifecycle(context.Context, LifecycleCommit) error
 	DeleteRevokedProviderCredential(context.Context, RevokedCredentialDelete) error
+	CommitCurrentDiscovery(context.Context, CurrentDiscoveryCommit) error
+	ReconcileCurrentDiscovery(context.Context, AccountID) error
+	GetDiscoveredMessage(context.Context, AccountID, string) (mail.Message, error)
 	Close() error
 }
 
