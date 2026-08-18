@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: accepted synthetic bounded Gmail current discovery with known upstream risks for issue #32.
+Status: accepted synthetic deterministic persisted gate with known upstream risks for issue #34.
 
 ## Security objectives
 
@@ -24,7 +24,7 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 | InboxGate to Google OAuth revocation | Refresh token, provider status, redirects, response body, transport failure | Proven durable revoked-attempting claim, fixed HTTPS authority, body-only form token, owned proxy-disabled TLS transport, redirect rejection, at most one request, no retry after ambiguous completion, 15-second deadline, 16 KiB response limit, fixed diagnostics, exact local ciphertext deletion |
 | InboxGate to Google OAuth refresh and Gmail discovery | Refresh token, client secret, access token, HTTP status, retry headers, history pages, message metadata, MIME structure, history cursors | One fixed refresh POST, fixed read-only Gmail GETs, proxy-disabled TLS transport, redirect rejection, per-request deadlines, pre-decode body limits, duplicate-aware strict decoding, finite field projection, bounded retries and pagination, fixed diagnostics, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
-| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, ciphertext credentials, lifecycle values, canonical metadata, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration and typed persistence execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, typed compare-and-swap, one atomic current-discovery aggregate, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
+| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, ciphertext credentials, lifecycle values, canonical metadata, gate decisions, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration and typed persistence execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, typed compare-and-swap, one atomic current-discovery aggregate, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
 | Hermes to MCP | Authentication, tool inputs, pagination | Authentication, explicit schemas, bounds, allowlisted capabilities, audit events |
 | Runtime to logs and health endpoints | Errors, state, identifiers | Redaction, minimal readiness detail, private binding, no credentials or message bodies |
 | Owner to release workflow | Version, expected commit, dispatch identity, immutable-release setting | Exact input syntax, owner-only manual dispatch, immediate manual settings check, current-main and successful-CI gates |
@@ -227,6 +227,28 @@ The literal-loopback exact-driver model does not execute SQLite or the Turso Dat
 It therefore cannot prove the remote engine's 514-parameter limit, strict-table behavior, trigger execution, constraint rollback, writer serialization, or concurrent finalization.
 Remote execution remains prohibited until later approved evidence proves those properties without exposing credentials or sensitive stored data.
 
+### Deterministic gate persistence
+
+Sender addresses, recipients, subjects, labels, selected headers, canonical metadata hashes, gate outcomes, reason codes, and evaluation timestamps are sensitive untrusted or derived data.
+The pure gate imports no storage, network, runtime, provider, MCP, shell, URL-fetching, or capability authority.
+It applies one fixed precedence, parsed-mailbox final-`@` boundary-aware ASCII domain matching, literal Unicode case folding without normalization or regular expressions, and a closed sorted reason vocabulary.
+Candidate-term and urgent-term lists reject Unicode case-fold-equivalent duplicates through the same bounded canonical fold used for matching.
+Literal matching performs at most 512 searches over one canonical simple-fold subject bounded at 16,384 bytes with each folded term bounded at 512 bytes.
+Missing optional metadata is absence and cannot create an owner allow, candidate, urgency, or direct-recipient signal.
+
+The input hash binds gate version 1, the canonical message metadata hash, both gate booleans, and all six byte-sorted policy lists with domain separation and explicit length framing.
+The durable row contains only the canonical record ID, version, source metadata hash, input hash, closed outcome, canonical bounded reason JSON, and bounded evaluation timestamp.
+It contains no free-form explanation, policy value, address, subject, label, body, snippet, raw MIME, attachment, credential, provider response, or arbitrary header map.
+
+Migration `0006_gate_decisions.sql` adds one strict binary-keyed table with a restrictive foreign key to canonical messages.
+The fake and Turso implementations reject malformed rows, stale source metadata, blind replacement, wrong expected revisions, and the same input identity with different semantics.
+The Turso adapter uses one fixed lookup and one fixed parameterized compare-and-swap mutation, attempts the mutation once, proves exact durable state through a separate physical connection, discards an unproven session, and performs no same-invocation replay.
+The evaluator reads durable state before the clock, fresh-reads after a reported commit success, returns a concurrent idempotent winner's durable timestamp, and requires an exact prior revision for policy or metadata replacement.
+
+The classifier and evaluator remain unreachable from every executable runtime path.
+Credential-free literal-loopback tests model exact driver SQL and transport behavior but do not prove remote Turso Database constraint, foreign-key, writer-serialization, or visibility semantics.
+Remote migration `0006` and live gate-decision storage remain prohibited pending later approved evidence.
+
 ### Accepted database adapter and inert typed persistence boundary
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
@@ -239,7 +261,8 @@ The adapter remains unreachable from service startup, health endpoints, doctor, 
 [ADR 0009](adr/0009-account-lifecycle-and-revocation.md) appends strict versioned account lifecycle state and exposes only bounded listing, typed lifecycle compare-and-swap, and revoked-only exact ciphertext deletion under the same restriction.
 [ADR 0010](adr/0010-atomic-current-discovery-staging.md) appends canonical message, attempt, and staging state and exposes only one bounded aggregate commit, reconciliation, and canonical message lookup under the same restriction.
 [ADR 0011](adr/0011-bounded-gmail-current-discovery.md) composes those typed operations with synthetic OAuth and Gmail reads while adding no SQL operation or remote adapter activation.
-The current-discovery use case remains unreachable from every executable runtime caller.
+[ADR 0012](adr/0012-deterministic-persisted-gate.md) appends strict gate-decision state and exposes only typed read, compare-and-swap, and inert evaluation operations under the same restriction.
+The current-discovery use case and gate evaluator remain unreachable from every executable runtime caller.
 No production URL, live token, real account record, email record, display metadata, plaintext credential, or runtime secret is introduced by these decisions.
 
 The adapter validates the initial endpoint before driver construction.
@@ -361,7 +384,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a health-only network service, a one-shot OAuth enrollment command, and an inert internal current-discovery use case restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, MCP endpoint, scheduler, or executable Gmail synchronization.
+- The current foundation has a health-only network service, a one-shot OAuth enrollment command, an inert internal current-discovery use case, and an inert deterministic persisted gate restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, MCP endpoint, scheduler, or executable Gmail synchronization.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 
