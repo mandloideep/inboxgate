@@ -537,8 +537,20 @@ It sorts messages by Gmail message ID, collapses exact duplicates, rejects confl
 It promotes canonical message metadata and advances the cursor through one fixed trigger-backed finalization statement or changes neither.
 Every explicit reconciliation completes or safely removes only bounded durable staging without contacting Gmail.
 
+The implemented internal current-discovery invocation reconciles that staging before any OAuth or Gmail request and then requires one exact active lifecycle, cursor, ciphertext credential, authenticated decryption, and unchanged lifecycle version.
+It makes one explicit refresh-token exchange through the existing OAuth root package and never retries or automatically refreshes that exchange.
+Only exact `invalid_grant`, `admin_policy_enforced`, Gmail 401 after refresh, and an unambiguous Gmail `domainPolicy` reason enter the four existing reauthorization transitions.
+Transient, malformed, conflicting, oversized, or unknown provider failures leave lifecycle, credential, messages, and cursor unchanged.
+
+The invocation reads at most ten history pages and 5,000 unique message additions through fixed read-only requests.
+It accepts at most 500 history records and 500 additions per page, rejects page-token cycles and conflicting message-thread identities, and uses only the final complete-chain `historyId` as a proposed cursor.
+It calls the atomic aggregate exactly once after all non-vanished messages normalize and never calls the cursor-only initialization operation.
+Its result contains only bounded counts and a cursor-advanced flag.
+
 If Gmail reports that a history cursor is too old, mark the cursor stale and run bounded reconciliation.
 Do not silently restart an unlimited full backfill.
+The current inert invocation returns a fixed stale-history category and preserves the active lifecycle and cursor because the schema does not yet contain durable stale status.
+Persisted stale status and bounded full reconciliation remain later work before release.
 
 ### 9.3 Messages and threads
 
@@ -684,6 +696,29 @@ Use Gmail history listing for incremental discovery.
 Use bounded pages and explicit retry handling.
 Fetch message metadata for newly added messages.
 Apply the deterministic gate before fetching a larger body excerpt.
+
+The implemented internal discovery prerequisite uses exact `users.history.list` requests with `historyTypes=messageAdded`, `maxResults` from 1 through 500, and a fixed partial-response selector.
+It accepts no more than ten pages and stops before message retrieval when a continuation remains.
+An exact history-endpoint 404 returns stale history without a cursor reset or full-sync request.
+An exact message-endpoint 404 counts one vanished message, omits it from persistence, and may still advance the complete final cursor.
+
+Each unique added message is read through one `format=FULL` request with a deterministic finite partial-response selector.
+The selector includes only identifiers, labels, internal date, size estimate, selected top-level headers, MIME filenames, attachment identifiers, and at most 32 nested structural levels with an overflow sentinel.
+It excludes snippets, raw MIME, message body data, body sizes, attachment bytes, classification values, and link targets.
+The decoder accepts at most 1,000 MIME part nodes, counts non-root attachment metadata once per part, retains only the ten approved gate headers, and discards filenames and attachment identifiers after counting.
+Malformed optional sender-controlled header syntax becomes an absent conservative signal before the record crosses `mail.Normalize`.
+
+History and message GETs use one initial attempt and at most three retries only for transport failures, exact Gmail rate-limit reasons, HTTP 429, and HTTP 500, 502, 503, or 504.
+Header acquisition, bounded response-body read, and response-body close failures are transport failures and consume the same explicit retry schedule while the caller remains active.
+Oversized or malformed completed responses do not retry.
+Retry bases are one, two, and four seconds plus zero through 250 milliseconds of cryptographic jitter, with canonical numeric `Retry-After` honored only from one through 30 seconds.
+Each request has a 15-second deadline, preserves shorter caller cancellation, rejects redirects, and reads a bounded response before decoding.
+Every OAuth, history, message, and Google error object uses byte-exact case-sensitive field allowlists at each nested level and rejects invalid raw UTF-8 or unpaired UTF-16 surrogate escapes.
+Each explicit Gmail attempt uses a fresh nonpersistent HTTP/1 connection so the standard transport cannot add an uncounted retry beneath the one-two-four-second schedule.
+The absolute invocation limit is one token request, 40 history attempts, and 20,000 message attempts.
+
+This use case has no command, scheduler, service caller, HTTP route, MCP tool, capability activation, remote database path, or live credential path.
+`gmail.read` and `gmail.current_sync` therefore remain not implemented and impossible to enable.
 
 Polling may begin at a jittered five-minute interval per account.
 Make the interval configurable within a safe minimum.
@@ -1146,17 +1181,20 @@ The YAML package is the only runtime dependency approved in this phase.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) implements versioned authenticated encryption and ciphertext-only typed credential persistence with synthetic fixtures only.
 [ADR 0008](adr/0008-google-oauth2-client.md) implements one-account Gmail OAuth enrollment against fake OAuth and Gmail servers.
 [ADR 0009](adr/0009-account-lifecycle-and-revocation.md) implements durable account lifecycle state and credential-free synthetic revocation.
+[ADR 0010](adr/0010-atomic-current-discovery-staging.md) implements canonical metadata persistence and transactional cursor movement through bounded staging.
+[ADR 0011](adr/0011-bounded-gmail-current-discovery.md) implements one inert bounded current-discovery invocation against synthetic providers and fake or credential-free literal-loopback storage.
 Do not activate live credentials or production database writes without a separately approved issue and explicit owner approval.
 Do not add email or review tables until their vertical slices require them.
 
 ### Phase 3: OAuth enrollment
 
 One Gmail account enrollment, OAuth state protection, identity lookup, encrypted refresh-token persistence, bounded account listing, durable pause and resume, typed reauthorization state, and staged revocation are implemented with synthetic fixtures.
-Do not call Gmail messages endpoints yet.
+The enrollment and lifecycle commands do not call Gmail message endpoints.
 
 ### Phase 4: One current-mail discovery slice
 
-Test and implement current history discovery for one account, normalized metadata persistence, duplicate handling, and transactional cursor movement.
+Current history discovery for one account, normalized metadata persistence, duplicate handling, bounded retry behavior, and transactional cursor movement are implemented as an inert internal prerequisite.
+Durable stale-history status, a runtime caller, and deterministic gate decisions remain to be implemented.
 Do not implement historical backfill yet.
 
 ### Phase 5: Deterministic gate

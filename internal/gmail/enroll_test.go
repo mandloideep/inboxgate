@@ -486,6 +486,58 @@ func TestTokenExchangeResponseMatrixIsStrictBoundedAndNeverRetried(t *testing.T)
 	}
 }
 
+func TestEnrollmentExpiresInIsTheOnlyLifetimeAuthority(t *testing.T) {
+	valid := func(expiry string) string {
+		return fmt.Sprintf(`{"access_token":%q,"refresh_token":%q,"token_type":"Bearer","expires_in":%s,"scope":%q}`, syntheticAccessToken, syntheticRefreshToken, expiry, requestedScope)
+	}
+	tests := []struct {
+		name        string
+		now         time.Time
+		body        string
+		wantSuccess bool
+	}{
+		{name: "one second far before wall clock", now: time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC), body: valid("1"), wantSuccess: true},
+		{name: "one day far after wall clock", now: time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC), body: valid("86400"), wantSuccess: true},
+		{name: "zero", now: fixedNow(), body: valid("0")},
+		{name: "over one day", now: fixedNow(), body: valid("86401")},
+		{name: "exponent", now: fixedNow(), body: valid("3.6e3")},
+		{name: "leading zero", now: fixedNow(), body: valid("03600")},
+		{name: "duplicate", now: fixedNow(), body: strings.Replace(valid("3600"), `"expires_in":3600`, `"expires_in":3600,"expires_in":3600`, 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch request.URL.Path {
+				case "/token":
+					_, _ = io.WriteString(w, test.body)
+				case "/userinfo":
+					fmt.Fprintf(w, `{"sub":%q}`, syntheticSubject)
+				case "/profile":
+					fmt.Fprintf(w, `{"emailAddress":%q,"historyId":"91"}`, syntheticEmail)
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			t.Cleanup(provider.Close)
+			enrollment := newTestEnrollment(t, enrollmentOptions{
+				clientID: []byte(syntheticClientID), clientSecret: []byte(syntheticClientSecret), redirectURL: "http://127.0.0.1:8080" + callbackPath,
+				store: storagefake.New(), keyring: syntheticKeyring(t),
+			}, enrollmentDependencies{
+				endpoints: providerEndpoints{authorization: provider.URL + "/authorize", token: provider.URL + "/token", userInfo: provider.URL + "/userinfo", gmailProfile: provider.URL + "/profile"},
+				random:    bytes.NewReader(bytes.Repeat([]byte{37}, 16)), now: func() time.Time { return test.now },
+			})
+			err := enrollment.complete(context.Background(), syntheticCode, "synthetic-verifier")
+			if test.wantSuccess && err != nil {
+				t.Fatalf("complete() error = %v", err)
+			}
+			if !test.wantSuccess && !errors.Is(err, ErrProvider) {
+				t.Fatalf("complete() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestTokenResponseRejectsEveryDuplicateFieldBeforeOAuthDecoding(t *testing.T) {
 	for _, field := range []string{"access_token", "refresh_token", "token_type", "expires_in", "scope"} {
 		for _, encoding := range []string{"json", "form"} {

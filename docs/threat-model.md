@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: accepted synthetic account lifecycle and provider revocation with known upstream risks for issue #28.
+Status: accepted synthetic bounded Gmail current discovery with known upstream risks for issue #32.
 
 ## Security objectives
 
@@ -22,9 +22,9 @@ The highest-value assets are Google OAuth credentials, encryption keys, account 
 | Browser to one-shot OAuth callback | Authorization code, denial, state, request target | Exact route and method, one-time ten-minute state, constant-time comparison, PKCE S256, strict query shape, bounded request target, no-store fixed response, capacity-one result |
 | InboxGate to Google OAuth, OpenID Connect, and Gmail profile | Client credentials, code, verifier, bearer token, subject, email, history ID, provider responses | Fixed endpoints, exact read-only scopes, owned redirect-rejecting client, 15-second deadlines, 16 KiB body limits, no retry, strict decoding, fixed diagnostics, discard-only email |
 | InboxGate to Google OAuth revocation | Refresh token, provider status, redirects, response body, transport failure | Proven durable revoked-attempting claim, fixed HTTPS authority, body-only form token, owned proxy-disabled TLS transport, redirect rejection, at most one request, no retry after ambiguous completion, 15-second deadline, 16 KiB response limit, fixed diagnostics, exact local ciphertext deletion |
-| Google to synchronization client | HTTP status, headers, metadata, MIME content, history cursors | TLS, narrow response types, size limits, retries, duplicate handling, transactional cursor advancement |
+| InboxGate to Google OAuth refresh and Gmail discovery | Refresh token, client secret, access token, HTTP status, retry headers, history pages, message metadata, MIME structure, history cursors | One fixed refresh POST, fixed read-only Gmail GETs, proxy-disabled TLS transport, redirect rejection, per-request deadlines, pre-decode body limits, duplicate-aware strict decoding, finite field projection, bounded retries and pagination, fixed diagnostics, transactional cursor advancement |
 | Email sender to InboxGate | Headers, HTML, text, links, instructions | Treat all content as data, sanitize HTML, truncate content, mark untrusted content |
-| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, ciphertext credentials, lifecycle values, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration, account-cursor, ciphertext-credential, and lifecycle execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, typed compare-and-swap, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
+| InboxGate to Turso adapter | URL, redirects, protocol scheme and authority, responses, query results, account identities, synchronization cursors, ciphertext credentials, lifecycle values, canonical metadata, uncertain transport outcomes | Repository-owned typed interface, separate URL and token values, verified HTTPS for the initial remote endpoint only, credential-free literal-loopback migration and typed persistence execution only, fixed outer diagnostics, bounded context-aware requests, fixed parameterized product-state SQL, durable uniqueness, typed compare-and-swap, one atomic current-discovery aggregate, separate-connection visibility, no automatic mutation replay, fresh-run reconciliation, and explicit accepted-risk tracking for driver-controlled authority, redirect, response buffering, and close behavior |
 | Hermes to MCP | Authentication, tool inputs, pagination | Authentication, explicit schemas, bounds, allowlisted capabilities, audit events |
 | Runtime to logs and health endpoints | Errors, state, identifiers | Redaction, minimal readiness detail, private binding, no credentials or message bodies |
 | Owner to release workflow | Version, expected commit, dispatch identity, immutable-release setting | Exact input syntax, owner-only manual dispatch, immediate manual settings check, current-main and successful-CI gates |
@@ -121,6 +121,60 @@ State replay, callback CSRF, authorization-code interception, PKCE substitution,
 Plaintext credentials remain memory-only and repository-owned mutable buffers are cleared where practical without claiming complete Go memory zeroization.
 Cursor-first staged persistence makes account-only and cursor-only states restartable, rejects credential-only state as recovery-required, and never claims atomicity across three durable records.
 
+### Bounded current Gmail discovery
+
+The internal current-discovery prerequisite adds the first refresh-token use and Gmail history and message-read boundary outside enrollment.
+It reconciles durable current-discovery staging before provider work, requires an exact active lifecycle with one remaining transition version, reads the exact cursor and ciphertext, authenticates decryption, and repeats the lifecycle read before the one refresh exchange.
+Paused, reauthorization-required, revoked, incomplete, malformed, version-exhausted, or concurrently changed accounts make no provider request.
+
+The refresh exchange uses the fixed Google token authority, form-body client authentication, one expired token containing only the decrypted refresh token, and exactly one call to the existing OAuth token source.
+An InboxGate-owned wrapper rejects redirects, wrong request shape, oversized or unsupported responses, duplicate JSON fields, noncanonical expiry, scope drift, refresh-token rotation, and unknown response fields before dependency decoding.
+Every allowed OAuth, Gmail, and Google error field name is matched byte-for-byte with case-sensitive nested allowlists.
+Raw invalid UTF-8 and unpaired UTF-16 surrogate escapes fail before a repaired replacement character could enter identity, classification, normalization, or discard logic.
+The refresh request is never retried, the access token is never persisted, and repository-owned mutable token buffers are cleared after use where practical.
+Only exact HTTP 400 `invalid_grant` and `admin_policy_enforced` objects can enter their existing lifecycle transitions.
+
+Every Gmail request is one bodyless GET to a fixed `users.history.list` or escaped `users.messages.get` path.
+The access token appears only in the authorization header.
+History requests fix `historyTypes=messageAdded`, the caller-validated page size, and one narrow projection.
+Message requests fix `format=FULL` and one finite projection that excludes snippets, raw MIME, message body data, body sizes, attachment bytes, classification values, and links.
+There is no Gmail mutation method, message-body request, attachment call, arbitrary field mask, provider passthrough, URL fetch, generated client, batch request, or parallel per-message work.
+
+The history chain accepts at most ten pages, 500 records and 500 additions per page, 5,000 unique message identities, and 4,096 bytes per opaque page token.
+It rejects token cycles, nonincreasing record IDs, conflicting message-thread identity, incomplete page chains, malformed projected fields, and any final cursor regression.
+An exact history endpoint 404 is a fixed stale-history outcome that does not mark reauthorization, reset the cursor, request full synchronization, create staging, or mutate durable state.
+Durable stale status and bounded full reconciliation remain required before release.
+
+Each message response is limited to 262,144 bytes and accepts at most 256 top-level header entries, 65,536 selected-header bytes, 1,000 MIME part nodes, and 32 nested part levels with an explicit overflow sentinel.
+Only ten case-insensitive header names survive decoding.
+Standard-library encoded-word and address parsers turn malformed optional syntax into absent conservative signals.
+Filenames and attachment IDs contribute only to a bounded metadata count and are discarded before normalization.
+An exact message endpoint 404 is counted as vanished and omitted while the complete history cursor may still advance.
+
+An exact Gmail 401 after the one refresh can enter only `gmail_unauthorized_after_refresh`.
+A Gmail 403 can enter only `gmail_domain_policy` when one bounded duplicate-free error object contains that single canonical reason without conflict.
+Trusted transitions use an independent 15-second cleanup context and stop all later Gmail and storage work.
+Other provider failures retain the active lifecycle and do not move the cursor.
+
+History and message GETs permit one initial attempt and three retries only for transport failures, exact rate-limit reasons, HTTP 429, and HTTP 500, 502, 503, or 504.
+Failures before headers, during the bounded body read, or during body close each consume one explicit attempt and scheduled wait while caller authority remains active.
+Completed oversized or malformed responses remain non-retryable.
+The one, two, and four second bases include at most 250 milliseconds of cryptographic jitter, while only a canonical numeric `Retry-After` from one through 30 seconds can lengthen a wait.
+Caller cancellation stops a request or sleep.
+Each explicit Gmail attempt uses a fresh nonpersistent HTTP/1 connection, which prevents the standard transport from silently retrying a stale reused HTTP/1 connection or an HTTP/2 stream outside the scheduler.
+The absolute invocation limit is 20,041 provider request attempts and no storage failure can trigger another Gmail request in the same invocation.
+
+The complete page chain and every normalized non-vanished message must succeed before one `CommitCurrentDiscovery` call.
+The use case never calls cursor-only initialization.
+A storage conflict or uncertain response returns a fixed category without replay, and a fresh invocation begins with reconciliation.
+An account can race with a concurrent pause or lifecycle transition after the final preflight, so bounded read-only provider calls may finish after the state changes.
+The existing finalization trigger still prevents message promotion and cursor advancement unless the lifecycle remains active.
+
+All email-derived identifiers, headers, labels, dates, sizes, filenames, attachment identifiers, and MIME structure are untrusted data.
+They cannot authorize suppression, urgency, a tool call, a provider mutation, SQL, a policy change, or credential disclosure.
+The internal result contains only bounded counts and a cursor-advanced flag and exposes no provider value.
+The use case remains disconnected from commands, scheduling, service startup, HTTP, health, capabilities, MCP, remote Turso, and live credentials.
+
 ### Prompt injection through email
 
 Email is attacker-controlled content that may contain instructions aimed at Hermes or an operator.
@@ -177,13 +231,15 @@ Remote execution remains prohibited until later approved evidence proves those p
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
 The adapter is reachable from `account add`, `account list`, `account pause`, `account resume`, and confirmed `account revoke` after environment-selector separation and a credential-free literal-loopback endpoint check.
-It remains unreachable from service startup, health endpoints, doctor, configuration inspection, capability inspection, Gmail synchronization, and MCP.
+The internal current-discovery use case can call its typed operations when supplied a handle, but no executable path constructs that composition.
+The adapter remains unreachable from service startup, health endpoints, doctor, configuration inspection, capability inspection, executable Gmail synchronization, and MCP.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner that can execute only against a credential-free literal-loopback endpoint.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) appends minimum account identity and synchronization-cursor tables and exposes only typed account and cursor operations under the same restriction.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) appends a ciphertext-only provider-credential table and exposes only typed credential lookup and compare-and-swap under the same restriction.
 [ADR 0009](adr/0009-account-lifecycle-and-revocation.md) appends strict versioned account lifecycle state and exposes only bounded listing, typed lifecycle compare-and-swap, and revoked-only exact ciphertext deletion under the same restriction.
 [ADR 0010](adr/0010-atomic-current-discovery-staging.md) appends canonical message, attempt, and staging state and exposes only one bounded aggregate commit, reconciliation, and canonical message lookup under the same restriction.
-The current-discovery operations remain unreachable from every runtime caller.
+[ADR 0011](adr/0011-bounded-gmail-current-discovery.md) composes those typed operations with synthetic OAuth and Gmail reads while adding no SQL operation or remote adapter activation.
+The current-discovery use case remains unreachable from every executable runtime caller.
 No production URL, live token, real account record, email record, display metadata, plaintext credential, or runtime secret is introduced by these decisions.
 
 The adapter validates the initial endpoint before driver construction.
@@ -251,6 +307,8 @@ Terminal maximum-version rows remain eligible for exact residual-ciphertext clea
 
 Large messages, deep MIME trees, unbounded history, pagination, retry loops, or concurrent requests could exhaust memory, storage, quota, or model budget.
 Every input and output path must define size, depth, page, time, retry, and concurrency limits before it is enabled.
+The inert current-discovery invocation limits history responses to 1 MiB, message metadata responses to 256 KiB, provider error and refresh responses to 16 KiB, pages to ten, unique messages to 5,000, MIME nodes to 1,000, MIME depth to 32, attempts per GET to four, and total provider attempts to 20,041.
+It serializes invocations per constructed use case and performs no concurrent message request.
 Historical backfill yields to current-mail synchronization and resumes from durable checkpoints.
 
 ### Supply-chain compromise
@@ -303,7 +361,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a health-only network service plus a one-shot OAuth enrollment command restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, MCP endpoint, scheduler, or Gmail synchronization.
+- The current foundation has a health-only network service, a one-shot OAuth enrollment command, and an inert internal current-discovery use case restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, MCP endpoint, scheduler, or executable Gmail synchronization.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 
