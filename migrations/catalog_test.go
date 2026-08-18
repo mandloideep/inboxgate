@@ -19,8 +19,8 @@ func TestEmbeddedCatalogIsCanonicalAndExactByteChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Catalog() error = %v", err)
 	}
-	if len(catalog) != 2 {
-		t.Fatalf("Catalog() count = %d, want 2", len(catalog))
+	if len(catalog) != 3 {
+		t.Fatalf("Catalog() count = %d, want 3", len(catalog))
 	}
 	migration := catalog[0]
 	if migration.Number != 1 || migration.Name != "0001_migration_ledger.sql" {
@@ -73,6 +73,38 @@ func TestEmbeddedCatalogIsCanonicalAndExactByteChecksummed(t *testing.T) {
 	} {
 		if !strings.Contains(accountSchema.SQL, required) {
 			t.Fatalf("account schema does not contain %q", required)
+		}
+	}
+	credentialSchema := catalog[2]
+	if credentialSchema.Number != 3 || credentialSchema.Name != "0003_provider_credentials.sql" {
+		t.Fatalf("Catalog()[2] = %#v, want canonical migration 3", credentialSchema)
+	}
+	raw, err = fs.ReadFile(embedded, credentialSchema.Name)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	sum = sha256.Sum256(raw)
+	if got := hex.EncodeToString(sum[:]); credentialSchema.Checksum != got {
+		t.Fatalf("credential checksum = %q, want exact-byte checksum %q", credentialSchema.Checksum, got)
+	}
+	if credentialSchema.SQL != string(raw) {
+		t.Fatal("credential schema SQL differs from embedded bytes")
+	}
+	for _, required := range []string{
+		"CREATE TABLE inboxgate_provider_credentials",
+		"account_id TEXT PRIMARY KEY",
+		"length(CAST(account_id AS BLOB)) = 32",
+		"instr(CAST(account_id AS BLOB), x'00') = 0",
+		"key_id TEXT COLLATE BINARY NOT NULL",
+		"length(CAST(key_id AS BLOB)) BETWEEN 1 AND 32",
+		"instr(CAST(key_id AS BLOB), x'00') = 0",
+		"envelope TEXT COLLATE BINARY NOT NULL",
+		"length(CAST(envelope AS BLOB)) BETWEEN 55 AND 5556",
+		"substr(envelope, 1, 5) = 'igc1.'",
+		"FOREIGN KEY (account_id) REFERENCES inboxgate_accounts (account_id) ON DELETE RESTRICT",
+	} {
+		if !strings.Contains(credentialSchema.SQL, required) {
+			t.Fatalf("credential schema does not contain %q", required)
 		}
 	}
 }
