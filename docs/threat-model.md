@@ -262,13 +262,17 @@ No excerpt becomes current after those joined conditions change.
 
 The Gmail request uses only `users.messages.get`, a bodyless GET, `format=FULL`, an escaped message ID, and a finite selector for identity and MIME fields.
 It excludes snippets, raw MIME, arbitrary provider operations, mutations, and attachment retrieval.
-A filename-bearing or attachment-backed node excludes its complete descendant subtree from selection.
+A Gmail API limitation prevents `format=FULL` field selection from filtering the repeated headers array by name, so arbitrary header names and values can exist ephemerally within the 1 MiB response cap.
+The decoder validates the bounded header structure, consumes only Content-Type and Content-Disposition, and discards all other headers before any typed boundary, persistence, log, diagnostic, or result.
+A filename-bearing, attachment-backed, or attachment-disposition node excludes its complete descendant subtree from selection.
 The response is limited to 1 MiB, selected decoded bytes to 512 KiB, MIME nodes to 1,000, MIME depth to 32, attempts to four, and each attempt to 15 seconds.
 
 The complete tree walk prefers one eligible inline plain-text part and falls back to one eligible inline HTML part only when no plain part exists.
 Canonical unpadded base64url, exact size agreement, eligible-text-only charset interpretation, and a closed charset set prevent decoder ambiguity without giving excluded MIME parameters availability authority.
+One bounded closed Content-Disposition decision per node prevents a small inline data field or descendant from bypassing provider attachment semantics.
 The repository-owned HTML state machine rejects malformed or ambiguous markup, permits self-closing syntax only for closed void elements, removes active and hidden subtrees, requires closed entity decoding before evaluating security-sensitive visibility attributes, handles exact hidden `!important` and numeric-zero forms, rejects ambiguous computed or obfuscated visibility values, emits text only, and never emits attributes, links, URLs, images, CSS, forms, scripts, event handlers, or markup.
 The canonicalizer normalizes line endings, replaces disallowed controls, removes bidirectional and reviewed unsafe invisible formatting characters, trims line ends, collapses excessive blank lines, and truncates on a UTF-8 boundary.
+It canonicalizes the truncated prefix again so newly exposed whitespace or line endings cannot bypass durable canonical form while preserving the original truncation signal.
 Typed construction and durable decoding share the same canonical-excerpt predicate so an alternate caller or malformed stored row cannot bypass those transformations.
 Malformed HTML, invalid charset data, excessive expansion, and empty output fail closed without a raw fallback or attacker-controlled diagnostic.
 

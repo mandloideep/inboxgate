@@ -22,10 +22,12 @@ Only `review_candidate` and `urgent_review_candidate` are eligible.
 It refreshes one access token through the accepted OAuth boundary, then re-reads lifecycle, message, and decision and requires the exact prior lifecycle version, record identity, metadata hash, gate version, gate input hash, and candidate outcome.
 
 The only content request is the existing Gmail `users.messages.get` authority with an escaped message ID, `format=FULL`, and a repository-owned finite `fields` selector.
-The selector contains only message ID, thread ID, MIME type, Content-Type header name and value, filename, body size, body data, attachment ID, and nested parts.
+The selector contains only message ID, thread ID, MIME type, bounded MIME header names and values, filename, body size, body data, attachment ID, and nested parts.
+Gmail `format=FULL` field selection cannot filter the repeated headers array by header name, so the provider response can include every header name and value within the 1 MiB total response cap.
+InboxGate consumes only Content-Type and Content-Disposition, discards every other header before the typed domain boundary, and never logs, stores, diagnoses, or returns those ephemeral values.
 The request is a bodyless GET using the existing proxy-disabled, redirect-rejecting, fresh nonpersistent HTTP/1 transport and 15-second attempt deadline.
 The response is limited to 1 MiB, the decoded selected part is limited to 512 KiB, the tree is limited to 1,000 nodes and 32 levels, and the request is attempted no more than four times under the already accepted retry classes.
-No attachment request exists, and any part with a filename or attachment ID makes that node and its complete descendant subtree ineligible.
+No attachment request exists, and any part with a filename, attachment ID, or unambiguous attachment Content-Disposition makes that node and its complete descendant subtree ineligible.
 
 The MIME walk is deterministic in provider order across the complete bounded tree.
 The first eligible inline `text/plain` part wins, and the first eligible inline `text/html` part is used only when no eligible plain part exists.
@@ -34,6 +36,7 @@ The only accepted charsets are UTF-8, US-ASCII, ISO-8859-1, and Windows-1252.
 A missing charset defaults to US-ASCII for both selected media types.
 Content-Type charset semantics are parsed only for an otherwise eligible inline text part, while bounded structurally valid inert parameters on excluded or non-text nodes do not affect selection.
 Duplicate selected Content-Type headers, conflicting selected media types or charsets, malformed selected parameters, unknown charsets, invalid UTF-8, invalid US-ASCII, and undefined Windows-1252 bytes fail closed.
+At most one bounded Content-Disposition is accepted per node, only `inline` and `attachment` are recognized, a filename parameter excludes the subtree, and duplicate, conflicting, unknown, or malformed dispositions fail closed.
 
 The HTML converter is a repository-owned bounded state machine and does not implement browser parsing or error recovery.
 It accepts balanced start and end tags, self-closing syntax only for the closed void-element set, quoted or unquoted bounded attribute values, comments, and named or numeric text entities from a closed safe set.
@@ -48,6 +51,7 @@ Attributes, links, URLs, images, CSS, forms, scripts, event handlers, and markup
 The shared plain-text canonicalizer converts CRLF and CR to LF, replaces NUL and disallowed controls with U+FFFD, removes reviewed bidirectional and unsafe invisible formatting characters, trims trailing horizontal whitespace on every line, trims the whole result, and collapses runs of more than two line feeds to two.
 An empty result is unavailable.
 Final truncation occurs only at a UTF-8 boundary and records whether canonical bytes exceeded the configured limit.
+The truncated prefix is canonicalized again so a newly exposed space, tab, line ending, control, or empty boundary cannot enter durable content, while the original over-limit decision keeps `truncated=true`.
 Construction and durable decoding share one canonical-excerpt predicate that rejects any value still containing noncanonical line endings, controls, reviewed invisible formatting, outer whitespace, trailing line whitespace, or excessive blank lines.
 
 Candidate content version 1 stores the extractor version, canonical record ID, source metadata hash, gate version, gate input hash, source kind, excerpt, excerpt byte count, configured limit, truncation flag, content hash, and first fetched-at Unix milliseconds.
@@ -105,7 +109,9 @@ Every body and excerpt is sensitive untrusted email data and never an instructio
 Content cannot authorize Gmail mutation, arbitrary provider access, SQL, shell execution, URL fetching, configuration changes, secret disclosure, or an MCP tool.
 Raw content, excerpts, HTML, identifiers, tokens, endpoints, and provider errors are excluded from logs, metrics, diagnostics, and fixed errors.
 
-The selected projection excludes snippets, arbitrary headers, attachment retrieval, raw MIME, and mutation methods.
+The selected projection excludes snippets, attachment retrieval, raw MIME, and mutation methods.
+The Gmail API limitation means arbitrary headers can exist ephemerally inside the bounded provider response even though the selector requests only header names and values rather than broader message fields.
+The decoder validates the bounded header container, consumes only Content-Type and Content-Disposition, and discards all other header values before any typed result, persistence, log, diagnostic, or caller output.
 Fixed response, tree, token, decoded-body, output, retry, and deadline bounds contain resource exhaustion.
 Fail-closed MIME, charset, HTML, and durable decoding contain parser ambiguity and stored-data corruption.
 Lifecycle and gate rechecks plus the exact commit join prevent content from becoming current after authority or eligibility changes.

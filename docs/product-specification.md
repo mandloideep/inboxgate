@@ -768,18 +768,22 @@ The implemented inert candidate-content prerequisite accepts one typed account I
 It proves an active lifecycle, current canonical message, and current `review_candidate` or `urgent_review_candidate` gate decision before reading a credential or contacting Gmail.
 After one accepted OAuth refresh it repeats the lifecycle, message, and gate reads and requires the exact prior lifecycle version, record identity, metadata hash, gate version, gate input hash, and candidate outcome.
 
-The content request is one bodyless read-only `users.messages.get` with `format=FULL` and a finite selector containing only message identity and MIME type, Content-Type header, filename, body size, body data, attachment ID, and 32 finite nested part levels.
+The content request is one bodyless read-only `users.messages.get` with `format=FULL` and a finite selector containing only message identity, MIME type, `headers(name,value)`, filename, body size, body data, attachment ID, and 32 finite nested part levels.
+Gmail field selection cannot filter the repeated headers array by name, so arbitrary header names and values may be present ephemerally within the 1 MiB total response cap.
+The decoder consumes only Content-Type and Content-Disposition and discards every other header before the typed domain boundary, persistence, diagnostics, logs, or caller output.
 The response is at most 1 MiB, the selected decoded part is at most 512 KiB, the tree is at most 1,000 nodes and 32 levels, and the request uses the accepted maximum of four explicit attempts with a 15-second deadline per attempt.
-No attachment endpoint exists, and a filename-bearing or attachment-backed node excludes its complete descendant subtree from selection.
+No attachment endpoint exists, and a filename-bearing, attachment-backed, or attachment-disposition node excludes its complete descendant subtree from selection.
 
 Selection walks the complete bounded tree in provider order, chooses the first eligible inline `text/plain` part, and uses the first eligible inline `text/html` part only when no eligible plain part exists.
 Selected data requires canonical unpadded Gmail base64url and exact declared-size agreement.
 The closed charset set is UTF-8, US-ASCII, ISO-8859-1, and Windows-1252, with absent charset defaulting to US-ASCII.
 Charset semantics are parsed only for an otherwise eligible inline text part, so bounded inert MIME parameters on excluded or non-text nodes do not make a valid visible sibling unavailable.
+Content-Disposition is a single bounded closed decision per node: inline can remain eligible, while attachment or a disposition filename excludes the subtree and duplicate, unknown, conflicting, or malformed values fail closed.
 Unknown, invalid, conflicting, or output-expanding charset data fails closed.
 
 The repository-owned fail-closed HTML tokenizer emits text only, requires balanced unambiguous markup, permits self-closing syntax only for closed void elements, removes active and hidden subtrees, requires closed entity decoding before evaluating security-sensitive visibility attributes, handles exact hidden `!important` and numeric-zero forms, rejects ambiguous computed or obfuscated visibility values, and never emits attributes, URLs, images, CSS, forms, scripts, event handlers, or markup.
 The shared canonicalizer normalizes line endings, replaces disallowed controls, removes reviewed bidirectional and unsafe invisible formatting characters, trims line ends, collapses excessive blank lines, and truncates only at a UTF-8 boundary.
+It canonicalizes the truncated prefix again so a newly exposed boundary byte cannot violate durable form while retaining the original `truncated=true` decision.
 Construction and durable decoding apply the same canonical-excerpt predicate, so noncanonical content cannot enter through a typed caller or malformed durable row.
 Malformed HTML and an empty canonical result are unavailable and never fall back to raw HTML.
 
