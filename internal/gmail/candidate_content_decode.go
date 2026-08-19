@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math"
 	"mime"
 	"strconv"
 	"strings"
@@ -582,14 +583,58 @@ func candidateHidden(attributes map[string]string) (bool, error) {
 		}
 		key = strings.ToLower(strings.TrimSpace(key))
 		value = strings.ToLower(strings.Join(strings.Fields(value), ""))
-		if key == "display" && (value == "none" || value == "none!important") || key == "visibility" && (value == "hidden" || value == "hidden!important") || key == "opacity" && (value == "0" || value == "0!important") {
-			return true, nil
+		hidden, relevant, err := candidateHiddenCSSDeclaration(key, value)
+		if err != nil {
+			return false, err
 		}
-		if key == "display" && (strings.HasPrefix(value, "none") || strings.Contains(value, "!")) || key == "visibility" && (strings.HasPrefix(value, "hidden") || strings.Contains(value, "!")) || key == "opacity" && (value == "0.0" || strings.Contains(value, "!")) {
-			return false, errCandidateContentDecode
+		if relevant && hidden {
+			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func candidateHiddenCSSDeclaration(key, value string) (bool, bool, error) {
+	if key != "display" && key != "visibility" && key != "opacity" {
+		return false, false, nil
+	}
+	if strings.HasSuffix(value, "!important") {
+		value = strings.TrimSuffix(value, "!important")
+	}
+	if value == "" || strings.Contains(value, "!") {
+		return false, true, errCandidateContentDecode
+	}
+	switch key {
+	case "display":
+		if value == "none" {
+			return true, true, nil
+		}
+		if strings.ContainsAny(value, "()") || value == "inherit" || value == "unset" || value == "revert" || value == "revert-layer" {
+			return false, true, errCandidateContentDecode
+		}
+		return false, true, nil
+	case "visibility":
+		switch value {
+		case "hidden", "collapse":
+			return true, true, nil
+		case "visible", "initial":
+			return false, true, nil
+		default:
+			return false, true, errCandidateContentDecode
+		}
+	case "opacity":
+		percentage := strings.HasSuffix(value, "%")
+		if percentage {
+			value = strings.TrimSuffix(value, "%")
+		}
+		number, err := strconv.ParseFloat(value, 64)
+		if err != nil || math.IsInf(number, 0) || math.IsNaN(number) {
+			return false, true, errCandidateContentDecode
+		}
+		return number <= 0, true, nil
+	default:
+		return false, false, nil
+	}
 }
 
 func decodeCandidateAttributeEntities(value string) (string, error) {

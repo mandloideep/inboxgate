@@ -102,6 +102,8 @@ func TestDecodeCandidateHTMLRejectsNonvoidSelfClosingAndAmbiguousHiddenCSS(t *te
 		`<div style="display:none!important">hidden</div><p>visible</p>`,
 		`<div style="visibility:hidden ! important">hidden</div><p>visible</p>`,
 		`<div style="opacity:0!important">hidden</div><p>visible</p>`,
+		`<div style="opacity:0.0">hidden</div><p>visible</p>`,
+		`<div style="visibility:collapse">hidden</div><p>visible</p>`,
 	} {
 		text, err := candidateHTMLToText(html)
 		if err != nil || strings.TrimSpace(text) != "visible" {
@@ -111,7 +113,8 @@ func TestDecodeCandidateHTMLRejectsNonvoidSelfClosingAndAmbiguousHiddenCSS(t *te
 	for _, html := range []string{
 		`<div style="display:n/**/one">hidden</div>`,
 		`<div style="visibility:hidden!synthetic">hidden</div>`,
-		`<div style="opacity:0.0">hidden</div>`,
+		`<div style="opacity:calc(0)">hidden</div>`,
+		`<div style="display:var(--synthetic)">hidden</div>`,
 	} {
 		if _, err := candidateHTMLToText(html); err == nil {
 			t.Fatalf("ambiguous hidden CSS accepted: %q", html)
