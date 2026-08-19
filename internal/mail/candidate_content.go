@@ -7,6 +7,7 @@ import (
 	"errors"
 	"hash"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -112,9 +113,33 @@ func DecodeCandidateContent(extractorVersion int64, recordID, sourceMetadataHash
 func validCandidateContentInput(input CandidateContentInput) bool {
 	return validLowerHex(input.RecordID, 64) && validLowerHex(input.SourceMetadataHash, 64) && input.GateVersion > 0 &&
 		validLowerHex(input.GateInputHash, 64) && input.SourceKind.Valid() && input.Excerpt != "" &&
-		utf8.ValidString(input.Excerpt) && !strings.ContainsRune(input.Excerpt, 0) &&
+		canonicalCandidateExcerpt(input.Excerpt) &&
 		input.ExcerptLimit >= MinimumExcerptBytes && input.ExcerptLimit <= MaximumExcerptBytes && len(input.Excerpt) <= input.ExcerptLimit &&
 		input.FetchedAtUnixMS >= 0 && input.FetchedAtUnixMS <= MaximumContentFetchedAtUnixMS
+}
+
+func canonicalCandidateExcerpt(value string) bool {
+	if value == "" || !utf8.ValidString(value) || strings.TrimSpace(value) != value || strings.Contains(value, "\n\n\n") {
+		return false
+	}
+	for _, line := range strings.Split(value, "\n") {
+		if strings.TrimRight(line, " \t") != line {
+			return false
+		}
+	}
+	for _, character := range value {
+		if character != '\n' && character != '\t' && unicode.IsControl(character) || unsafeCandidateExcerptRune(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func unsafeCandidateExcerptRune(value rune) bool {
+	if value == 0x00ad || value == 0x061c || value == 0x200b || value == 0x200c || value == 0x200d || value == 0x200e || value == 0x200f || value == 0x2060 || value == 0xfeff {
+		return true
+	}
+	return value >= 0x202a && value <= 0x202e || value >= 0x2066 && value <= 0x2069 || value >= 0xfe00 && value <= 0xfe0f || value >= 0xe0100 && value <= 0xe01ef
 }
 
 func deriveCandidateContentHash(extractorVersion, gateVersion uint32, kind CandidateSourceKind, limit int, truncated bool, excerpt string) string {

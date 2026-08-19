@@ -195,7 +195,7 @@ func (extractor *CandidateContentExtractor) Extract(ctx context.Context, account
 		return maildomain.CandidateContent{}, fixedCandidateContentStorageError(priorErr)
 	}
 	if err := extractor.store.CommitCandidateContent(ctx, commit); err != nil {
-		return maildomain.CandidateContent{}, fixedCandidateContentStorageError(err)
+		return maildomain.CandidateContent{}, fixedCandidateContentCommitError(err)
 	}
 	durable, err := extractor.store.GetCandidateContent(ctx, accountID, gmailMessageID, excerptLimit)
 	if err != nil || !durable.Current || !durable.Content.SemanticEqual(next) {
@@ -302,6 +302,20 @@ func fixedCandidateContentStorageError(err error) error {
 		return ErrCandidateContentConflict
 	case errors.Is(err, storage.ErrCandidateContentIneligible), errors.Is(err, storage.ErrGateDecisionNotFound):
 		return ErrCandidateContentIneligible
+	default:
+		return ErrCandidateContentRecoveryRequired
+	}
+}
+
+func fixedCandidateContentCommitError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return errors.Join(ErrCandidateContentRecoveryRequired, err)
+	}
+	switch {
+	case errors.Is(err, storage.ErrLifecycleConflict):
+		return ErrCandidateContentInactiveAccount
+	case errors.Is(err, storage.ErrCandidateContentConflict), errors.Is(err, storage.ErrCandidateContentStaleSource), errors.Is(err, storage.ErrCandidateContentIneligible), errors.Is(err, storage.ErrGateDecisionNotFound):
+		return ErrCandidateContentConflict
 	default:
 		return ErrCandidateContentRecoveryRequired
 	}

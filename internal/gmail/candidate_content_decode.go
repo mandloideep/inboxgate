@@ -50,7 +50,7 @@ func decodeCandidateContentResponse(body []byte, messageID, threadID string, exc
 		return "", "", false, errCandidateContentDecode
 	}
 	selection := candidatePartSelection{}
-	if err := walkCandidatePart(payload, 1, &selection); err != nil {
+	if err := walkCandidatePart(payload, 1, false, &selection); err != nil {
 		return "", "", false, errCandidateContentDecode
 	}
 	selected := selection.plain
@@ -82,7 +82,7 @@ func decodeCandidateContentResponse(body []byte, messageID, threadID string, exc
 	return selected.kind, excerpt, truncated, nil
 }
 
-func walkCandidatePart(raw json.RawMessage, depth int, selection *candidatePartSelection) error {
+func walkCandidatePart(raw json.RawMessage, depth int, excludedAncestor bool, selection *candidatePartSelection) error {
 	if depth > MaximumMessagePartDepth {
 		return errCandidateContentDecode
 	}
@@ -98,10 +98,6 @@ func walkCandidatePart(raw json.RawMessage, depth int, selection *candidatePartS
 	if err != nil || len(mimeType) == 0 || len(mimeType) > 255 || strings.IndexFunc(mimeType, unicode.IsControl) >= 0 {
 		return errCandidateContentDecode
 	}
-	charset, err := candidatePartCharset(part["headers"], mimeType)
-	if err != nil {
-		return errCandidateContentDecode
-	}
 	filename, present, err := optionalJSONString(part, "filename")
 	if err != nil || present && !validMIMEFilename(filename) {
 		return errCandidateContentDecode
@@ -110,13 +106,21 @@ func walkCandidatePart(raw json.RawMessage, depth int, selection *candidatePartS
 	if err != nil {
 		return errCandidateContentDecode
 	}
-	eligible := filename == "" && attachmentID == "" && data != "" && (strings.EqualFold(mimeType, "text/plain") || strings.EqualFold(mimeType, "text/html"))
+	excluded := excludedAncestor || filename != "" || attachmentID != ""
+	eligible := !excluded && data != "" && (strings.EqualFold(mimeType, "text/plain") || strings.EqualFold(mimeType, "text/html"))
+	charset, err := candidatePartCharset(part["headers"], mimeType, eligible)
+	if err != nil {
+		return errCandidateContentDecode
+	}
 	if eligible {
+		if size > int64(maildomain.MaximumDecodedContentBytes) || len(data) > base64.RawURLEncoding.EncodedLen(maildomain.MaximumDecodedContentBytes) {
+			return errCandidateContentDecode
+		}
 		kind := maildomain.CandidateSourceTextPlain
 		if strings.EqualFold(mimeType, "text/html") {
 			kind = maildomain.CandidateSourceTextHTML
 		}
-		candidate := &selectedCandidatePart{kind: kind, charset: charset, data: data, size: size}
+		candidate := &selectedCandidatePart{kind: kind, charset: charset, data: data, size: int(size)}
 		if kind == maildomain.CandidateSourceTextPlain && selection.plain == nil {
 			selection.plain = candidate
 		}
@@ -139,14 +143,14 @@ func walkCandidatePart(raw json.RawMessage, depth int, selection *candidatePartS
 		return errCandidateContentDecode
 	}
 	for _, child := range children {
-		if err := walkCandidatePart(child, depth+1, selection); err != nil {
+		if err := walkCandidatePart(child, depth+1, excluded, selection); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func candidatePartCharset(raw json.RawMessage, fieldMIMEType string) (string, error) {
+func candidatePartCharset(raw json.RawMessage, fieldMIMEType string, eligible bool) (string, error) {
 	charset := "us-ascii"
 	if len(raw) == 0 || isJSONNull(raw) {
 		return charset, nil
@@ -170,6 +174,9 @@ func candidatePartCharset(raw json.RawMessage, fieldMIMEType string) (string, er
 		if !strings.EqualFold(name, "Content-Type") {
 			continue
 		}
+		if !eligible {
+			continue
+		}
 		selectedBytes += len(name) + len(value)
 		if found || selectedBytes > MaximumSelectedHeaderBytes {
 			return "", errCandidateContentDecode
@@ -178,11 +185,6 @@ func candidatePartCharset(raw json.RawMessage, fieldMIMEType string) (string, er
 		mediaType, parameters, err := mime.ParseMediaType(value)
 		if err != nil || !strings.EqualFold(mediaType, fieldMIMEType) {
 			return "", errCandidateContentDecode
-		}
-		for key := range parameters {
-			if !strings.EqualFold(key, "charset") && !strings.EqualFold(key, "boundary") {
-				return "", errCandidateContentDecode
-			}
 		}
 		if value, ok := parameters["charset"]; ok {
 			charset = strings.ToLower(strings.TrimSpace(value))
@@ -194,7 +196,7 @@ func candidatePartCharset(raw json.RawMessage, fieldMIMEType string) (string, er
 	return charset, nil
 }
 
-func candidatePartBody(raw json.RawMessage) (int, string, string, error) {
+func candidatePartBody(raw json.RawMessage) (int64, string, string, error) {
 	if len(raw) == 0 || isJSONNull(raw) {
 		return 0, "", "", nil
 	}
@@ -208,15 +210,15 @@ func candidatePartBody(raw json.RawMessage) (int, string, string, error) {
 	}
 	textSize := string(bytes.TrimSpace(rawSize))
 	size64, err := strconv.ParseInt(textSize, 10, 64)
-	if err != nil || size64 < 0 || size64 > maildomain.MaximumDecodedContentBytes || strconv.FormatInt(size64, 10) != textSize {
+	if err != nil || size64 < 0 || strconv.FormatInt(size64, 10) != textSize {
 		return 0, "", "", errCandidateContentDecode
 	}
 	data, _, dataErr := optionalJSONString(body, "data")
 	attachmentID, _, attachmentErr := optionalJSONString(body, "attachmentId")
-	if dataErr != nil || attachmentErr != nil || len(attachmentID) > maximumAttachmentIDBytes || strings.IndexFunc(attachmentID, unicode.IsControl) >= 0 || len(data) > base64.RawURLEncoding.EncodedLen(maildomain.MaximumDecodedContentBytes) {
+	if dataErr != nil || attachmentErr != nil || len(attachmentID) > maximumAttachmentIDBytes || strings.IndexFunc(attachmentID, unicode.IsControl) >= 0 {
 		return 0, "", "", errCandidateContentDecode
 	}
-	return int(size64), data, attachmentID, nil
+	return size64, data, attachmentID, nil
 }
 
 func decodeCandidatePartData(part selectedCandidatePart) ([]byte, error) {
@@ -343,6 +345,9 @@ func candidateHTMLToText(input string) (string, error) {
 		token := input[index+1 : end]
 		closing, selfClosing, name, attributes, err := parseCandidateTag(token)
 		if err != nil {
+			return "", errCandidateContentDecode
+		}
+		if selfClosing && !candidateVoidTag(name) {
 			return "", errCandidateContentDecode
 		}
 		if closing {
@@ -567,6 +572,9 @@ func candidateHidden(attributes map[string]string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if strings.Contains(style, "/*") || strings.Contains(style, "*/") || strings.Contains(style, "\\") {
+		return false, errCandidateContentDecode
+	}
 	for _, declaration := range strings.Split(style, ";") {
 		key, value, found := strings.Cut(declaration, ":")
 		if !found {
@@ -574,8 +582,11 @@ func candidateHidden(attributes map[string]string) (bool, error) {
 		}
 		key = strings.ToLower(strings.TrimSpace(key))
 		value = strings.ToLower(strings.Join(strings.Fields(value), ""))
-		if key == "display" && value == "none" || key == "visibility" && value == "hidden" || key == "opacity" && value == "0" {
+		if key == "display" && (value == "none" || value == "none!important") || key == "visibility" && (value == "hidden" || value == "hidden!important") || key == "opacity" && (value == "0" || value == "0!important") {
 			return true, nil
+		}
+		if key == "display" && (strings.HasPrefix(value, "none") || strings.Contains(value, "!")) || key == "visibility" && (strings.HasPrefix(value, "hidden") || strings.Contains(value, "!")) || key == "opacity" && (value == "0.0" || strings.Contains(value, "!")) {
+			return false, errCandidateContentDecode
 		}
 	}
 	return false, nil
