@@ -77,11 +77,10 @@ func validSBOMJSON(t *testing.T) []byte {
 }
 
 func validSBOMPackages() []map[string]any {
-	packages := []struct {
+	reviewedModules := []struct {
 		name    string
 		version string
 	}{
-		{name: "InboxGate", version: "v0.1.0"},
 		{name: "github.com/google/jsonschema-go", version: "v0.4.3"},
 		{name: "github.com/modelcontextprotocol/go-sdk", version: "v1.7.0"},
 		{name: "github.com/segmentio/asm", version: "v1.1.3"},
@@ -94,18 +93,42 @@ func validSBOMPackages() []map[string]any {
 		{name: "golang.org/x/time", version: "v0.15.0"},
 		{name: "turso.tech/database/tursogo-serverless", version: "v0.0.0-20260817122138-24adc316cdc4"},
 	}
-	result := make([]map[string]any, 0, len(packages))
-	for index, pkg := range packages {
-		result = append(result, map[string]any{
-			"name":             pkg.name,
-			"SPDXID":           "SPDXRef-Package-" + strings.NewReplacer("/", "-", ".", "-").Replace(pkg.name) + "-" + strconv.Itoa(index),
-			"versionInfo":      pkg.version,
+	locations := []string{
+		"/inboxgate_0.1.0_darwin_amd64/inboxgate",
+		"/inboxgate_0.1.0_darwin_arm64/inboxgate",
+		"/inboxgate_0.1.0_linux_amd64/inboxgate",
+		"/inboxgate_0.1.0_linux_arm64/inboxgate",
+		"/inboxgate_0.1.0_windows_amd64/inboxgate.exe",
+		"/inboxgate_0.1.0_windows_arm64/inboxgate.exe",
+	}
+	result := make([]map[string]any, 0, 81)
+	appendPackage := func(name, version, sourceInfo string) {
+		pkg := map[string]any{
+			"name":             name,
+			"SPDXID":           "SPDXRef-Package-" + strings.NewReplacer("/", "-", ".", "-").Replace(name) + "-" + strconv.Itoa(len(result)),
+			"versionInfo":      version,
 			"downloadLocation": "NOASSERTION",
 			"filesAnalyzed":    false,
 			"licenseConcluded": "NOASSERTION",
 			"licenseDeclared":  "NOASSERTION",
 			"copyrightText":    "NOASSERTION",
-		})
+		}
+		if sourceInfo != "" {
+			pkg["sourceInfo"] = sourceInfo
+		}
+		result = append(result, pkg)
+	}
+	appendPackage("InboxGate", "v0.1.0", "")
+	for _, location := range locations {
+		goSource := "acquired package info from go module information: " + location
+		appendPackage("github.com/mandloideep/inboxgate", "UNKNOWN", goSource)
+		for _, module := range reviewedModules {
+			appendPackage(module.name, module.version, goSource)
+		}
+		appendPackage("stdlib", "go1.26.6", goSource)
+		if strings.Contains(location, "_windows_") {
+			appendPackage("inboxgate", "UNKNOWN", "acquired package info from the following paths: "+location)
+		}
 	}
 	return result
 }

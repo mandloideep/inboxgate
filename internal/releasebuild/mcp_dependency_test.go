@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,49 @@ func TestReleaseBinaryIncludesReviewedMCPRuntimeModules(t *testing.T) {
 	}
 }
 
+func TestSyntheticSBOMMatchesPinnedSyftSixBinaryShape(t *testing.T) {
+	packages := validSBOMPackages()
+	if len(packages) != 81 {
+		t.Fatalf("synthetic pinned-Syft package rows = %d, want 81", len(packages))
+	}
+	wantCounts := map[string]int{
+		"InboxGate": 1, "github.com/mandloideep/inboxgate": 6, "github.com/google/jsonschema-go": 6,
+		"github.com/modelcontextprotocol/go-sdk": 6, "github.com/segmentio/asm": 6, "github.com/segmentio/encoding": 6,
+		"github.com/yosida95/uritemplate/v3": 6, "go.yaml.in/yaml/v3": 6, "golang.org/x/oauth2": 6,
+		"golang.org/x/sync": 6, "golang.org/x/sys": 6, "golang.org/x/time": 6,
+		"turso.tech/database/tursogo-serverless": 6, "stdlib": 6, "inboxgate": 2,
+	}
+	gotCounts := map[string]int{}
+	locationCounts := map[string]int{}
+	for _, pkg := range packages {
+		name := pkg["name"].(string)
+		gotCounts[name]++
+		if sourceInfo := sbomSourceInfo(pkg); sourceInfo != "" {
+			location := strings.TrimPrefix(sourceInfo, "acquired package info from go module information: ")
+			if location == sourceInfo {
+				location = strings.TrimPrefix(sourceInfo, "acquired package info from the following paths: ")
+			}
+			locationCounts[location]++
+		}
+	}
+	if !reflect.DeepEqual(gotCounts, wantCounts) {
+		t.Fatalf("synthetic pinned-Syft package counts = %#v, want %#v", gotCounts, wantCounts)
+	}
+	for _, location := range []string{
+		"/inboxgate_0.1.0_darwin_amd64/inboxgate", "/inboxgate_0.1.0_darwin_arm64/inboxgate",
+		"/inboxgate_0.1.0_linux_amd64/inboxgate", "/inboxgate_0.1.0_linux_arm64/inboxgate",
+		"/inboxgate_0.1.0_windows_amd64/inboxgate.exe", "/inboxgate_0.1.0_windows_arm64/inboxgate.exe",
+	} {
+		want := 13
+		if strings.Contains(location, "_windows_") {
+			want = 14
+		}
+		if got := locationCounts[location]; got != want {
+			t.Errorf("synthetic pinned-Syft rows at %q = %d, want %d", location, got, want)
+		}
+	}
+}
+
 func TestSBOMValidationRequiresCompleteExactLinkedRuntimeInventory(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "sbom.json")
@@ -63,84 +107,133 @@ func TestSBOMValidationRequiresCompleteExactLinkedRuntimeInventory(t *testing.T)
 		return ValidateSBOM(path, "v0.1.0", directory)
 	}
 	if err := write(t, nil); err != nil {
-		t.Fatalf("exact linked runtime inventory rejected: %v", err)
+		t.Errorf("pinned Syft six-binary inventory rejected: %v", err)
 	}
 
-	want := []struct {
-		name    string
-		version string
+	mutants := []struct {
+		name   string
+		mutate func(map[string]any)
 	}{
-		{name: "InboxGate", version: "v0.1.0"},
-		{name: "github.com/google/jsonschema-go", version: "v0.4.3"},
-		{name: "github.com/modelcontextprotocol/go-sdk", version: "v1.7.0"},
-		{name: "github.com/segmentio/asm", version: "v1.1.3"},
-		{name: "github.com/segmentio/encoding", version: "v0.5.4"},
-		{name: "github.com/yosida95/uritemplate/v3", version: "v3.0.2"},
-		{name: "go.yaml.in/yaml/v3", version: "v3.0.5"},
-		{name: "golang.org/x/oauth2", version: "v0.36.0"},
-		{name: "golang.org/x/sync", version: "v0.20.0"},
-		{name: "golang.org/x/sys", version: "v0.41.0"},
-		{name: "golang.org/x/time", version: "v0.15.0"},
-		{name: "turso.tech/database/tursogo-serverless", version: "v0.0.0-20260817122138-24adc316cdc4"},
+		{name: "missing distinct module", mutate: func(document map[string]any) {
+			document["packages"] = filterSBOMPackages(document, func(pkg map[string]any) bool {
+				return pkg["name"] != "github.com/modelcontextprotocol/go-sdk"
+			})
+		}},
+		{name: "missing module at one binary", mutate: func(document map[string]any) {
+			document["packages"] = filterSBOMPackages(document, func(pkg map[string]any) bool {
+				return pkg["name"] != "github.com/modelcontextprotocol/go-sdk" || !strings.Contains(sbomSourceInfo(pkg), "linux_amd64")
+			})
+		}},
+		{name: "wrong module version", mutate: func(document map[string]any) {
+			forEachSBOMPackage(document, "github.com/segmentio/asm", func(pkg map[string]any) { pkg["versionInfo"] = "v1.1.4" })
+		}},
+		{name: "inconsistent duplicate versions", mutate: func(document map[string]any) {
+			mutateFirstSBOMPackage(document, "golang.org/x/time", func(pkg map[string]any) { pkg["versionInfo"] = "v0.15.1" })
+		}},
+		{name: "unexpected module", mutate: func(document map[string]any) {
+			appendSBOMPackage(document, map[string]any{
+				"name": "example.invalid/unreviewed-runtime", "SPDXID": "SPDXRef-Package-unexpected", "versionInfo": "v1.0.0",
+				"sourceInfo":       "acquired package info from go module information: /inboxgate_0.1.0_linux_amd64/inboxgate",
+				"downloadLocation": "NOASSERTION", "filesAnalyzed": false, "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION", "copyrightText": "NOASSERTION",
+			})
+		}},
+		{name: "missing stdlib", mutate: func(document map[string]any) {
+			document["packages"] = filterSBOMPackages(document, func(pkg map[string]any) bool { return pkg["name"] != "stdlib" })
+		}},
+		{name: "wrong stdlib", mutate: func(document map[string]any) {
+			forEachSBOMPackage(document, "stdlib", func(pkg map[string]any) { pkg["versionInfo"] = "go1.26.5" })
+		}},
+		{name: "duplicate expected location", mutate: func(document map[string]any) {
+			duplicateFirstSBOMPackage(document, "golang.org/x/sync", nil)
+		}},
+		{name: "duplicate with unexpected location", mutate: func(document map[string]any) {
+			duplicateFirstSBOMPackage(document, "github.com/google/jsonschema-go", func(pkg map[string]any) {
+				pkg["sourceInfo"] = "acquired package info from go module information: /unexpected/inboxgate"
+			})
+		}},
+		{name: "location escape", mutate: func(document map[string]any) {
+			mutateFirstSBOMPackage(document, "github.com/yosida95/uritemplate/v3", func(pkg map[string]any) {
+				pkg["sourceInfo"] = "acquired package info from go module information: /inboxgate_0.1.0_linux_amd64/../inboxgate"
+			})
+		}},
+		{name: "location alias", mutate: func(document map[string]any) {
+			mutateFirstSBOMPackage(document, "go.yaml.in/yaml/v3", func(pkg map[string]any) {
+				pkg["sourceInfo"] = "acquired package info from go module information: //inboxgate_0.1.0_darwin_amd64/inboxgate"
+			})
+		}},
+		{name: "missing main module location", mutate: func(document map[string]any) {
+			document["packages"] = filterSBOMPackages(document, func(pkg map[string]any) bool {
+				return pkg["name"] != "github.com/mandloideep/inboxgate" || !strings.Contains(sbomSourceInfo(pkg), "windows_arm64")
+			})
+		}},
+		{name: "unexpected binary classifier scope", mutate: func(document map[string]any) {
+			duplicateFirstSBOMPackage(document, "inboxgate", func(pkg map[string]any) {
+				pkg["sourceInfo"] = "acquired package info from the following paths: /inboxgate_0.1.0_linux_amd64/inboxgate"
+			})
+		}},
 	}
-	for _, expected := range want {
-		t.Run("omit_"+expected.name, func(t *testing.T) {
-			err := write(t, func(document map[string]any) {
-				var kept []any
-				for _, value := range document["packages"].([]any) {
-					if value.(map[string]any)["name"] != expected.name {
-						kept = append(kept, value)
-					}
-				}
-				document["packages"] = kept
-			})
-			if err == nil {
-				t.Fatal("SBOM accepted omitted reviewed runtime package")
-			}
-		})
-		t.Run("wrong_version_"+expected.name, func(t *testing.T) {
-			err := write(t, func(document map[string]any) {
-				for _, value := range document["packages"].([]any) {
-					pkg := value.(map[string]any)
-					if pkg["name"] == expected.name {
-						pkg["versionInfo"] = expected.version + ".wrong"
-					}
-				}
-			})
-			if err == nil {
-				t.Fatal("SBOM accepted wrong reviewed runtime version")
-			}
-		})
-		t.Run("duplicate_"+expected.name, func(t *testing.T) {
-			err := write(t, func(document map[string]any) {
-				for _, value := range document["packages"].([]any) {
-					pkg := value.(map[string]any)
-					if pkg["name"] == expected.name {
-						duplicate := make(map[string]any, len(pkg))
-						for key, item := range pkg {
-							duplicate[key] = item
-						}
-						duplicate["SPDXID"] = duplicate["SPDXID"].(string) + "-duplicate"
-						document["packages"] = append(document["packages"].([]any), duplicate)
-						return
-					}
-				}
-			})
-			if err == nil {
-				t.Fatal("SBOM accepted duplicate reviewed runtime package")
+	for _, mutant := range mutants {
+		t.Run(mutant.name, func(t *testing.T) {
+			if err := write(t, mutant.mutate); err == nil {
+				t.Fatal("SBOM accepted mutated pinned-Syft inventory")
 			}
 		})
 	}
+}
 
-	if err := write(t, func(document map[string]any) {
-		unexpected := map[string]any{
-			"name": "example.invalid/unreviewed-runtime", "SPDXID": "SPDXRef-Package-unexpected", "versionInfo": "v1.0.0",
-			"downloadLocation": "NOASSERTION", "filesAnalyzed": false, "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION", "copyrightText": "NOASSERTION",
+func filterSBOMPackages(document map[string]any, keep func(map[string]any) bool) []any {
+	result := make([]any, 0, len(document["packages"].([]any)))
+	for _, value := range document["packages"].([]any) {
+		if pkg := value.(map[string]any); keep(pkg) {
+			result = append(result, pkg)
 		}
-		document["packages"] = append(document["packages"].([]any), unexpected)
-	}); err == nil {
-		t.Fatal("SBOM accepted unexpected runtime package")
 	}
+	return result
+}
+
+func forEachSBOMPackage(document map[string]any, name string, mutate func(map[string]any)) {
+	for _, value := range document["packages"].([]any) {
+		if pkg := value.(map[string]any); pkg["name"] == name {
+			mutate(pkg)
+		}
+	}
+}
+
+func mutateFirstSBOMPackage(document map[string]any, name string, mutate func(map[string]any)) {
+	for _, value := range document["packages"].([]any) {
+		if pkg := value.(map[string]any); pkg["name"] == name {
+			mutate(pkg)
+			return
+		}
+	}
+}
+
+func duplicateFirstSBOMPackage(document map[string]any, name string, mutate func(map[string]any)) {
+	for _, value := range document["packages"].([]any) {
+		pkg := value.(map[string]any)
+		if pkg["name"] != name {
+			continue
+		}
+		duplicate := make(map[string]any, len(pkg))
+		for key, item := range pkg {
+			duplicate[key] = item
+		}
+		duplicate["SPDXID"] = duplicate["SPDXID"].(string) + "-duplicate"
+		if mutate != nil {
+			mutate(duplicate)
+		}
+		appendSBOMPackage(document, duplicate)
+		return
+	}
+}
+
+func appendSBOMPackage(document map[string]any, pkg map[string]any) {
+	document["packages"] = append(document["packages"].([]any), pkg)
+}
+
+func sbomSourceInfo(pkg map[string]any) string {
+	value, _ := pkg["sourceInfo"].(string)
+	return value
 }
 
 func containsString(values []string, target string) bool {
