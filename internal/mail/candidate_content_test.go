@@ -66,6 +66,33 @@ func TestCandidateContentRejectsEveryBoundaryViolation(t *testing.T) {
 	}
 }
 
+func TestCandidateContentRejectsNoncanonicalExcerptInConstructionAndDecode(t *testing.T) {
+	valid := CandidateContentInput{
+		RecordID: strings.Repeat("1", 64), SourceMetadataHash: strings.Repeat("2", 64), GateVersion: 1,
+		GateInputHash: strings.Repeat("3", 64), SourceKind: CandidateSourceTextPlain, ExcerptLimit: 1024,
+		FetchedAtUnixMS: 1700000000123,
+	}
+	for _, excerpt := range []string{
+		" leading", "trailing ", "line one \nline two", "line one\t\nline two", "line one\r\nline two",
+		"line one\n\n\nline two", "left\u202eright", "left\u200bright", "left\x01right",
+	} {
+		t.Run(strings.ReplaceAll(excerpt, "\n", "_"), func(t *testing.T) {
+			input := valid
+			input.Excerpt = excerpt
+			if _, err := NewCandidateContent(input); err == nil {
+				t.Fatalf("constructor accepted noncanonical excerpt %q", excerpt)
+			}
+			hashText := deriveCandidateContentHash(CandidateExtractorVersion1, input.GateVersion, input.SourceKind, input.ExcerptLimit, false, excerpt)
+			if _, err := DecodeCandidateContent(
+				int64(CandidateExtractorVersion1), input.RecordID, input.SourceMetadataHash, int64(input.GateVersion), input.GateInputHash,
+				input.SourceKind.String(), excerpt, int64(len(excerpt)), int64(input.ExcerptLimit), 0, hashText, input.FetchedAtUnixMS,
+			); err == nil {
+				t.Fatalf("durable decode accepted noncanonical excerpt %q", excerpt)
+			}
+		})
+	}
+}
+
 func boolInteger(value bool) int64 {
 	if value {
 		return 1

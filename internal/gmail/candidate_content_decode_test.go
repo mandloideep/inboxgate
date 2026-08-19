@@ -41,6 +41,27 @@ func TestDecodeCandidateContentPrefersPlainAndCanonicalizes(t *testing.T) {
 	}
 }
 
+func TestDecodeCandidateIgnoresInertMIMEParameters(t *testing.T) {
+	plain := `{"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=utf-8; format=flowed"}],"filename":"","body":{"size":7,"data":"dmlzaWJsZQ"}}`
+	PDF := `{"mimeType":"application/pdf","headers":[{"name":"Content-Type","value":"application/pdf; name=synthetic.pdf"}],"filename":"","body":{"size":4,"data":"cGRmIQ"}}`
+	payload := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[{"name":"Content-Type","value":"multipart/mixed; boundary=synthetic"}],"filename":"","body":{"size":0},"parts":[%s,%s]}`, PDF, plain)
+	kind, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024)
+	if err != nil || kind != maildomain.CandidateSourceTextPlain || excerpt != "visible" {
+		t.Fatalf("kind=%s excerpt=%q err=%v", kind, excerpt, err)
+	}
+}
+
+func TestDecodeCandidateExcludesAttachmentSubtrees(t *testing.T) {
+	attachedChild := textPart("text/html", "utf-8", []byte(`<p>attached secret</p>`))
+	attached := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[{"name":"Content-Type","value":"multipart/mixed; name=attached.eml"}],"filename":"attached.eml","body":{"size":0,"attachmentId":"attachment"},"parts":[%s]}`, attachedChild)
+	visible := textPart("text/html", "utf-8", []byte(`<p>visible</p>`))
+	payload := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[],"filename":"","body":{"size":0},"parts":[%s,%s]}`, attached, visible)
+	_, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024)
+	if err != nil || excerpt != "visible" {
+		t.Fatalf("excerpt=%q err=%v", excerpt, err)
+	}
+}
+
 func TestDecodeCandidateHTMLDiscardsActiveHiddenAndLinks(t *testing.T) {
 	html := `<html><head><title>secret</title></head><body><p>Hello <a href="https://private.invalid/path">world</a></p><script>steal()</script><style>.x{}</style><div hidden>hidden one</div><div aria-hidden="true">hidden two</div><div style="DISPLAY : none">hidden three</div><form>hidden four</form><p>Done</p></body></html>`
 	payload := textPart("text/html", "utf-8", []byte(html))
@@ -67,6 +88,37 @@ func TestDecodeCandidateHTMLFailsClosedOnEncodedVisibility(t *testing.T) {
 		if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024); err == nil {
 			t.Fatalf("encoded visibility accepted: %q", html)
 		}
+	}
+}
+
+func TestDecodeCandidateHTMLRejectsNonvoidSelfClosingAndAmbiguousHiddenCSS(t *testing.T) {
+	for _, tag := range []string{"div", "script", "style", "template", "noscript", "svg", "math", "head", "form", "object", "iframe", "canvas"} {
+		html := "<" + tag + "/>visible"
+		if _, err := candidateHTMLToText(html); err == nil {
+			t.Fatalf("nonvoid self-closing tag accepted: %q", html)
+		}
+	}
+	for _, html := range []string{
+		`<div style="display:none!important">hidden</div><p>visible</p>`,
+		`<div style="visibility:hidden ! important">hidden</div><p>visible</p>`,
+		`<div style="opacity:0!important">hidden</div><p>visible</p>`,
+	} {
+		text, err := candidateHTMLToText(html)
+		if err != nil || strings.TrimSpace(text) != "visible" {
+			t.Fatalf("hidden CSS retained for %q: text=%q err=%v", html, text, err)
+		}
+	}
+	for _, html := range []string{
+		`<div style="display:n/**/one">hidden</div>`,
+		`<div style="visibility:hidden!synthetic">hidden</div>`,
+		`<div style="opacity:0.0">hidden</div>`,
+	} {
+		if _, err := candidateHTMLToText(html); err == nil {
+			t.Fatalf("ambiguous hidden CSS accepted: %q", html)
+		}
+	}
+	if text, err := candidateHTMLToText(`before<br/>after<img src="synthetic"/>done`); err != nil || text != "before\nafterdone" {
+		t.Fatalf("void tags rejected: text=%q err=%v", text, err)
 	}
 }
 
