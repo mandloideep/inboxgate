@@ -1,6 +1,6 @@
 # ADR 0014: Pin the authenticated stateless MCP boundary
 
-- Status: proposed for orchestrator acceptance
+- Status: accepted
 - Date: 2026-08-19
 - Issue: #38
 
