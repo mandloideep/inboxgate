@@ -27,12 +27,36 @@ import (
 
 const modulePath = "github.com/mandloideep/inboxgate"
 const goVersion = "go1.26.6"
+const jsonschemaModulePath = "github.com/google/jsonschema-go"
+const jsonschemaModuleVersion = "v0.4.3"
+const jsonschemaModuleSum = "h1:/DBOLZTfDow7pe2GmaJNhltueGTtDKICi8V8p+DQPd0="
+const mcpModulePath = "github.com/modelcontextprotocol/go-sdk"
+const mcpModuleVersion = "v1.7.0"
+const mcpModuleSum = "h1:yqjY2dsbKAC0LSuWZVBMrHgiG8ukXv6NRo0JiALay44="
+const segmentioASMModulePath = "github.com/segmentio/asm"
+const segmentioASMModuleVersion = "v1.1.3"
+const segmentioASMModuleSum = "h1:WM03sfUOENvvKexOLp+pCqgb/WDjsi7EK8gIsICtzhc="
+const segmentioEncodingModulePath = "github.com/segmentio/encoding"
+const segmentioEncodingModuleVersion = "v0.5.4"
+const segmentioEncodingModuleSum = "h1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfvNt0="
+const uriTemplateModulePath = "github.com/yosida95/uritemplate/v3"
+const uriTemplateModuleVersion = "v3.0.2"
+const uriTemplateModuleSum = "h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4="
 const yamlModulePath = "go.yaml.in/yaml/v3"
 const yamlModuleVersion = "v3.0.5"
 const yamlModuleSum = "h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw="
 const oauthModulePath = "golang.org/x/oauth2"
 const oauthModuleVersion = "v0.36.0"
 const oauthModuleSum = "h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs="
+const syncModulePath = "golang.org/x/sync"
+const syncModuleVersion = "v0.20.0"
+const syncModuleSum = "h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4="
+const sysModulePath = "golang.org/x/sys"
+const sysModuleVersion = "v0.41.0"
+const sysModuleSum = "h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k="
+const timeModulePath = "golang.org/x/time"
+const timeModuleVersion = "v0.15.0"
+const timeModuleSum = "h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U="
 const tursoModulePath = "turso.tech/database/tursogo-serverless"
 const tursoModuleVersion = "v0.0.0-20260817122138-24adc316cdc4"
 const tursoModuleSum = "h1:Fnxwfn492a+9kTegF2G7QUT1aF0Vfjz0dMrNO+HmthA="
@@ -240,9 +264,17 @@ func ValidateBinary(path, goos, goarch string) error {
 		return fmt.Errorf("Go version = %q, want %q", info.GoVersion, goVersion)
 	}
 	expectedDependencies := map[string]struct{ version, sum string }{
-		yamlModulePath:  {yamlModuleVersion, yamlModuleSum},
-		oauthModulePath: {oauthModuleVersion, oauthModuleSum},
-		tursoModulePath: {tursoModuleVersion, tursoModuleSum},
+		jsonschemaModulePath:        {jsonschemaModuleVersion, jsonschemaModuleSum},
+		mcpModulePath:               {mcpModuleVersion, mcpModuleSum},
+		segmentioASMModulePath:      {segmentioASMModuleVersion, segmentioASMModuleSum},
+		segmentioEncodingModulePath: {segmentioEncodingModuleVersion, segmentioEncodingModuleSum},
+		uriTemplateModulePath:       {uriTemplateModuleVersion, uriTemplateModuleSum},
+		yamlModulePath:              {yamlModuleVersion, yamlModuleSum},
+		oauthModulePath:             {oauthModuleVersion, oauthModuleSum},
+		syncModulePath:              {syncModuleVersion, syncModuleSum},
+		sysModulePath:               {sysModuleVersion, sysModuleSum},
+		timeModulePath:              {timeModuleVersion, timeModuleSum},
+		tursoModulePath:             {tursoModuleVersion, tursoModuleSum},
 	}
 	if len(info.Deps) != len(expectedDependencies) {
 		return fmt.Errorf("release binary has %d module dependencies, want %d", len(info.Deps), len(expectedDependencies))
@@ -626,6 +658,7 @@ func ValidateSBOM(path, version, workspace string) error {
 		return errors.New("SBOM contains no packages")
 	}
 	foundProduct := false
+	foundMCP := false
 	for _, pkg := range document.Packages {
 		if pkg.Name == "" || pkg.SPDXID == "" || pkg.DownloadLocation == "" || pkg.LicenseConcluded == "" || pkg.LicenseDeclared == "" || pkg.CopyrightText == "" || pkg.FilesAnalyzed == nil {
 			return fmt.Errorf("SBOM package %q is missing required SPDX fields", pkg.Name)
@@ -633,9 +666,15 @@ func ValidateSBOM(path, version, workspace string) error {
 		if strings.EqualFold(pkg.Name, "InboxGate") && pkg.VersionInfo == version {
 			foundProduct = true
 		}
+		if pkg.Name == mcpModulePath && pkg.VersionInfo == mcpModuleVersion {
+			foundMCP = true
+		}
 	}
 	if !foundProduct {
 		return fmt.Errorf("SBOM does not identify InboxGate version %s", version)
+	}
+	if !foundMCP {
+		return fmt.Errorf("SBOM does not identify %s version %s", mcpModulePath, mcpModuleVersion)
 	}
 	versionNumber := strings.TrimPrefix(version, "v")
 	wantFiles := map[string]struct{}{}

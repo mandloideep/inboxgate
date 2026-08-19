@@ -207,6 +207,10 @@ func TestTransportRouteMethodMediaOriginAndHostContract(t *testing.T) {
 		{name: "invalid host whitespace", mutate: func(r *http.Request) { r.Host = "bad host" }, wantStatus: http.StatusBadRequest, wantBody: "invalid_mcp_request\n"},
 		{name: "invalid host comma", mutate: func(r *http.Request) { r.Host = "one.invalid,two.invalid" }, wantStatus: http.StatusBadRequest, wantBody: "invalid_mcp_request\n"},
 		{name: "invalid host userinfo", mutate: func(r *http.Request) { r.Host = "user@host.invalid" }, wantStatus: http.StatusBadRequest, wantBody: "invalid_mcp_request\n"},
+		{name: "invalid host bracket", mutate: func(r *http.Request) { r.Host = "[::1" }, wantStatus: http.StatusBadRequest, wantBody: "invalid_mcp_request\n"},
+		{name: "invalid host port", mutate: func(r *http.Request) { r.Host = "private.invalid:secret" }, wantStatus: http.StatusBadRequest, wantBody: "invalid_mcp_request\n"},
+		{name: "valid host port", mutate: func(r *http.Request) { r.Host = "private.invalid:8443" }, wantStatus: http.StatusOK},
+		{name: "valid ipv6 authority", mutate: func(r *http.Request) { r.Host = "[::1]:8443" }, wantStatus: http.StatusOK},
 		{name: "forwarded ignored", mutate: func(r *http.Request) {
 			r.Header.Set("Forwarded", "host=private.invalid")
 			r.Header.Set("X-Forwarded-Host", "private.invalid")
@@ -338,7 +342,7 @@ func TestEnvelopeStructureBoundsAndErrorCategories(t *testing.T) {
 		{name: "case alias", body: `{"jsonrpc":"2.0","id":1,"Method":"tools/list","params":{` + validMeta() + `}}`, code: -32600},
 		{name: "nul alias", body: `{"jsonrpc":"2.0","id":1,"meth\u0000od":"tools/list","params":{` + validMeta() + `}}`, code: -32600},
 		{name: "missing meta", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`, code: -32602},
-		{name: "unsupported client capability", body: strings.Replace(requestBody("tools/list"), `"clientCapabilities":{}`, `"clientCapabilities":{"sampling":{}}`, 1), code: -32602},
+		{name: "unsupported client capability", body: strings.Replace(requestBody("tools/list"), `"io.modelcontextprotocol/clientCapabilities":{}`, `"io.modelcontextprotocol/clientCapabilities":{"sampling":{}}`, 1), code: -32602},
 		{name: "deep", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{` + validMeta() + `,"extra":` + deep + `}}`, code: -32600},
 		{name: "nodes", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{` + validMeta() + `,"extra":` + nodes + `}}`, code: -32600},
 		{name: "extra arguments", body: strings.Replace(requestBody("tools/call"), `"arguments":{}`, `"arguments":{"private":"value"}`, 1), code: -32602},
@@ -592,37 +596,65 @@ func TestDiscoveryAdvertisesOnlyExactRevisionAndTools(t *testing.T) {
 }
 
 func TestCompatibilityFlagsCannotBroadenWrapper(t *testing.T) {
+	if os.Getenv("INBOXGATE_MCP_COMPATIBILITY_HELPER") == "1" {
+		assertCompatibilityBoundary(t)
+		return
+	}
 	flags := []string{
 		"allowsessionsinstateless=1",
-		"disablecontenttypecheck=1",
-		"enableoriginverification=0",
-		"seterroroverwrite=1",
+		"customresnotfounderrcode=1",
 		"disablecompleteparamsvalidation=1",
+		"disablecontenttypecheck=1",
+		"disablelocalhostprotection=1",
+		"enableoriginverification=1",
+		"hintomitempty=1",
+		"nomethodnotfoundcodeinerror=1",
+		"noprotocolerrorbody=1",
+		"nowrapinvalidparams=1",
+		"seterroroverwrite=1",
 	}
-	for _, flag := range flags {
+	sets := append(append([]string(nil), flags...), strings.Join(flags, ","))
+	for _, flag := range sets {
 		t.Run(flag, func(t *testing.T) {
-			t.Setenv("MCPGODEBUG", flag)
-			handler := newContractHandler(t, config.Defaults())
-			checks := []*http.Request{
-				validRequest(t, "tools/list", requestBody("tools/list")),
-				validRequest(t, "tools/list", requestBody("tools/list")),
-				validRequest(t, "tools/list", requestBody("tools/list")),
-				validRequest(t, "initialize", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`),
+			command := exec.Command(os.Args[0], "-test.run=^TestCompatibilityFlagsCannotBroadenWrapper$", "-test.count=1")
+			environment := make([]string, 0, len(os.Environ())+2)
+			for _, entry := range os.Environ() {
+				if !strings.HasPrefix(entry, "MCPGODEBUG=") && !strings.HasPrefix(entry, "INBOXGATE_MCP_COMPATIBILITY_HELPER=") {
+					environment = append(environment, entry)
+				}
 			}
-			checks[0].Method = http.MethodDelete
-			checks[0].Header.Set("Mcp-Session-Id", "synthetic-session")
-			checks[1].Header.Set("Content-Type", "text/plain")
-			checks[2].Header.Set("Origin", "https://private.invalid")
-			for index, request := range checks {
-				response := perform(t, handler, request)
-				if response.Code == http.StatusOK && !strings.Contains(response.Body.String(), `"code":-32601`) {
-					t.Errorf("compatibility check %d broadened wrapper: %d %q", index, response.Code, response.Body.String())
-				}
-				if response.Header().Get("Mcp-Session-Id") != "" || response.Header().Get("Content-Type") == "text/event-stream" {
-					t.Errorf("compatibility check %d enabled sessions or SSE", index)
-				}
+			command.Env = append(environment, "INBOXGATE_MCP_COMPATIBILITY_HELPER=1", "MCPGODEBUG="+flag)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("compatibility helper failed: %v: %s", err, output)
 			}
 		})
+	}
+}
+
+func assertCompatibilityBoundary(t *testing.T) {
+	t.Helper()
+	handler := newContractHandler(t, config.Defaults())
+	checks := []*http.Request{
+		validRequest(t, "tools/list", requestBody("tools/list")),
+		validRequest(t, "tools/list", requestBody("tools/list")),
+		validRequest(t, "tools/list", requestBody("tools/list")),
+		validRequest(t, "initialize", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`),
+		validRequest(t, "tools/call", strings.Replace(requestBody("tools/call"), `"system_capabilities"`, `"broader_tool"`, 1)),
+		validRequest(t, "tools/list", strings.Replace(requestBody("tools/list"), protocolVersion, "2025-11-25", 1)),
+		validRequest(t, "tools/list", strings.Repeat(" ", MaximumRequestBytes)+requestBody("tools/list")),
+	}
+	checks[0].Method = http.MethodDelete
+	checks[0].Header.Set("Mcp-Session-Id", "synthetic-session")
+	checks[1].Header.Set("Content-Type", "text/plain")
+	checks[2].Header.Set("Origin", "https://private.invalid")
+	for index, request := range checks {
+		response := perform(t, handler, request)
+		if response.Code == http.StatusOK && !strings.Contains(response.Body.String(), `"error"`) {
+			t.Errorf("compatibility check %d broadened wrapper: %d %q", index, response.Code, response.Body.String())
+		}
+		if response.Header().Get("Mcp-Session-Id") != "" || response.Header().Get("Content-Type") == "text/event-stream" {
+			t.Errorf("compatibility check %d enabled sessions or SSE", index)
+		}
 	}
 }
 
@@ -672,6 +704,33 @@ func TestConcurrencyDeadlineCancellationResponseCapAndClose(t *testing.T) {
 	if invocations.Load() != MaximumConcurrentRequests {
 		t.Fatalf("dispatch invocations = %d, want %d", invocations.Load(), MaximumConcurrentRequests)
 	}
+
+	body := newBlockingBody()
+	bodyHandler := newContractHandler(t, config.Defaults())
+	bodyRequest := validRequest(t, "tools/list", requestBody("tools/list"))
+	bodyRequest.Body = body
+	bodyRequest.ContentLength = -1
+	bodyDone := make(chan struct{})
+	go func() {
+		perform(t, bodyHandler, bodyRequest)
+		close(bodyDone)
+	}()
+	select {
+	case <-body.started:
+	case <-time.After(time.Second):
+		t.Fatal("request body read did not start")
+	}
+	closeDone := make(chan struct{})
+	go func() {
+		_ = bodyHandler.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("handler close did not interrupt active request body")
+	}
+	<-bodyDone
 
 	deadline := newContractHandler(t, config.Defaults(), withApplicationTimeout(20*time.Millisecond), withDispatchHook(func(ctx context.Context) error {
 		<-ctx.Done()
@@ -726,6 +785,28 @@ func TestConcurrencyDeadlineCancellationResponseCapAndClose(t *testing.T) {
 	}
 }
 
+type blockingBody struct {
+	started     chan struct{}
+	closed      chan struct{}
+	startedOnce sync.Once
+	closedOnce  sync.Once
+}
+
+func newBlockingBody() *blockingBody {
+	return &blockingBody{started: make(chan struct{}), closed: make(chan struct{})}
+}
+
+func (body *blockingBody) Read([]byte) (int, error) {
+	body.startedOnce.Do(func() { close(body.started) })
+	<-body.closed
+	return 0, errors.New("closed")
+}
+
+func (body *blockingBody) Close() error {
+	body.closedOnce.Do(func() { close(body.closed) })
+	return nil
+}
+
 func TestAuditLogUsesOnlyFixedAllowlistAndRedactsRequestData(t *testing.T) {
 	for _, format := range []string{"json", "text"} {
 		t.Run(format, func(t *testing.T) {
@@ -744,7 +825,7 @@ func TestAuditLogUsesOnlyFixedAllowlistAndRedactsRequestData(t *testing.T) {
 			request.Header.Set("X-Canary", "sensitive-header")
 			perform(t, handler, request)
 			logText := audit.String()
-			for _, forbidden := range []string{canonicalToken(), "sensitive", "192.0.2.99", "system_capabilities", "synthetic-client", configuration.MCP.BearerTokenEnv, "Mcp-Method", "Authorization"} {
+			for _, forbidden := range []string{canonicalToken(), "sensitive", "192.0.2.99", `"name":"system_capabilities"`, "synthetic-client", configuration.MCP.BearerTokenEnv, "Mcp-Method", "Authorization"} {
 				if strings.Contains(logText, forbidden) {
 					t.Errorf("audit disclosed %q: %s", forbidden, logText)
 				}

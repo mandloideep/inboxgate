@@ -18,6 +18,7 @@ import (
 	"github.com/mandloideep/inboxgate/internal/config"
 	"github.com/mandloideep/inboxgate/internal/cryptobox"
 	"github.com/mandloideep/inboxgate/internal/gmail"
+	inboxmcp "github.com/mandloideep/inboxgate/internal/mcp"
 	"github.com/mandloideep/inboxgate/internal/server"
 	"github.com/mandloideep/inboxgate/internal/storage"
 	"github.com/mandloideep/inboxgate/internal/storage/turso"
@@ -458,6 +459,8 @@ func resolvedOptionalAccountSecretEnvironment(name string, maximum int) ([]byte,
 
 var doctorResult = []byte("{\n  \"output_version\": 1,\n  \"status\": \"ok\",\n  \"checks\": [\n    {\n      \"name\": \"configuration\",\n      \"status\": \"pass\"\n    },\n    {\n      \"name\": \"service_runtime\",\n      \"status\": \"pass\"\n    }\n  ]\n}\n")
 
+var lookupMCPEnvironment = os.LookupEnv
+
 func runServe(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		printServeHelp(stdout)
@@ -470,10 +473,40 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 	if !ok {
 		return 1
 	}
-	runtime, err := server.New(configuration, stderr)
+	var runtimeOptions []server.Option
+	var mcpHandler *inboxmcp.Handler
+	if configuration.MCP.Enabled {
+		value, found := lookupMCPEnvironment(configuration.MCP.BearerTokenEnv)
+		if !found {
+			fmt.Fprintln(stderr, "cannot construct MCP runtime")
+			return 1
+		}
+		encodedToken := []byte(value)
+		var err error
+		mcpHandler, err = inboxmcp.New(inboxmcp.Options{
+			Configuration: configuration,
+			BinaryVersion: version,
+			BinaryCommit:  commit,
+			BearerToken:   encodedToken,
+			AuditOutput:   stderr,
+		})
+		clear(encodedToken)
+		if err != nil {
+			fmt.Fprintln(stderr, "cannot construct MCP runtime")
+			return 1
+		}
+		runtimeOptions = append(runtimeOptions, server.WithMCP(mcpHandler, mcpHandler))
+	}
+	runtime, err := server.New(configuration, stderr, runtimeOptions...)
 	if err != nil {
+		if mcpHandler != nil {
+			_ = mcpHandler.Close()
+		}
 		fmt.Fprintln(stderr, "cannot construct service runtime")
 		return 1
+	}
+	if mcpHandler != nil {
+		defer mcpHandler.Close()
 	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)

@@ -49,17 +49,6 @@ func TestSBOMValidationRequiresExactMCPPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 	packages := document["packages"].([]any)
-	mcpPackage := map[string]any{
-		"name":             "github.com/modelcontextprotocol/go-sdk",
-		"SPDXID":           "SPDXRef-Package-go-sdk",
-		"versionInfo":      "v1.7.0",
-		"downloadLocation": "NOASSERTION",
-		"filesAnalyzed":    false,
-		"licenseConcluded": "Apache-2.0",
-		"licenseDeclared":  "Apache-2.0",
-		"copyrightText":    "NOASSERTION",
-	}
-	document["packages"] = append(packages, mcpPackage)
 	data, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +60,14 @@ func TestSBOMValidationRequiresExactMCPPackage(t *testing.T) {
 		t.Fatalf("SBOM with exact MCP package rejected: %v", err)
 	}
 
-	document["packages"] = packages
+	withoutMCP := make([]any, 0, len(packages))
+	for _, value := range packages {
+		pkg := value.(map[string]any)
+		if pkg["name"] != mcpModulePath {
+			withoutMCP = append(withoutMCP, pkg)
+		}
+	}
+	document["packages"] = withoutMCP
 	data, _ = json.Marshal(document)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
