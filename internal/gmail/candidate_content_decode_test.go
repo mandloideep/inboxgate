@@ -537,6 +537,23 @@ func TestCandidateContentAllHeaderProjectionIsEphemeral(t *testing.T) {
 	if err != nil || strings.Contains(fmt.Sprintf("%#v", state), privateHeader) {
 		t.Fatalf("state=%#v err=%v", state, err)
 	}
+
+	errorFixture := newDiscoveryFixture(t, 1)
+	errorMessage, _ := seedCandidateMessage(t, errorFixture, true)
+	malformed := fmt.Sprintf(`{"mimeType":"text/plain","headers":[{"name":"X-Synthetic-Private","value":%q},{"name":"Content-Type","value":"text/plain; charset=utf-8"},{"name":"Content-Disposition","value":"attachment; filename=\"unterminated"}],"filename":"","body":{"size":7,"data":"dmlzaWJsZQ"}}`, privateHeader)
+	errorExtractor := candidateExtractorForTest(t, errorFixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/token" {
+			return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+		}
+		return jsonResponse(http.StatusOK, string(candidateDocument(errorMessage.GmailMessageID(), errorMessage.GmailThreadID(), malformed))), nil
+	}), errorFixture.sleep)
+	_, err = errorExtractor.Extract(context.Background(), errorFixture.accountID, errorMessage.GmailMessageID(), 1024)
+	if !errors.Is(err, ErrCandidateContentUnavailable) || strings.Contains(err.Error(), privateHeader) {
+		t.Fatalf("header crossed error boundary: %v", err)
+	}
+	if _, stateErr := errorFixture.store.Handle.GetCandidateContent(context.Background(), errorFixture.accountID, errorMessage.GmailMessageID(), 1024); !errors.Is(stateErr, storage.ErrCandidateContentNotFound) {
+		t.Fatalf("malformed header created durable content: %v", stateErr)
+	}
 }
 
 func TestCandidateContentExtractorRechecksAuthorityBeforeContentRequest(t *testing.T) {
