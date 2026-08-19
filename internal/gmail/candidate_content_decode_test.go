@@ -204,6 +204,11 @@ func TestDecodeCandidateTruncationRecanonicalizesExposedBoundary(t *testing.T) {
 			t.Fatalf("boundary=%q excerpt=%q truncated=%t err=%v", boundary, excerpt, truncated, err)
 		}
 	}
+	body := "x" + strings.Repeat(" ", 1023) + "tail"
+	_, excerpt, truncated, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/plain", "utf-8", []byte(body))), "m", "t", 1024)
+	if err != nil || excerpt != "x" || !truncated {
+		t.Fatalf("nonempty prefix excerpt=%q truncated=%t err=%v", excerpt, truncated, err)
+	}
 }
 
 func TestDecodeCandidateRejectsAttachmentsMalformedAndBounds(t *testing.T) {
