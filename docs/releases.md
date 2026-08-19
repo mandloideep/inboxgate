@@ -74,7 +74,9 @@ sha256sum --check SHA256SUMS
 
 On macOS, use `shasum -a 256 -c SHA256SUMS` when GNU `sha256sum` is unavailable.
 The checksum file covers all six platform archives and the SPDX SBOM.
-The SPDX validator requires exactly InboxGate plus every reviewed linked runtime module at its accepted version, and rejects omissions, substitutions, duplicates, and unexpected runtime modules.
+Pinned Syft emits one InboxGate document root and, for each of the six canonical binary locations, one main-module row, every reviewed linked runtime module at its accepted version, and `stdlib` at the pinned Go version.
+It also emits one binary-classifier row for each Windows executable.
+The SPDX validator accepts duplicate approved module and version rows only once at each exact canonical binary location and rejects omissions, substitutions, same-location duplicates, location aliases or escapes, inconsistent versions, and unexpected packages or locations.
 The build-provenance attestation covers all eight published assets.
 A separate SBOM attestation associates the SPDX document with all six archives.
 

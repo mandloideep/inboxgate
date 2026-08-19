@@ -132,7 +132,7 @@ The server's existing header, connection, timeout, and graceful-shutdown bounds 
 
 The repository parser independently rejects invalid UTF-8, duplicate fields, NUL aliases, case aliases, trailing values, unsupported client capabilities, extra arguments, and header-body routing differences.
 Authenticated JSON-RPC errors use fixed categories without a data field, decoder text, SDK diagnostics, request fragments, or reflected values.
-The SDK is still a supply-chain and parser risk, so the exact v1.7.0 module and full resolved graph are pinned, licensed in third-party notices, checked against published advisories, included in release build metadata and the exact SBOM runtime-module inventory, and covered by an accepted removal plan in ADR 0014.
+The SDK is still a supply-chain and parser risk, so the exact v1.7.0 module and full resolved graph are pinned, licensed in third-party notices, checked against published advisories, included in release build metadata and each canonical SBOM binary-location inventory, and covered by an accepted removal plan in ADR 0014.
 
 The only registered tool is `system_capabilities` with an empty closed input schema and read-only, idempotent, non-destructive, closed-world annotations.
 It adapts the typed capability registry and cannot reach Gmail, OAuth, Turso, storage, review, backfill, shell, SQL, URL fetching, Vikunja, provider connectivity, or arbitrary JSON-RPC behavior.
@@ -445,7 +445,8 @@ Generated release notes are handled only as GitHub API data.
 
 A compromised Action or SBOM tool could alter artifacts or disclose runner data.
 Every executable Action is pinned to a full commit, tools use exact versions, checkout credentials are not persisted, and the release supply-chain decision records licenses and dependency impact.
-Repository-owned code validates binary build information, archive metadata, the SPDX document with exactly the application and every reviewed linked runtime module and version, the checksum set, and the exact asset set.
+Repository-owned code validates binary build information, archive metadata, the SPDX document with one application root and one complete reviewed module and standard-library inventory at each exact canonical binary location, the checksum set, and the exact asset set.
+Repeated SBOM module rows are accepted only across distinct expected binary locations, never as a same-location duplicate, path alias, escape, inconsistent version, or unreviewed scope.
 
 An external tool installer could execute unreviewed shell logic before the intended executable is authenticated.
 InboxGate does not use the rejected Syft download Action or an ambient installer.

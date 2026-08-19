@@ -299,6 +299,8 @@ After acceptance, the implementation must pin only the graph above and stop if a
 
 Validation must include focused repeated handler tests, isolated compatibility-flag tests, real-process literal-loopback tests, bounded fuzz and property tests, race tests for authentication close, concurrency, cancellation, and shutdown, and the full repository suite.
 It must also include `go mod tidy -diff`, `go mod verify`, exact `go list -m all`, exact `go mod graph`, checksum and notice review, `make vuln`, `make check`, SBOM inclusion, and all six CGO-disabled release-target builds.
+The checksum-verified Syft v1.51.0 Linux amd64 binary emits one root row, six main-module rows, six rows for each reviewed linked module, six `stdlib go1.26.6` rows, and two Windows binary-classifier rows when it scans the complete release directory.
+SBOM validation must require one complete consistent reviewed inventory at each exact canonical binary location and reject missing, additional, aliased, escaped, same-location duplicate, or version-inconsistent rows.
 The final review must inventory runtime imports and methods, dependency and license impact, secret access, network endpoints, capabilities, Gmail and storage authority, workflow and release changes, deletions, em dash characters, and coauthors.
 
 ## Evidence sources

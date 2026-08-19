@@ -85,6 +85,26 @@ func TestSyntheticSBOMMatchesPinnedSyftSixBinaryShape(t *testing.T) {
 	}
 }
 
+func TestCanonicalLinuxReleaseContractRunsPinnedSyftOverAllBinaries(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := string(contents)
+	for _, required := range []string{
+		"check: fmt-check tidy-check verify vet test test-fuzz test-race vuln actionlint storage-cross-build release-contract build",
+		`if [ "$$($(GO) env GOOS)/$$($(GO) env GOARCH)" != "linux/amd64" ]`,
+		"$(GO) run ./cmd/release build-binaries",
+		"$(GO) run ./cmd/release acquire-syft",
+		`scan "dir:$$contract_dir/first/binaries"`,
+		"$(GO) run ./cmd/release validate-sbom",
+	} {
+		if !strings.Contains(contract, required) {
+			t.Errorf("canonical release contract is missing %q", required)
+		}
+	}
+}
+
 func TestSBOMValidationRequiresCompleteExactLinkedRuntimeInventory(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "sbom.json")
@@ -131,10 +151,9 @@ func TestSBOMValidationRequiresCompleteExactLinkedRuntimeInventory(t *testing.T)
 			mutateFirstSBOMPackage(document, "golang.org/x/time", func(pkg map[string]any) { pkg["versionInfo"] = "v0.15.1" })
 		}},
 		{name: "unexpected module", mutate: func(document map[string]any) {
-			appendSBOMPackage(document, map[string]any{
-				"name": "example.invalid/unreviewed-runtime", "SPDXID": "SPDXRef-Package-unexpected", "versionInfo": "v1.0.0",
-				"sourceInfo":       "acquired package info from go module information: /inboxgate_0.1.0_linux_amd64/inboxgate",
-				"downloadLocation": "NOASSERTION", "filesAnalyzed": false, "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION", "copyrightText": "NOASSERTION",
+			mutateFirstSBOMPackage(document, "github.com/modelcontextprotocol/go-sdk", func(pkg map[string]any) {
+				pkg["name"] = "example.invalid/unreviewed-runtime"
+				pkg["versionInfo"] = "v1.0.0"
 			})
 		}},
 		{name: "missing stdlib", mutate: func(document map[string]any) {
@@ -145,6 +164,10 @@ func TestSBOMValidationRequiresCompleteExactLinkedRuntimeInventory(t *testing.T)
 		}},
 		{name: "duplicate expected location", mutate: func(document map[string]any) {
 			duplicateFirstSBOMPackage(document, "golang.org/x/sync", nil)
+		}},
+		{name: "duplicate SPDX identifier", mutate: func(document map[string]any) {
+			packages := document["packages"].([]any)
+			packages[2].(map[string]any)["SPDXID"] = packages[1].(map[string]any)["SPDXID"]
 		}},
 		{name: "duplicate with unexpected location", mutate: func(document map[string]any) {
 			duplicateFirstSBOMPackage(document, "github.com/google/jsonschema-go", func(pkg map[string]any) {

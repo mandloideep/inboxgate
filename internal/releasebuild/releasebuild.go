@@ -597,6 +597,7 @@ type spdxPackage struct {
 	Name             string `json:"name"`
 	SPDXID           string `json:"SPDXID"`
 	VersionInfo      string `json:"versionInfo"`
+	SourceInfo       string `json:"sourceInfo"`
 	DownloadLocation string `json:"downloadLocation"`
 	LicenseConcluded string `json:"licenseConcluded"`
 	LicenseDeclared  string `json:"licenseDeclared"`
@@ -657,8 +658,7 @@ func ValidateSBOM(path, version, workspace string) error {
 	if len(document.Packages) == 0 {
 		return errors.New("SBOM contains no packages")
 	}
-	expectedPackages := map[string]string{
-		"InboxGate":                 version,
+	reviewedModules := map[string]string{
 		jsonschemaModulePath:        jsonschemaModuleVersion,
 		mcpModulePath:               mcpModuleVersion,
 		segmentioASMModulePath:      segmentioASMModuleVersion,
@@ -671,33 +671,102 @@ func ValidateSBOM(path, version, workspace string) error {
 		timeModulePath:              timeModuleVersion,
 		tursoModulePath:             tursoModuleVersion,
 	}
-	if len(document.Packages) != len(expectedPackages) {
-		return fmt.Errorf("SBOM package count = %d, want %d exact linked runtime packages", len(document.Packages), len(expectedPackages))
-	}
-	for _, pkg := range document.Packages {
-		if pkg.Name == "" || pkg.SPDXID == "" || pkg.DownloadLocation == "" || pkg.LicenseConcluded == "" || pkg.LicenseDeclared == "" || pkg.CopyrightText == "" || pkg.FilesAnalyzed == nil {
-			return fmt.Errorf("SBOM package %q is missing required SPDX fields", pkg.Name)
-		}
-		expectedVersion, found := expectedPackages[pkg.Name]
-		if !found {
-			return fmt.Errorf("SBOM contains unexpected linked runtime package %q", pkg.Name)
-		}
-		if pkg.VersionInfo != expectedVersion {
-			return fmt.Errorf("SBOM package %q version = %q, want %q", pkg.Name, pkg.VersionInfo, expectedVersion)
-		}
-		delete(expectedPackages, pkg.Name)
-	}
-	if len(expectedPackages) != 0 {
-		return fmt.Errorf("SBOM is missing %d exact linked runtime packages", len(expectedPackages))
+	expectedRuntime := make(map[string]string, len(reviewedModules)+2)
+	expectedRuntime[modulePath] = "UNKNOWN"
+	expectedRuntime["stdlib"] = goVersion
+	for name, moduleVersion := range reviewedModules {
+		expectedRuntime[name] = moduleVersion
 	}
 	versionNumber := strings.TrimPrefix(version, "v")
-	wantFiles := map[string]struct{}{}
+	expectedLocations := make(map[string]struct{}, len(Targets))
+	expectedBinaryClassifiers := make(map[string]struct{}, 2)
+	wantFiles := make(map[string]struct{}, len(Targets))
 	for _, target := range Targets {
 		binaryName := "inboxgate"
 		if target.GOOS == "windows" {
 			binaryName += ".exe"
 		}
-		wantFiles[fmt.Sprintf("inboxgate_%s_%s_%s/%s", versionNumber, target.GOOS, target.GOARCH, binaryName)] = struct{}{}
+		fileName := fmt.Sprintf("inboxgate_%s_%s_%s/%s", versionNumber, target.GOOS, target.GOARCH, binaryName)
+		location := "/" + fileName
+		expectedLocations[location] = struct{}{}
+		wantFiles[fileName] = struct{}{}
+		if target.GOOS == "windows" {
+			expectedBinaryClassifiers[location] = struct{}{}
+		}
+	}
+	const goSourcePrefix = "acquired package info from go module information: "
+	const binarySourcePrefix = "acquired package info from the following paths: "
+	locationInventory := make(map[string]map[string]int, len(expectedLocations))
+	for location := range expectedLocations {
+		locationInventory[location] = make(map[string]int, len(expectedRuntime))
+	}
+	seenSPDXIDs := make(map[string]struct{}, len(document.Packages))
+	rootCount := 0
+	binaryClassifiers := make(map[string]int, len(expectedBinaryClassifiers))
+	for _, pkg := range document.Packages {
+		if pkg.Name == "" || pkg.SPDXID == "" || pkg.DownloadLocation == "" || pkg.LicenseConcluded == "" || pkg.LicenseDeclared == "" || pkg.CopyrightText == "" || pkg.FilesAnalyzed == nil {
+			return fmt.Errorf("SBOM package %q is missing required SPDX fields", pkg.Name)
+		}
+		if _, duplicate := seenSPDXIDs[pkg.SPDXID]; duplicate {
+			return fmt.Errorf("SBOM contains duplicate package SPDX identifier %q", pkg.SPDXID)
+		}
+		seenSPDXIDs[pkg.SPDXID] = struct{}{}
+		if pkg.Name == "InboxGate" {
+			if pkg.VersionInfo != version || pkg.SourceInfo != "" {
+				return fmt.Errorf("SBOM document-root package does not match InboxGate version %s", version)
+			}
+			rootCount++
+			continue
+		}
+		if pkg.Name == "inboxgate" {
+			location, found := strings.CutPrefix(pkg.SourceInfo, binarySourcePrefix)
+			if !found || pkg.SourceInfo != binarySourcePrefix+location || pkg.VersionInfo != "UNKNOWN" {
+				return errors.New("SBOM binary classifier does not match the pinned Syft shape")
+			}
+			if _, expected := expectedBinaryClassifiers[location]; !expected {
+				return fmt.Errorf("SBOM binary classifier has unexpected location %q", location)
+			}
+			binaryClassifiers[location]++
+			continue
+		}
+		expectedVersion, reviewed := expectedRuntime[pkg.Name]
+		if !reviewed {
+			return fmt.Errorf("SBOM contains unexpected linked runtime package %q", pkg.Name)
+		}
+		if pkg.VersionInfo != expectedVersion {
+			return fmt.Errorf("SBOM package %q version = %q, want %q", pkg.Name, pkg.VersionInfo, expectedVersion)
+		}
+		location, found := strings.CutPrefix(pkg.SourceInfo, goSourcePrefix)
+		if !found || pkg.SourceInfo != goSourcePrefix+location {
+			return fmt.Errorf("SBOM package %q is missing its exact pinned-Syft location", pkg.Name)
+		}
+		inventory, expected := locationInventory[location]
+		if !expected {
+			return fmt.Errorf("SBOM package %q has unexpected location %q", pkg.Name, location)
+		}
+		inventory[pkg.Name]++
+	}
+	if rootCount != 1 {
+		return fmt.Errorf("SBOM document-root package count = %d, want 1", rootCount)
+	}
+	for location, inventory := range locationInventory {
+		if len(inventory) != len(expectedRuntime) {
+			return fmt.Errorf("SBOM location %q has %d distinct runtime packages, want %d", location, len(inventory), len(expectedRuntime))
+		}
+		for name := range expectedRuntime {
+			if inventory[name] != 1 {
+				return fmt.Errorf("SBOM location %q package %q count = %d, want 1", location, name, inventory[name])
+			}
+		}
+	}
+	for location := range expectedBinaryClassifiers {
+		if binaryClassifiers[location] != 1 {
+			return fmt.Errorf("SBOM binary classifier count at %q = %d, want 1", location, binaryClassifiers[location])
+		}
+	}
+	expectedPackageRows := 1 + len(expectedLocations)*len(expectedRuntime) + len(expectedBinaryClassifiers)
+	if len(document.Packages) != expectedPackageRows {
+		return fmt.Errorf("SBOM package count = %d, want %d exact pinned-Syft rows", len(document.Packages), expectedPackageRows)
 	}
 	if len(document.Files) != len(wantFiles) {
 		return fmt.Errorf("SBOM file count = %d, want %d release binaries", len(document.Files), len(wantFiles))
