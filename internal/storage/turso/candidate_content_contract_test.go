@@ -3,6 +3,7 @@ package turso
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -115,7 +116,11 @@ func TestCandidateContentMalformedDurableRowsFailClosed(t *testing.T) {
 	}{
 		{name: "extractor version", mutate: func(value *syntheticCandidateContent) { value.extractorVersion = 2 }},
 		{name: "source kind", mutate: func(value *syntheticCandidateContent) { value.sourceKind = "raw" }},
+		{name: "gate version overflow", mutate: func(value *syntheticCandidateContent) { value.gateVersion = 1 << 32 }},
 		{name: "excerpt bytes", mutate: func(value *syntheticCandidateContent) { value.excerptBytes++ }},
+		{name: "truncation integer", mutate: func(value *syntheticCandidateContent) { value.truncated = 2 }},
+		{name: "excerpt limit below", mutate: func(value *syntheticCandidateContent) { value.excerptLimit = int64(mail.MinimumExcerptBytes - 1) }},
+		{name: "excerpt limit above", mutate: func(value *syntheticCandidateContent) { value.excerptLimit = int64(mail.MaximumExcerptBytes + 1) }},
 		{name: "content hash", mutate: func(value *syntheticCandidateContent) { value.contentHash = strings.Repeat("A", 64) }},
 		{name: "timestamp", mutate: func(value *syntheticCandidateContent) { value.fetchedAt = -1 }},
 	} {
@@ -134,6 +139,54 @@ func TestCandidateContentMalformedDurableRowsFailClosed(t *testing.T) {
 				t.Fatalf("malformed durable row error=%v", err)
 			}
 		})
+	}
+}
+
+func TestCandidateContentGateInputMismatchIsReturnedOnlyAsStale(t *testing.T) {
+	server, handle, commit := candidateContentDriverFixture(t)
+	if err := handle.CommitCandidateContent(context.Background(), commit); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	value := server.candidateContents[commit.Source.RecordID()]
+	value.gateInputHash = strings.Repeat("4", 64)
+	server.candidateContents[commit.Source.RecordID()] = value
+	server.mu.Unlock()
+	accountID, _ := storage.ParseAccountID(commit.Source.AccountID())
+	state, err := handle.GetCandidateContent(context.Background(), accountID, commit.Source.GmailMessageID(), commit.Next.ExcerptLimit())
+	if err != nil || state.Current || state.Content.GateInputHash() != value.gateInputHash {
+		t.Fatalf("stale gate-input state=%#v err=%v", state, err)
+	}
+}
+
+func TestCandidateContentExactDriverExcerptLimitBoundaries(t *testing.T) {
+	for _, limit := range []int{mail.MinimumExcerptBytes, mail.MaximumExcerptBytes} {
+		t.Run(fmt.Sprintf("accepted-%d", limit), func(t *testing.T) {
+			_, handle, commit := candidateContentDriverFixture(t)
+			content, err := mail.NewCandidateContent(mail.CandidateContentInput{
+				RecordID: commit.Source.RecordID(), SourceMetadataHash: commit.Source.MetadataHash(), GateVersion: commit.Gate.Version(), GateInputHash: commit.Gate.InputHash(),
+				SourceKind: mail.CandidateSourceTextPlain, Excerpt: strings.Repeat("x", limit), ExcerptLimit: limit, FetchedAtUnixMS: 1700000000123,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			commit.Next = content
+			if err := handle.CommitCandidateContent(context.Background(), commit); err != nil {
+				t.Fatal(err)
+			}
+			accountID, _ := storage.ParseAccountID(commit.Source.AccountID())
+			state, err := handle.GetCandidateContent(context.Background(), accountID, commit.Source.GmailMessageID(), limit)
+			if err != nil || !state.Current || !state.Content.Equal(content) {
+				t.Fatalf("state=%#v err=%v", state, err)
+			}
+		})
+	}
+	_, handle, commit := candidateContentDriverFixture(t)
+	accountID, _ := storage.ParseAccountID(commit.Source.AccountID())
+	for _, limit := range []int{mail.MinimumExcerptBytes - 1, mail.MaximumExcerptBytes + 1} {
+		if _, err := handle.GetCandidateContent(context.Background(), accountID, commit.Source.GmailMessageID(), limit); !errors.Is(err, storage.ErrInvalidValue) {
+			t.Fatalf("limit=%d error=%v", limit, err)
+		}
 	}
 }
 
