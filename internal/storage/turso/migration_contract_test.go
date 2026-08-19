@@ -253,7 +253,7 @@ func TestMigrationFromAccountSchemaSendsExactCredentialSchemaBytes(t *testing.T)
 	handle := openMigrationContractHandle(t, server.URL)
 	result, err := handle.Migrate(context.Background())
 	if err != nil || result.Applied != 5 || result.Current != 7 {
-		t.Fatalf("Migrate() = (%#v, %v), want one credential migration", result, err)
+		t.Fatalf("Migrate() = (%#v, %v), want five pending migrations including the exact credential schema", result, err)
 	}
 	server.mu.Lock()
 	defer server.mu.Unlock()
@@ -468,7 +468,7 @@ func TestMigrationContractDroppedCommitDoesNotReplayAndFreshRunReconciles(t *tes
 		t.Fatalf("fresh Migrate() result = %#v, want durable reconciliation", result)
 	}
 	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("sequence requests after reconciliation = %d, want only pending migrations 2 and 3", got)
+		t.Fatalf("sequence requests after reconciliation = %d, want only pending migrations 2 through 7", got)
 	}
 }
 
@@ -491,7 +491,7 @@ func TestMigrationContractDroppedCommitBeforeDurabilityAppliesOnceOnFreshRun(t *
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
 	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
-		t.Fatalf("fresh Migrate() result = %#v, want three newly durable migrations", result)
+		t.Fatalf("fresh Migrate() result = %#v, want seven newly durable migrations", result)
 	}
 	if got := server.sequenceCount(); got != 8 {
 		t.Fatalf("sequence requests across explicit invocations = %d, want 8", got)
@@ -509,13 +509,13 @@ func TestMigrationHeaderOnlyStandaloneCommitPathIsNotUsed(t *testing.T) {
 		t.Fatalf("Migrate() error = %v", err)
 	}
 	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
-		t.Fatalf("Migrate() result = %#v, want six atomic sequences", result)
+		t.Fatalf("Migrate() result = %#v, want seven atomic sequences", result)
 	}
 	if got := server.commitCount(); got != 0 {
 		t.Fatalf("standalone commit requests = %d, want 0", got)
 	}
 	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("sequence requests = %d, want 6", got)
+		t.Fatalf("sequence requests = %d, want 7", got)
 	}
 }
 
@@ -529,7 +529,7 @@ func TestMigrationHeaderOnlyBeginCannotMoveWritesToAutocommit(t *testing.T) {
 		t.Fatalf("Migrate() error = %v", err)
 	}
 	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
-		t.Fatalf("Migrate() result = %#v, want six atomic sequences", result)
+		t.Fatalf("Migrate() result = %#v, want seven atomic sequences", result)
 	}
 	if got := server.countSQL(beginImmediateSQL); got != 0 {
 		t.Fatalf("standalone begin requests = %d, want 0", got)
@@ -538,7 +538,7 @@ func TestMigrationHeaderOnlyBeginCannotMoveWritesToAutocommit(t *testing.T) {
 		t.Fatalf("standalone migration requests = %d, want 0", got)
 	}
 	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("sequence requests = %d, want 6", got)
+		t.Fatalf("sequence requests = %d, want 7", got)
 	}
 }
 
@@ -552,7 +552,7 @@ func TestMigrationHeaderOnlyPendingStatementCannotCreateFalseLedgerSuccess(t *te
 		t.Fatalf("Migrate() error = %v", err)
 	}
 	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
-		t.Fatalf("Migrate() result = %#v, want six atomic sequences", result)
+		t.Fatalf("Migrate() result = %#v, want seven atomic sequences", result)
 	}
 	if got := server.migrationStatementCount(); got != 0 {
 		t.Fatalf("standalone migration requests = %d, want 0", got)
@@ -561,7 +561,7 @@ func TestMigrationHeaderOnlyPendingStatementCannotCreateFalseLedgerSuccess(t *te
 		t.Fatalf("standalone ledger inserts = %d, want 0", got)
 	}
 	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("sequence requests = %d, want 6", got)
+		t.Fatalf("sequence requests = %d, want 7", got)
 	}
 }
 
@@ -633,7 +633,7 @@ func TestMigrationRejectsIncompleteSequenceResultsAndReconcilesFresh(t *testing.
 				t.Fatalf("fresh Migrate() error = %v", err)
 			}
 			if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
-				t.Fatalf("fresh Migrate() result = %#v, want six atomic migrations", result)
+				t.Fatalf("fresh Migrate() result = %#v, want seven atomic migrations", result)
 			}
 			if got := server.sequenceCount(); got != 8 {
 				t.Fatalf("sequence requests across explicit invocations = %d, want 8", got)
@@ -662,13 +662,13 @@ func TestMigrationSequenceResponseRequiresSemanticTerminalProof(t *testing.T) {
 				t.Fatalf("Migrate() error = %v", err)
 			}
 			if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
-				t.Fatalf("Migrate() result = %#v, want six semantically proven migrations", result)
+				t.Fatalf("Migrate() result = %#v, want seven semantically proven migrations", result)
 			}
 			if got := server.terminalSequenceCount(); got != 7 {
-				t.Fatalf("terminal proof sequences = %d, want 6", got)
+				t.Fatalf("terminal proof sequences = %d, want 7", got)
 			}
 			if got := server.userVersionValue(); got != 7 {
-				t.Fatalf("durable user_version = %d, want 6", got)
+				t.Fatalf("durable user_version = %d, want 7", got)
 			}
 		})
 	}
@@ -728,7 +728,7 @@ func TestMigrationRepairsCommittedLedgerWithoutTerminalMarker(t *testing.T) {
 		t.Fatalf("terminal sequences = %d, want one marker repair", got)
 	}
 	if got := server.userVersionValue(); got != 7 {
-		t.Fatalf("durable user_version = %d, want 6", got)
+		t.Fatalf("durable user_version = %d, want 7", got)
 	}
 }
 
@@ -869,7 +869,7 @@ func TestMigrationTerminalSequenceResponsesRequireSeparateMarkerVisibility(t *te
 					t.Fatalf("Migrate() result = %#v, want proven migration", result)
 				}
 				if got := server.userVersionValue(); got != 7 {
-					t.Fatalf("durable user_version = %d, want 6", got)
+					t.Fatalf("durable user_version = %d, want 7", got)
 				}
 				return
 			}
@@ -891,10 +891,10 @@ func TestMigrationTerminalSequenceResponsesRequireSeparateMarkerVisibility(t *te
 				t.Fatalf("fresh Migrate() error = %v", freshErr)
 			}
 			if freshResult != (storage.MigrationResult{Applied: 6, Current: 7}) {
-				t.Fatalf("fresh Migrate() result = %#v, want marker repair and migrations 2 through 4", freshResult)
+				t.Fatalf("fresh Migrate() result = %#v, want marker repair and migrations 2 through 7", freshResult)
 			}
 			if got := server.sequenceCount(); got != 7 {
-				t.Fatalf("migration sequences after fresh reconciliation = %d, want only migrations 2 through 5 after no schema replay", got)
+				t.Fatalf("migration sequences after fresh reconciliation = %d, want only migrations 2 through 7 after no schema replay", got)
 			}
 		})
 	}
@@ -950,7 +950,7 @@ func TestMigrationCurrentSchemaAvoidsAmbiguousFinalCommit(t *testing.T) {
 		t.Fatalf("Migrate() error = %v", err)
 	}
 	if result != (storage.MigrationResult{Current: 7}) {
-		t.Fatalf("Migrate() result = %#v, want current migration 3", result)
+		t.Fatalf("Migrate() result = %#v, want current migration 7", result)
 	}
 	if got := server.countSQL(beginImmediateSQL); got != 0 {
 		t.Fatalf("begin requests = %d, want 0 for current schema", got)
@@ -1562,7 +1562,7 @@ func TestMigrationRollbackCleanupUsesIndependentContext(t *testing.T) {
 		t.Fatalf("fresh Migrate() error = %v", freshErr)
 	}
 	if freshResult != (storage.MigrationResult{Applied: 7, Current: 7}) {
-		t.Fatalf("fresh Migrate() result = %#v, want four applied migrations", freshResult)
+		t.Fatalf("fresh Migrate() result = %#v, want seven applied migrations", freshResult)
 	}
 	if got := server.sequenceCount(); got != 8 {
 		t.Fatalf("migration sequences after fresh reconciliation = %d, want 8", got)
@@ -1608,7 +1608,7 @@ func TestConcurrentMigrationSequencesConvergeAfterUnknownLockOutcome(t *testing.
 		t.Fatalf("reconciliation Migrate() error = %v", err)
 	}
 	if result != (storage.MigrationResult{Current: 7}) {
-		t.Fatalf("reconciliation result = %#v, want current migration 3", result)
+		t.Fatalf("reconciliation result = %#v, want current migration 7", result)
 	}
 	if got := server.sequenceCount(); got != 8 {
 		t.Fatalf("sequence requests = %d, want seven successful and one rejected sequence", got)
