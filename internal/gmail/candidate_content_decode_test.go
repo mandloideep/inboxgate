@@ -1,6 +1,7 @@
 package gmail
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -52,6 +53,18 @@ func TestDecodeCandidateHTMLDiscardsActiveHiddenAndLinks(t *testing.T) {
 	for _, forbidden := range []string{"https", "secret", "steal", "hidden", "<", ">"} {
 		if strings.Contains(excerpt, forbidden) {
 			t.Fatalf("excerpt retained %q: %q", forbidden, excerpt)
+		}
+	}
+}
+
+func TestDecodeCandidateHTMLFailsClosedOnEncodedVisibility(t *testing.T) {
+	for _, html := range []string{
+		`<div aria-hidden="tr&#117;e">hidden</div>`,
+		`<div style="display:n&#x6f;ne">hidden</div>`,
+	} {
+		payload := textPart("text/html", "utf-8", []byte(html))
+		if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024); err == nil {
+			t.Fatalf("encoded visibility accepted: %q", html)
 		}
 	}
 }
@@ -108,6 +121,38 @@ func TestDecodeCandidateRejectsAttachmentsMalformedAndBounds(t *testing.T) {
 	}
 	if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", part), "m", "t", 1024); err == nil {
 		t.Fatal("one-over MIME depth accepted")
+	}
+}
+
+func TestDecodeCandidateResponseAndMIMECountBoundaries(t *testing.T) {
+	valid := candidateDocument("m", "t", textPart("text/plain", "utf-8", []byte("ok")))
+	exact := append(append([]byte(nil), valid...), bytes.Repeat([]byte(" "), MaximumCandidateContentBodyBytes-len(valid))...)
+	if _, excerpt, _, err := decodeCandidateContentResponse(exact, "m", "t", 1024); err != nil || excerpt != "ok" {
+		t.Fatalf("exact response bound rejected: excerpt=%q err=%v", excerpt, err)
+	}
+	oneOver := append(append([]byte(nil), exact...), ' ')
+	if _, _, _, err := decodeCandidateContentResponse(oneOver, "m", "t", 1024); err == nil {
+		t.Fatal("one-over response bound accepted")
+	}
+	for _, limit := range []int{maildomain.MinimumExcerptBytes - 1, maildomain.MaximumExcerptBytes + 1} {
+		if _, _, _, err := decodeCandidateContentResponse(valid, "m", "t", limit); err == nil {
+			t.Fatalf("invalid excerpt limit accepted: %d", limit)
+		}
+	}
+
+	emptyPart := `{"mimeType":"application/octet-stream","headers":[],"filename":"","body":{"size":0}}`
+	parts := make([]string, MaximumMessageParts-1)
+	parts[0] = textPart("text/plain", "utf-8", []byte("ok"))
+	for index := 1; index < len(parts); index++ {
+		parts[index] = emptyPart
+	}
+	payload := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[{"name":"Content-Type","value":"multipart/mixed"}],"filename":"","body":{"size":0},"parts":[%s]}`, strings.Join(parts, ","))
+	if _, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024); err != nil || excerpt != "ok" {
+		t.Fatalf("exact MIME node bound rejected: excerpt=%q err=%v", excerpt, err)
+	}
+	payload = strings.Replace(payload, `]}`, ","+emptyPart+`]}`, 1)
+	if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024); err == nil {
+		t.Fatal("one-over MIME node bound accepted")
 	}
 }
 
