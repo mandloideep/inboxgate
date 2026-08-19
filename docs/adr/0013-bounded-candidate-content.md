@@ -25,20 +25,22 @@ The only content request is the existing Gmail `users.messages.get` authority wi
 The selector contains only message ID, thread ID, MIME type, Content-Type header name and value, filename, body size, body data, attachment ID, and nested parts.
 The request is a bodyless GET using the existing proxy-disabled, redirect-rejecting, fresh nonpersistent HTTP/1 transport and 15-second attempt deadline.
 The response is limited to 1 MiB, the decoded selected part is limited to 512 KiB, the tree is limited to 1,000 nodes and 32 levels, and the request is attempted no more than four times under the already accepted retry classes.
-No attachment request exists, and any part with a filename or attachment ID is ineligible.
+No attachment request exists, and any part with a filename or attachment ID makes that node and its complete descendant subtree ineligible.
 
 The MIME walk is deterministic in provider order across the complete bounded tree.
 The first eligible inline `text/plain` part wins, and the first eligible inline `text/html` part is used only when no eligible plain part exists.
 Each selected part requires exact canonical unpadded Gmail base64url, exact nonnegative declared size, and decoded-size agreement.
 The only accepted charsets are UTF-8, US-ASCII, ISO-8859-1, and Windows-1252.
 A missing charset defaults to US-ASCII for both selected media types.
-Duplicate Content-Type headers, conflicting media types or charsets, malformed parameters, unknown charsets, invalid UTF-8, invalid US-ASCII, and undefined Windows-1252 bytes fail closed.
+Content-Type charset semantics are parsed only for an otherwise eligible inline text part, while bounded structurally valid inert parameters on excluded or non-text nodes do not affect selection.
+Duplicate selected Content-Type headers, conflicting selected media types or charsets, malformed selected parameters, unknown charsets, invalid UTF-8, invalid US-ASCII, and undefined Windows-1252 bytes fail closed.
 
 The HTML converter is a repository-owned bounded state machine and does not implement browser parsing or error recovery.
-It accepts balanced start and end tags, quoted or unquoted bounded attribute values, comments, and named or numeric text entities from a closed safe set.
+It accepts balanced start and end tags, self-closing syntax only for the closed void-element set, quoted or unquoted bounded attribute values, comments, and named or numeric text entities from a closed safe set.
 It rejects malformed nesting, unterminated tokens, declarations other than comments, processing instructions, duplicate attributes, malformed entities, excessive token bytes, and ambiguous syntax.
 It discards complete subtrees for `script`, `style`, `template`, `noscript`, `svg`, `math`, `head`, `form`, `object`, `embed`, `iframe`, and `canvas`.
-It also discards elements with `hidden`, `aria-hidden=true`, or an inline style containing a case-insensitive declaration exactly equivalent to `display:none`, `visibility:hidden`, or `opacity:0` after bounded ASCII whitespace removal.
+It also discards elements with `hidden`, `aria-hidden=true`, or an inline style containing a case-insensitive declaration equivalent to `display:none`, `visibility:hidden`, `visibility:collapse`, or a numeric zero opacity, with an optional exact `!important` suffix after bounded ASCII whitespace removal.
+Obfuscated, computed, malformed, CSS-wide inherited, or otherwise ambiguous values for those visibility properties fail closed.
 Security-sensitive `aria-hidden` and `style` values first require the same closed entity decoding, so encoded visibility cannot expose a hidden subtree.
 It emits only decoded text and deterministic newlines around a closed block-element set.
 Attributes, links, URLs, images, CSS, forms, scripts, event handlers, and markup are never emitted.
@@ -46,6 +48,7 @@ Attributes, links, URLs, images, CSS, forms, scripts, event handlers, and markup
 The shared plain-text canonicalizer converts CRLF and CR to LF, replaces NUL and disallowed controls with U+FFFD, removes reviewed bidirectional and unsafe invisible formatting characters, trims trailing horizontal whitespace on every line, trims the whole result, and collapses runs of more than two line feeds to two.
 An empty result is unavailable.
 Final truncation occurs only at a UTF-8 boundary and records whether canonical bytes exceeded the configured limit.
+Construction and durable decoding share one canonical-excerpt predicate that rejects any value still containing noncanonical line endings, controls, reviewed invisible formatting, outer whitespace, trailing line whitespace, or excessive blank lines.
 
 Candidate content version 1 stores the extractor version, canonical record ID, source metadata hash, gate version, gate input hash, source kind, excerpt, excerpt byte count, configured limit, truncation flag, content hash, and first fetched-at Unix milliseconds.
 The application view always reports the fixed trust classification `untrusted_email` without storing a caller-controlled trust value.
@@ -131,6 +134,8 @@ Live Gmail, remote Turso, credentials, deployment, retention deletion, MCP trans
 
 ## Validation
 
-The preserved tests-only red commit predates this accepted decision and every migration or production change.
-Tests cover eligibility before provider contact, lifecycle and source races, exact request projection, attachment exclusion, MIME depth and count, plain preference, HTML fallback and blocked subtrees, malformed HTML, all supported charsets, canonical base64url and size agreement, Unicode and control normalization, UTF-8 truncation boundaries, known content-hash vectors, fake and exact-driver compare-and-swap behavior, uncertain durability, fixed diagnostics, and runtime inertness.
+The initial preserved tests-only red commit predates this accepted decision and every migration or production change, but it established only the initial domain, decoder, synthetic flow, fake storage, shared basic parity, and schema failures.
+It did not yet cover every required exact and one-over response, decoded, MIME-node, MIME-depth, HTML-token, HTML-depth, charset-expansion, and excerpt-limit boundary; provider classification and retry behavior; post-refresh and post-GET races; runtime caller inventory; exact SQL and uncertain-durability evidence; migration checksum; currentness invalidation; competing replacements; malformed durable rows; or candidate-specific cancellation and diagnostic suppression.
+Later preserved red regressions and pre-fix characterization commits add those missing categories without rewriting the initial evidence.
+The complete suite now covers eligibility before provider contact, lifecycle and source races, exact request projection, attachment-subtree exclusion, MIME parameters, MIME depth and count, plain preference, HTML fallback and blocked subtrees, malformed HTML and hidden CSS, all supported charsets, canonical base64url and size agreement, Unicode and control normalization, canonical durable excerpts, UTF-8 truncation boundaries, known content-hash vectors, fake and exact-driver compare-and-swap behavior, uncertain durability through a fresh handle, fixed diagnostics, and runtime inertness.
 Focused repetition, race tests, exact-driver tests, migration checksums, `make check`, diff validation, dependency inventories, and all six CGO-disabled release-target builds must pass before merge.

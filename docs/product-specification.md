@@ -770,15 +770,17 @@ After one accepted OAuth refresh it repeats the lifecycle, message, and gate rea
 
 The content request is one bodyless read-only `users.messages.get` with `format=FULL` and a finite selector containing only message identity and MIME type, Content-Type header, filename, body size, body data, attachment ID, and 32 finite nested part levels.
 The response is at most 1 MiB, the selected decoded part is at most 512 KiB, the tree is at most 1,000 nodes and 32 levels, and the request uses the accepted maximum of four explicit attempts with a 15-second deadline per attempt.
-No attachment endpoint exists, and a filename-bearing or attachment-backed text part is never selected.
+No attachment endpoint exists, and a filename-bearing or attachment-backed node excludes its complete descendant subtree from selection.
 
 Selection walks the complete bounded tree in provider order, chooses the first eligible inline `text/plain` part, and uses the first eligible inline `text/html` part only when no eligible plain part exists.
 Selected data requires canonical unpadded Gmail base64url and exact declared-size agreement.
 The closed charset set is UTF-8, US-ASCII, ISO-8859-1, and Windows-1252, with absent charset defaulting to US-ASCII.
+Charset semantics are parsed only for an otherwise eligible inline text part, so bounded inert MIME parameters on excluded or non-text nodes do not make a valid visible sibling unavailable.
 Unknown, invalid, conflicting, or output-expanding charset data fails closed.
 
-The repository-owned fail-closed HTML tokenizer emits text only, requires balanced unambiguous markup, removes active and hidden subtrees, requires closed entity decoding before evaluating security-sensitive visibility attributes, and never emits attributes, URLs, images, CSS, forms, scripts, event handlers, or markup.
+The repository-owned fail-closed HTML tokenizer emits text only, requires balanced unambiguous markup, permits self-closing syntax only for closed void elements, removes active and hidden subtrees, requires closed entity decoding before evaluating security-sensitive visibility attributes, handles exact hidden `!important` and numeric-zero forms, rejects ambiguous computed or obfuscated visibility values, and never emits attributes, URLs, images, CSS, forms, scripts, event handlers, or markup.
 The shared canonicalizer normalizes line endings, replaces disallowed controls, removes reviewed bidirectional and unsafe invisible formatting characters, trims line ends, collapses excessive blank lines, and truncates only at a UTF-8 boundary.
+Construction and durable decoding apply the same canonical-excerpt predicate, so noncanonical content cannot enter through a typed caller or malformed durable row.
 Malformed HTML and an empty canonical result are unavailable and never fall back to raw HTML.
 
 Candidate-content version 1 stores only extractor version, canonical record ID, source metadata hash, gate version and input hash, source kind, excerpt, excerpt byte count, configured limit, truncation flag, domain-separated content hash, and first fetched timestamp.
