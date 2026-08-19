@@ -1360,6 +1360,8 @@ type discoveryStoreProbe struct {
 	candidateGateValue      storage.GateDecisionState
 	beforeCandidateCommit   func(context.Context, storage.CandidateContentCommit)
 	failCandidateCommit     error
+	failCandidateMessage    error
+	failCandidateGate       error
 }
 
 func (store *discoveryStoreProbe) action(name string) {
@@ -1436,6 +1438,9 @@ func (store *discoveryStoreProbe) GetDiscoveredMessage(ctx context.Context, acco
 	overrideRead := store.candidateMessageRead
 	override := store.candidateMessageValue
 	store.mu.Unlock()
+	if store.failCandidateMessage != nil {
+		return maildomain.Message{}, store.failCandidateMessage
+	}
 	if read == overrideRead && override.Valid() {
 		return override, nil
 	}
@@ -1449,6 +1454,9 @@ func (store *discoveryStoreProbe) GetGateDecision(ctx context.Context, accountID
 	overrideRead := store.candidateGateRead
 	override := store.candidateGateValue
 	store.mu.Unlock()
+	if store.failCandidateGate != nil {
+		return storage.GateDecisionState{}, store.failCandidateGate
+	}
 	if read == overrideRead && override.Decision.Valid() {
 		return override, nil
 	}

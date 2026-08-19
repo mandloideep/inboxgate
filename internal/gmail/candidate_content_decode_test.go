@@ -62,6 +62,31 @@ func TestDecodeCandidateExcludesAttachmentSubtrees(t *testing.T) {
 	}
 }
 
+func TestDecodeCandidateContentDispositionExcludesAttachmentsAndDescendants(t *testing.T) {
+	plainAttachment := `{"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=utf-8"},{"name":"Content-Disposition","value":"attachment"}],"filename":"","body":{"size":15,"data":"YXR0YWNoZWQgc2VjcmV0"}}`
+	visible := textPart("text/html", "utf-8", []byte(`<p>visible</p>`))
+	container := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[{"name":"Content-Disposition","value":"attachment; filename=synthetic.eml"}],"filename":"","body":{"size":0},"parts":[%s]}`, textPart("text/plain", "utf-8", []byte("nested secret")))
+	for _, attached := range []string{plainAttachment, container} {
+		payload := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[],"filename":"","body":{"size":0},"parts":[%s,%s]}`, attached, visible)
+		_, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024)
+		if err != nil || excerpt != "visible" {
+			t.Fatalf("attachment disposition selected: excerpt=%q err=%v", excerpt, err)
+		}
+	}
+	inline := `{"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=utf-8"},{"name":"Content-Disposition","value":"inline"}],"filename":"","body":{"size":7,"data":"dmlzaWJsZQ"}}`
+	if _, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", inline), "m", "t", 1024); err != nil || excerpt != "visible" {
+		t.Fatalf("inline disposition rejected: excerpt=%q err=%v", excerpt, err)
+	}
+	for _, invalid := range []string{
+		`{"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=utf-8"},{"name":"Content-Disposition","value":"inline"},{"name":"Content-Disposition","value":"attachment"}],"filename":"","body":{"size":7,"data":"dmlzaWJsZQ"}}`,
+		`{"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=utf-8"},{"name":"Content-Disposition","value":"attachment; filename=\"unterminated"}],"filename":"","body":{"size":7,"data":"dmlzaWJsZQ"}}`,
+	} {
+		if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", invalid), "m", "t", 1024); err == nil {
+			t.Fatal("conflicting or malformed Content-Disposition accepted")
+		}
+	}
+}
+
 func TestDecodeCandidateHTMLDiscardsActiveHiddenAndLinks(t *testing.T) {
 	html := `<html><head><title>secret</title></head><body><p>Hello <a href="https://private.invalid/path">world</a></p><script>steal()</script><style>.x{}</style><div hidden>hidden one</div><div aria-hidden="true">hidden two</div><div style="DISPLAY : none">hidden three</div><form>hidden four</form><p>Done</p></body></html>`
 	payload := textPart("text/html", "utf-8", []byte(html))
@@ -168,6 +193,16 @@ func TestDecodeCandidateCharsetsAndUTF8Truncation(t *testing.T) {
 	_, got, truncated, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/plain", "utf-8", []byte(long))), "m", "t", 1024)
 	if err != nil || !truncated || len(got) != 1023 || !strings.HasSuffix(got, "a") {
 		t.Fatalf("bytes=%d truncated=%t err=%v", len(got), truncated, err)
+	}
+}
+
+func TestDecodeCandidateTruncationRecanonicalizesExposedBoundary(t *testing.T) {
+	for _, boundary := range []string{" ", "\t", "\n"} {
+		body := strings.Repeat("x", 1023) + boundary + "tail"
+		_, excerpt, truncated, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/plain", "utf-8", []byte(body))), "m", "t", 1024)
+		if err != nil || excerpt != strings.Repeat("x", 1023) || !truncated {
+			t.Fatalf("boundary=%q excerpt=%q truncated=%t err=%v", boundary, excerpt, truncated, err)
+		}
 	}
 }
 
@@ -366,6 +401,144 @@ func TestCandidateContentExtractorIneligibleStopsBeforeProvider(t *testing.T) {
 	}
 }
 
+func TestCandidateContentExtractorInitialPreflightStopsBeforeTransport(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(*testing.T, *discoveryFixture) (storage.AccountID, string, int)
+		want    error
+	}{
+		{name: "paused", want: ErrCandidateContentInactiveAccount, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			message, _ := seedCandidateMessage(t, fixture, true)
+			fixture.store.lifecycleOverride = lifecycleWith(storage.AccountStatePaused, 3)
+			return fixture.accountID, message.GmailMessageID(), 1024
+		}},
+		{name: "reauthorization required", want: ErrCandidateContentInactiveAccount, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			message, _ := seedCandidateMessage(t, fixture, true)
+			fixture.store.lifecycleOverride = lifecycleWith(storage.AccountStateReauthorizationRequired, 3)
+			return fixture.accountID, message.GmailMessageID(), 1024
+		}},
+		{name: "revoked", want: ErrCandidateContentInactiveAccount, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			message, _ := seedCandidateMessage(t, fixture, true)
+			fixture.store.lifecycleOverride = lifecycleWith(storage.AccountStateRevoked, 3)
+			return fixture.accountID, message.GmailMessageID(), 1024
+		}},
+		{name: "missing message", want: ErrCandidateContentRecoveryRequired, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			fixture.store.failCandidateMessage = storage.ErrMessageNotFound
+			return fixture.accountID, "missing-message", 1024
+		}},
+		{name: "missing gate", want: ErrCandidateContentIneligible, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			message, _ := seedCandidateMessage(t, fixture, true)
+			fixture.store.failCandidateGate = storage.ErrGateDecisionNotFound
+			return fixture.accountID, message.GmailMessageID(), 1024
+		}},
+		{name: "stale gate", want: ErrCandidateContentIneligible, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			message, decision := seedCandidateMessage(t, fixture, true)
+			fixture.store.candidateGateRead = 1
+			fixture.store.candidateGateValue = storage.GateDecisionState{Decision: decision, Current: false}
+			return fixture.accountID, message.GmailMessageID(), 1024
+		}},
+		{name: "metadata mismatch", want: ErrCandidateContentIneligible, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			message, _ := seedCandidateMessage(t, fixture, true)
+			changed := changedCandidateMessage(t, fixture.accountID, message)
+			fixture.store.candidateGateRead = 1
+			fixture.store.candidateGateValue = storage.GateDecisionState{Decision: candidateDecision(t, changed, config.Defaults().Gate, 2000), Current: true}
+			return fixture.accountID, message.GmailMessageID(), 1024
+		}},
+		{name: "invalid account", want: ErrCandidateContentInvalidRequest, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			return storage.AccountID{}, "message", 1024
+		}},
+		{name: "invalid message", want: ErrCandidateContentInvalidRequest, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			return fixture.accountID, "invalid message", 1024
+		}},
+		{name: "limit below", want: ErrCandidateContentInvalidRequest, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			return fixture.accountID, "message", maildomain.MinimumExcerptBytes - 1
+		}},
+		{name: "limit above", want: ErrCandidateContentInvalidRequest, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			return fixture.accountID, "message", maildomain.MaximumExcerptBytes + 1
+		}},
+		{name: "metadata only", want: ErrCandidateContentIneligible, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			message, _ := seedCandidateMessage(t, fixture, false)
+			return fixture.accountID, message.GmailMessageID(), 1024
+		}},
+		{name: "ignore", want: ErrCandidateContentIneligible, prepare: func(t *testing.T, fixture *discoveryFixture) (storage.AccountID, string, int) {
+			message, decision := seedCandidateMessage(t, fixture, true)
+			classification, err := gate.DecodeClassification(decision.Version(), decision.SourceMetadataHash(), decision.InputHash(), gate.OutcomeIgnore, []gate.ReasonCode{gate.ReasonExcludedLabel})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ignored, err := storage.NewGateDecision(classification, 2000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.store.candidateGateRead = 1
+			fixture.store.candidateGateValue = storage.GateDecisionState{Decision: ignored, Current: true}
+			return fixture.accountID, message.GmailMessageID(), 1024
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDiscoveryFixture(t, 1)
+			accountID, messageID, limit := test.prepare(t, fixture)
+			calls := 0
+			extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, errors.New("transport forbidden")
+			}), fixture.sleep)
+			if _, err := extractor.Extract(context.Background(), accountID, messageID, limit); !errors.Is(err, test.want) || calls != 0 || fixture.store.candidateCommitCount != 0 {
+				t.Fatalf("error=%v transport=%d commits=%d", err, calls, fixture.store.candidateCommitCount)
+			}
+		})
+	}
+}
+
+func TestCandidateContentExtractorTruncationPersistsCanonicalPrefix(t *testing.T) {
+	for _, boundary := range []string{" ", "\t", "\n"} {
+		t.Run(fmt.Sprintf("%q", boundary), func(t *testing.T) {
+			fixture := newDiscoveryFixture(t, 1)
+			message, _ := seedCandidateMessage(t, fixture, true)
+			body := strings.Repeat("x", 1023) + boundary + "tail"
+			extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/token" {
+					return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+				}
+				return jsonResponse(http.StatusOK, string(candidateDocument(message.GmailMessageID(), message.GmailThreadID(), textPart("text/plain", "utf-8", []byte(body))))), nil
+			}), fixture.sleep)
+			content, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024)
+			if err != nil || content.Excerpt() != strings.Repeat("x", 1023) || !content.Truncated() || !content.Valid() {
+				t.Fatalf("content=%#v err=%v", content, err)
+			}
+			state, err := fixture.store.Handle.GetCandidateContent(context.Background(), fixture.accountID, message.GmailMessageID(), 1024)
+			if err != nil || !state.Current || !state.Content.Equal(content) {
+				t.Fatalf("state=%#v err=%v", state, err)
+			}
+		})
+	}
+}
+
+func TestCandidateContentAllHeaderProjectionIsEphemeral(t *testing.T) {
+	fixture := newDiscoveryFixture(t, 1)
+	message, _ := seedCandidateMessage(t, fixture, true)
+	privateHeader := "synthetic-private-header-value"
+	part := fmt.Sprintf(`{"mimeType":"text/plain","headers":[{"name":"X-Synthetic-Private","value":%q},{"name":"Content-Type","value":"text/plain; charset=utf-8"}],"filename":"","body":{"size":7,"data":"dmlzaWJsZQ"}}`, privateHeader)
+	extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/token" {
+			return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+		}
+		if request.URL.Query().Get("fields") != candidateContentFields || !strings.Contains(candidateContentFields, "headers(name,value)") || strings.Contains(candidateContentFields, privateHeader) {
+			t.Fatalf("projection=%q", request.URL.Query().Get("fields"))
+		}
+		return jsonResponse(http.StatusOK, string(candidateDocument(message.GmailMessageID(), message.GmailThreadID(), part))), nil
+	}), fixture.sleep)
+	content, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024)
+	if err != nil || content.Excerpt() != "visible" || strings.Contains(fmt.Sprintf("%#v", content), privateHeader) {
+		t.Fatalf("content=%#v err=%v", content, err)
+	}
+	state, err := fixture.store.Handle.GetCandidateContent(context.Background(), fixture.accountID, message.GmailMessageID(), 1024)
+	if err != nil || strings.Contains(fmt.Sprintf("%#v", state), privateHeader) {
+		t.Fatalf("state=%#v err=%v", state, err)
+	}
+}
+
 func TestCandidateContentExtractorRechecksAuthorityBeforeContentRequest(t *testing.T) {
 	fixture := newDiscoveryFixture(t, 1)
 	message, _ := seedCandidateMessage(t, fixture, true)
@@ -535,6 +708,10 @@ func TestCandidateContentExtractorRejectsPostGETAuthorityChanges(t *testing.T) {
 			}), fixture.sleep)
 			if _, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, test.want) || calls != 2 || fixture.store.candidateCommitCount != 1 {
 				t.Fatalf("error=%v provider_calls=%d writes=%d", err, calls, fixture.store.candidateCommitCount)
+			}
+			state, stateErr := fixture.store.Handle.GetCandidateContent(context.Background(), fixture.accountID, message.GmailMessageID(), 1024)
+			if stateErr == nil && state.Current || stateErr != nil && !errors.Is(stateErr, storage.ErrCandidateContentNotFound) {
+				t.Fatalf("post-race state=%#v err=%v", state, stateErr)
 			}
 		})
 	}
