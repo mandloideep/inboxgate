@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -245,5 +246,76 @@ func TestCandidateContentExtractorIneligibleStopsBeforeProvider(t *testing.T) {
 	t.Cleanup(extractor.Close)
 	if _, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024); err != ErrCandidateContentIneligible || calls != 0 {
 		t.Fatalf("error=%v provider_calls=%d", err, calls)
+	}
+}
+
+func TestCandidateContentExtractorRechecksAuthorityBeforeContentRequest(t *testing.T) {
+	fixture := newDiscoveryFixture(t, 1)
+	message, _ := seedCandidateMessage(t, fixture, true)
+	fixture.store.secondLifecycleOverride = lifecycleWith(storage.AccountStatePaused, 3)
+	calls := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.URL.Path != "/token" {
+			t.Fatalf("content request crossed changed authority: %s", request.URL.Path)
+		}
+		return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+	})
+	extractor, err := newCandidateContentExtractor(candidateContentOptions{clientID: []byte(syntheticClientID), clientSecret: []byte(syntheticClientSecret), store: fixture.store, keyring: fixture.keyring}, candidateContentDependencies{endpoints: candidateContentEndpoints{token: discoveryLoopbackEndpoints.token, message: discoveryLoopbackEndpoints.message}, transport: transport, jitter: zeroReader{}, sleep: fixture.sleep, now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(extractor.Close)
+	if _, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, ErrCandidateContentInactiveAccount) || calls != 1 {
+		t.Fatalf("error=%v provider_calls=%d", err, calls)
+	}
+}
+
+func TestCandidateContentExtractorProviderClassificationsAndRetryBound(t *testing.T) {
+	tests := []struct {
+		name             string
+		status           int
+		body             string
+		want             error
+		wantContentCalls int
+		wantReauthorize  bool
+	}{
+		{name: "vanished", status: http.StatusNotFound, body: `{}`, want: ErrCandidateContentVanished, wantContentCalls: 1},
+		{name: "unauthorized", status: http.StatusUnauthorized, body: `{}`, want: ErrCandidateContentReauthorizationRequired, wantContentCalls: 1, wantReauthorize: true},
+		{name: "domain policy", status: http.StatusForbidden, body: googleErrorJSON("domainPolicy"), want: ErrCandidateContentReauthorizationRequired, wantContentCalls: 1, wantReauthorize: true},
+		{name: "other forbidden", status: http.StatusForbidden, body: googleErrorJSON("insufficientPermissions"), want: ErrCandidateContentUnavailable, wantContentCalls: 1},
+		{name: "retry exhausted", status: http.StatusTooManyRequests, body: googleErrorJSON("rateLimitExceeded"), want: ErrCandidateContentUnavailable, wantContentCalls: MaximumProviderAttempts},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDiscoveryFixture(t, 1)
+			message, _ := seedCandidateMessage(t, fixture, true)
+			contentCalls := 0
+			transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/token" {
+					return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+				}
+				contentCalls++
+				return jsonResponse(test.status, test.body), nil
+			})
+			extractor, err := newCandidateContentExtractor(candidateContentOptions{clientID: []byte(syntheticClientID), clientSecret: []byte(syntheticClientSecret), store: fixture.store, keyring: fixture.keyring}, candidateContentDependencies{endpoints: candidateContentEndpoints{token: discoveryLoopbackEndpoints.token, message: discoveryLoopbackEndpoints.message}, transport: transport, jitter: zeroReader{}, sleep: fixture.sleep, now: time.Now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(extractor.Close)
+			if _, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, test.want) || contentCalls != test.wantContentCalls {
+				t.Fatalf("error=%v content_calls=%d", err, contentCalls)
+			}
+			lifecycle, err := fixture.store.Handle.GetAccountLifecycle(context.Background(), fixture.accountID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wantReauthorize && lifecycle.State != storage.AccountStateReauthorizationRequired {
+				t.Fatalf("lifecycle=%#v", lifecycle)
+			}
+			if !test.wantReauthorize && lifecycle.State != storage.AccountStateActive {
+				t.Fatalf("lifecycle=%#v", lifecycle)
+			}
+		})
 	}
 }
