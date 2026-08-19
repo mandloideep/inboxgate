@@ -84,7 +84,7 @@ func New(configuration config.Config, logOutput io.Writer, options ...Option) (*
 	for _, option := range options {
 		option(runtime)
 	}
-	if runtime.listen == nil || runtime.shutdownTimeout <= 0 || (runtime.mcpHandler == nil) != (runtime.mcpCloser == nil) {
+	if runtime.listen == nil || runtime.shutdownTimeout <= 0 || (runtime.mcpHandler == nil) != (runtime.mcpCloser == nil) || reservedHealthPath(configuration.MCP.Path) {
 		return nil, errors.New("invalid service runtime construction")
 	}
 	if configuration.MCP.Enabled && runtime.mcpHandler != nil {
@@ -145,6 +145,11 @@ func (runtime *Runtime) ListenAndServe(address string, signals <-chan os.Signal)
 		return 1
 	}
 	listener = newBoundedListener(listener, MaxConnections)
+	serveContext, cancelServe := context.WithCancel(context.Background())
+	defer cancelServe()
+	runtime.httpServer.BaseContext = func(net.Listener) context.Context {
+		return serveContext
+	}
 
 	started := make(chan struct{})
 	serveResult := make(chan error, 1)
@@ -168,17 +173,30 @@ func (runtime *Runtime) ListenAndServe(address string, signals <-chan os.Signal)
 	case <-signals:
 		runtime.readiness.Store(false)
 		runtime.logLifecycle("shutdown_started")
-		mcpErr := runtime.closeMCP()
 		shutdownContext, cancel := runtime.shutdownContext(context.Background())
-		err := runtime.httpServer.Shutdown(shutdownContext)
-		cancel()
-		if err != nil {
+		defer cancel()
+		mcpResult := make(chan error, 1)
+		go func() {
+			mcpResult <- runtime.closeMCP()
+		}()
+		shutdownErr := runtime.httpServer.Shutdown(shutdownContext)
+		if shutdownErr != nil {
+			cancelServe()
 			_ = runtime.httpServer.Close()
-			if errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(shutdownErr, context.DeadlineExceeded) {
 				runtime.logFailure("shutdown_timeout")
 			} else {
 				runtime.logFailure("shutdown_failed")
 			}
+			return 1
+		}
+		var mcpErr error
+		select {
+		case mcpErr = <-mcpResult:
+		case <-shutdownContext.Done():
+			cancelServe()
+			_ = runtime.httpServer.Close()
+			runtime.logFailure("shutdown_timeout")
 			return 1
 		}
 		serveErr := <-serveResult
@@ -193,6 +211,10 @@ func (runtime *Runtime) ListenAndServe(address string, signals <-chan os.Signal)
 		runtime.logLifecycle("shutdown_completed")
 		return 0
 	}
+}
+
+func reservedHealthPath(path string) bool {
+	return path == "/health/live" || path == "/health/ready"
 }
 
 func (runtime *Runtime) closeMCP() error {

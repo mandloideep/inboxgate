@@ -159,9 +159,10 @@ func parseAuthorization(values []string) ([]byte, error) {
 func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	started := time.Now()
 	status := http.StatusInternalServerError
+	outcome := "failure"
 	operation := operationForHeaders(request.Header)
 	defer func() {
-		handler.logAudit(operation, methodClass(request.Method), status, outcomeForStatus(status), started)
+		handler.logAudit(operation, methodClass(request.Method), status, outcome, started)
 	}()
 	setSecurityHeaders(response.Header())
 
@@ -183,6 +184,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	}
 	if !authorized {
 		status = http.StatusUnauthorized
+		outcome = "rejected"
 		writeFixed(response, request.Method == http.MethodHead, status, "unauthorized", "", "Bearer")
 		return
 	}
@@ -193,6 +195,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	}
 	if forbiddenBrowserRequest(request.Header) {
 		status = http.StatusForbidden
+		outcome = "rejected"
 		writeFixed(response, false, status, "forbidden", "", "")
 		return
 	}
@@ -231,6 +234,11 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	}
 	requestContext, cancel := context.WithTimeout(request.Context(), handler.applicationTimeout)
 	stop := context.AfterFunc(handler.rootContext, cancel)
+	stopBodyClose := context.AfterFunc(requestContext, func() {
+		if request.Body != nil {
+			_ = request.Body.Close()
+		}
+	})
 	active := &activeRequest{cancel: cancel, body: request.Body}
 	admitted, closed := handler.admit(active)
 	if !admitted {
@@ -249,6 +257,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	defer func() {
 		stop()
 		cancel()
+		stopBodyClose()
 		handler.release(active)
 	}()
 
@@ -265,7 +274,12 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	if request.Body != nil {
 		_ = request.Body.Close()
 	}
-	if err != nil || len(body) > maximum {
+	if err != nil {
+		status = http.StatusInternalServerError
+		writeFixed(response, false, status, "internal_error", "", "")
+		return
+	}
+	if len(body) > maximum {
 		status = http.StatusRequestEntityTooLarge
 		writeFixed(response, false, status, "request_too_large", "", "")
 		return
@@ -280,7 +294,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		if classification.Method != "" {
 			if methodHeader != classification.Method {
 				status = http.StatusBadRequest
-				writeJSONRPCError(response, status, -32020, classification.ID)
+				status = writeJSONRPCError(response, status, -32020, classification.ID)
 				return
 			}
 			if classification.Method == "tools/call" {
@@ -291,7 +305,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 				}
 				if nameHeader != classification.Name {
 					status = http.StatusBadRequest
-					writeJSONRPCError(response, status, -32020, classification.ID)
+					status = writeJSONRPCError(response, status, -32020, classification.ID)
 					return
 				}
 			} else if namePresent {
@@ -303,14 +317,14 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	}
 	if classification.Code != 0 && classification.Code != -32700 {
 		status = http.StatusOK
-		writeJSONRPCError(response, status, classification.Code, classification.ID)
+		status = writeJSONRPCError(response, status, classification.Code, classification.ID)
 		return
 	}
 
 	if classification.Method == "tools/call" && handler.dispatchHook != nil {
 		if err := handler.dispatchHook(requestContext); err != nil {
 			status = http.StatusOK
-			writeJSONRPCError(response, status, -32603, classification.ID)
+			status = writeJSONRPCError(response, status, -32603, classification.ID)
 			return
 		}
 	}
@@ -328,12 +342,12 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	}
 	if classification.Code == -32700 {
 		status = http.StatusOK
-		writeJSONRPCError(response, status, -32700, nil)
+		status = writeJSONRPCError(response, status, -32700, nil)
 		return
 	}
 	if code, found := sdkErrorCode(buffer.body.Bytes()); found {
 		status = http.StatusOK
-		writeJSONRPCError(response, status, normalizeSDKError(code), classification.ID)
+		status = writeJSONRPCError(response, status, normalizeSDKError(code), classification.ID)
 		return
 	}
 	if buffer.status != 0 && buffer.status != http.StatusOK {
@@ -343,9 +357,13 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	}
 	status = http.StatusOK
 	if classification.Method == "server/discover" {
-		writeDiscovery(response, status, classification.ID, handler.binaryVersion)
+		status = writeDiscovery(response, status, classification.ID, handler.binaryVersion)
+		if status == http.StatusOK {
+			outcome = "success"
+		}
 		return
 	}
+	outcome = "success"
 	writeBuffered(response, status, buffer.body.Bytes())
 }
 
@@ -515,20 +533,15 @@ func validEnvironmentName(value string) bool {
 }
 
 func newAuditLogger(configuration config.Logging, output io.Writer) (*slog.Logger, error) {
-	var level slog.Level
 	switch configuration.Level {
 	case "debug":
-		level = slog.LevelDebug
 	case "info":
-		level = slog.LevelInfo
 	case "warn":
-		level = slog.LevelWarn
 	case "error":
-		level = slog.LevelError
 	default:
 		return nil, errors.New("invalid logging level")
 	}
-	options := &slog.HandlerOptions{Level: level}
+	options := &slog.HandlerOptions{Level: slog.LevelDebug}
 	if configuration.Format == "json" {
 		return slog.New(slog.NewJSONHandler(output, options)), nil
 	}
@@ -576,16 +589,6 @@ func methodClass(method string) string {
 	return "other"
 }
 
-func outcomeForStatus(status int) string {
-	if status >= 200 && status < 300 {
-		return "success"
-	}
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return "rejected"
-	}
-	return "failure"
-}
-
 func setSecurityHeaders(header http.Header) {
 	header.Set("Content-Type", "application/json; charset=utf-8")
 	header.Set("Cache-Control", "no-store")
@@ -617,7 +620,7 @@ func writeBuffered(response http.ResponseWriter, status int, body []byte) {
 	_, _ = response.Write(body)
 }
 
-func writeJSONRPCError(response http.ResponseWriter, status, code int, id any) {
+func writeJSONRPCError(response http.ResponseWriter, status, code int, id any) int {
 	if code == -32700 {
 		id = nil
 	}
@@ -632,10 +635,15 @@ func writeJSONRPCError(response http.ResponseWriter, status, code int, id any) {
 	payload.Error.Code = code
 	payload.Error.Message = jsonRPCMessage(code)
 	body, _ := json.Marshal(payload)
+	if len(body) > MaximumResponseBytes {
+		writeFixed(response, false, http.StatusInternalServerError, "internal_error", "", "")
+		return http.StatusInternalServerError
+	}
 	writeBuffered(response, status, body)
+	return status
 }
 
-func writeDiscovery(response http.ResponseWriter, status int, id any, version string) {
+func writeDiscovery(response http.ResponseWriter, status int, id any, version string) int {
 	payload := struct {
 		JSONRPC string `json:"jsonrpc"`
 		ID      any    `json:"id"`
@@ -654,7 +662,12 @@ func writeDiscovery(response http.ResponseWriter, status int, id any, version st
 	payload.Result.Meta.ServerInfo = mcpsdk.Implementation{Name: "InboxGate", Version: version}
 	payload.Result.SupportedVersions = []string{ProtocolVersion}
 	body, _ := json.Marshal(payload)
+	if len(body) > MaximumResponseBytes {
+		writeFixed(response, false, http.StatusInternalServerError, "internal_error", "", "")
+		return http.StatusInternalServerError
+	}
 	writeBuffered(response, status, body)
+	return status
 }
 
 func sdkErrorCode(body []byte) (int, bool) {

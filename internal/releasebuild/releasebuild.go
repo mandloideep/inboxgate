@@ -657,24 +657,38 @@ func ValidateSBOM(path, version, workspace string) error {
 	if len(document.Packages) == 0 {
 		return errors.New("SBOM contains no packages")
 	}
-	foundProduct := false
-	foundMCP := false
+	expectedPackages := map[string]string{
+		"InboxGate":                 version,
+		jsonschemaModulePath:        jsonschemaModuleVersion,
+		mcpModulePath:               mcpModuleVersion,
+		segmentioASMModulePath:      segmentioASMModuleVersion,
+		segmentioEncodingModulePath: segmentioEncodingModuleVersion,
+		uriTemplateModulePath:       uriTemplateModuleVersion,
+		yamlModulePath:              yamlModuleVersion,
+		oauthModulePath:             oauthModuleVersion,
+		syncModulePath:              syncModuleVersion,
+		sysModulePath:               sysModuleVersion,
+		timeModulePath:              timeModuleVersion,
+		tursoModulePath:             tursoModuleVersion,
+	}
+	if len(document.Packages) != len(expectedPackages) {
+		return fmt.Errorf("SBOM package count = %d, want %d exact linked runtime packages", len(document.Packages), len(expectedPackages))
+	}
 	for _, pkg := range document.Packages {
 		if pkg.Name == "" || pkg.SPDXID == "" || pkg.DownloadLocation == "" || pkg.LicenseConcluded == "" || pkg.LicenseDeclared == "" || pkg.CopyrightText == "" || pkg.FilesAnalyzed == nil {
 			return fmt.Errorf("SBOM package %q is missing required SPDX fields", pkg.Name)
 		}
-		if strings.EqualFold(pkg.Name, "InboxGate") && pkg.VersionInfo == version {
-			foundProduct = true
+		expectedVersion, found := expectedPackages[pkg.Name]
+		if !found {
+			return fmt.Errorf("SBOM contains unexpected linked runtime package %q", pkg.Name)
 		}
-		if pkg.Name == mcpModulePath && pkg.VersionInfo == mcpModuleVersion {
-			foundMCP = true
+		if pkg.VersionInfo != expectedVersion {
+			return fmt.Errorf("SBOM package %q version = %q, want %q", pkg.Name, pkg.VersionInfo, expectedVersion)
 		}
+		delete(expectedPackages, pkg.Name)
 	}
-	if !foundProduct {
-		return fmt.Errorf("SBOM does not identify InboxGate version %s", version)
-	}
-	if !foundMCP {
-		return fmt.Errorf("SBOM does not identify %s version %s", mcpModulePath, mcpModuleVersion)
+	if len(expectedPackages) != 0 {
+		return fmt.Errorf("SBOM is missing %d exact linked runtime packages", len(expectedPackages))
 	}
 	versionNumber := strings.TrimPrefix(version, "v")
 	wantFiles := map[string]struct{}{}

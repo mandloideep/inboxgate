@@ -9,13 +9,14 @@ BUILD_DIR := $(CURDIR)/.build
 
 export GOCACHE := $(CURDIR)/.cache/go-build
 
-.PHONY: actionlint build check fmt-check help release-contract storage-cross-build test test-race tidy-check verify vet vuln
+.PHONY: actionlint build check fmt-check help release-contract storage-cross-build test test-fuzz test-race tidy-check verify vet vuln
 
 help:
 	@printf '%s\n' 'Targets:'
 	@printf '%s\n' '  check       Run every required local and CI check'
 	@printf '%s\n' '  build       Build the InboxGate binary'
 	@printf '%s\n' '  test        Run unit and integration tests'
+	@printf '%s\n' '  test-fuzz   Run every bounded MCP fuzz invariant'
 	@printf '%s\n' '  test-race   Run tests with the race detector'
 	@printf '%s\n' '  vuln        Scan reachable Go code for known vulnerabilities'
 	@printf '%s\n' '  actionlint  Validate every GitHub Actions workflow'
@@ -45,6 +46,13 @@ vet:
 
 test:
 	$(GO) test ./...
+
+test-fuzz:
+	@set -eu; \
+	for target in FuzzParseBearerToken FuzzParseAuthorization FuzzRoutingHeaders FuzzStructuralEnvelope FuzzCapabilityRendering; do \
+		printf '%s\n' "Running bounded $$target"; \
+		$(GO) test -run='^$$' -fuzz="^$$target$$" -fuzztime=2s -parallel=1 ./internal/mcp; \
+	done
 
 test-race:
 	$(GO) test -race ./...
@@ -104,4 +112,4 @@ build:
 	mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(BUILD_DIR)/inboxgate ./cmd/inboxgate
 
-check: fmt-check tidy-check verify vet test test-race vuln actionlint storage-cross-build release-contract build
+check: fmt-check tidy-check verify vet test test-fuzz test-race vuln actionlint storage-cross-build release-contract build

@@ -160,9 +160,6 @@ func exactKeys(value map[string]any, required ...string) bool {
 }
 
 func decodeJSONValue(decoder *json.Decoder, state *structuralState, depth int) (any, structuralError) {
-	if depth > MaximumJSONDepth {
-		return nil, structuralInvalid
-	}
 	token, err := decoder.Token()
 	if err != nil {
 		return nil, structuralParse
@@ -174,6 +171,9 @@ func decodeJSONValue(decoder *json.Decoder, state *structuralState, depth int) (
 	delimiter, container := token.(json.Delim)
 	if !container {
 		return token, structuralOK
+	}
+	if depth > MaximumJSONDepth {
+		return nil, structuralInvalid
 	}
 	switch delimiter {
 	case '{':
