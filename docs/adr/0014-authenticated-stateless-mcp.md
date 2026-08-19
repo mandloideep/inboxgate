@@ -240,6 +240,7 @@ Existing notices for `go.yaml.in/yaml/v3`, `golang.org/x/oauth2`, `cloud.google.
 ## Advisory review
 
 The official GitHub Advisory Database records four published high-severity advisories for earlier SDK releases.
+A post-acceptance Go vulnerability database scan also reports one module-present but unreachable Windows advisory in the accepted transitive graph.
 
 | Advisory | Affected versions and fix | Disposition for v1.7.0 |
 | --- | --- | --- |
@@ -247,10 +248,13 @@ The official GitHub Advisory Database records four published high-severity advis
 | `GHSA-89xv-2j6f-qhc8` | SDK versions through 1.4.0 accepted unsafe cross-site POST conditions, fixed in 1.4.1. | The selected version contains the fix, and InboxGate independently enforces exact media, rejects every Origin and CORS request header, and emits no CORS allow header. |
 | `GHSA-q382-vc8q-7jhj` | SDK versions through 1.4.0 were vulnerable to NUL-suffixed JSON key matching, fixed in 1.4.1 using patched `github.com/segmentio/encoding v0.5.4`. | The selected graph contains `segmentio/encoding v0.5.4`, and InboxGate independently rejects NUL aliases, duplicate security fields, non-exact case, batches, trailing values, and routing mismatches. |
 | `GHSA-wvj2-96wp-fq3f` | SDK versions before 1.3.1 accepted case-folded JSON-RPC field names, fixed in 1.3.1. | The selected version contains the fix, and InboxGate independently tests exact JSON field spelling and Unicode folding cases. |
+| `GO-2026-5024` | `golang.org/x/sys/windows.NewNTUnicodeString` has an integer overflow before x/sys v0.44.0 on Windows. | The accepted graph contains x/sys v0.41.0 and is not described as fixed, but both the normal verbose scan and a `GOOS=windows GOARCH=amd64 CGO_ENABLED=0` verbose scan report zero imported vulnerable packages and zero affected symbols for InboxGate. |
 
 The accepted `v1.7.0` pin is newer than every published fixed version above.
 This disposition does not delegate InboxGate's trust boundary to the dependency.
 Any new reachable unresolved advisory or graph drift blocks merge and requires an amended decision or different exact pin.
+The post-acceptance `GO-2026-5024` result is module-present but unreachable in the supported Windows command build and therefore does not satisfy that reachable-advisory stop condition.
+Any later import or call that makes the vulnerable Windows package or symbol reachable reactivates the stop condition immediately.
 
 ## Security and privacy impact
 
