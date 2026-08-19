@@ -764,6 +764,32 @@ Do not follow links while synchronizing.
 Set explicit byte and character limits before persistence and before MCP return.
 Record truncation explicitly.
 
+The implemented inert candidate-content prerequisite accepts one typed account ID, one Gmail message ID, and the validated `gmail.body_excerpt_bytes` limit from 1,024 through 65,536 bytes.
+It proves an active lifecycle, current canonical message, and current `review_candidate` or `urgent_review_candidate` gate decision before reading a credential or contacting Gmail.
+After one accepted OAuth refresh it repeats the lifecycle, message, and gate reads and requires the exact prior lifecycle version, record identity, metadata hash, gate version, gate input hash, and candidate outcome.
+
+The content request is one bodyless read-only `users.messages.get` with `format=FULL` and a finite selector containing only message identity and MIME type, Content-Type header, filename, body size, body data, attachment ID, and 32 finite nested part levels.
+The response is at most 1 MiB, the selected decoded part is at most 512 KiB, the tree is at most 1,000 nodes and 32 levels, and the request uses the accepted maximum of four explicit attempts with a 15-second deadline per attempt.
+No attachment endpoint exists, and a filename-bearing or attachment-backed text part is never selected.
+
+Selection walks the complete bounded tree in provider order, chooses the first eligible inline `text/plain` part, and uses the first eligible inline `text/html` part only when no eligible plain part exists.
+Selected data requires canonical unpadded Gmail base64url and exact declared-size agreement.
+The closed charset set is UTF-8, US-ASCII, ISO-8859-1, and Windows-1252, with absent charset defaulting to US-ASCII.
+Unknown, invalid, conflicting, or output-expanding charset data fails closed.
+
+The repository-owned fail-closed HTML tokenizer emits text only, requires balanced unambiguous markup, removes active and hidden subtrees, requires closed entity decoding before evaluating security-sensitive visibility attributes, and never emits attributes, URLs, images, CSS, forms, scripts, event handlers, or markup.
+The shared canonicalizer normalizes line endings, replaces disallowed controls, removes reviewed bidirectional and unsafe invisible formatting characters, trims line ends, collapses excessive blank lines, and truncates only at a UTF-8 boundary.
+Malformed HTML and an empty canonical result are unavailable and never fall back to raw HTML.
+
+Candidate-content version 1 stores only extractor version, canonical record ID, source metadata hash, gate version and input hash, source kind, excerpt, excerpt byte count, configured limit, truncation flag, domain-separated content hash, and first fetched timestamp.
+The application boundary always adds `content_trust: untrusted_email` semantics.
+Migration `0007_candidate_content.sql` stores one strict `WITHOUT ROWID` row per canonical record under a restrictive foreign key and exact compare-and-swap replacement identity.
+The fake and exact-driver implementations preserve the first fetched timestamp for an exact semantic retry and use one mutation attempt plus separate physical visibility proof for uncertain outcomes.
+
+The extractor has no command, scheduler, service caller, HTTP route, MCP tool, health or capability registration, remote Turso path, or live credential path.
+The validated `retention.excerpt_days` value is not an active deletion mechanism in this slice.
+Future MCP candidate and thread tools must consume this typed bounded boundary and must not duplicate Gmail, MIME, charset, HTML, persistence, or trust policy.
+
 ## 11. Deterministic gate
 
 The gate exists to reduce model exposure and cost.
@@ -940,8 +966,8 @@ Create a new Turso Database rather than a legacy libSQL database.
 The operator should use the Turso database-engine creation option documented at implementation time and record the resulting engine type in the deployment runbook.
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official remote `tursogo-serverless` driver behind the narrow repository-owned storage adapter.
-The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, typed ciphertext-only provider-credential compare-and-swap operations, bounded typed account-lifecycle operations, a typed atomic current-discovery aggregate, and typed gate-decision compare-and-swap.
-Migration, account-cursor, ciphertext-credential, lifecycle, current-discovery, and gate-decision execution are restricted to credential-free literal-loopback endpoints.
+The adapter provides open, bounded ping, idempotent close, narrow embedded migration, typed minimum account-cursor operations, typed ciphertext-only provider-credential compare-and-swap operations, bounded typed account-lifecycle operations, a typed atomic current-discovery aggregate, typed gate-decision compare-and-swap, and typed candidate-content current read and compare-and-swap.
+Migration, account-cursor, ciphertext-credential, lifecycle, current-discovery, gate-decision, and candidate-content execution are restricted to credential-free literal-loopback endpoints.
 The one-shot `account add` command connects configuration-selected runtime values, OAuth enrollment, and typed persistence operations.
 The `account list`, `account pause`, `account resume`, and confirmed `account revoke` commands connect only the minimum selected database and encryption values required for their operation.
 Live Turso credentials and remote database activation remain prohibited.
@@ -965,7 +991,7 @@ Create unique constraints for all provider identifiers and idempotency keys.
 Set conservative connection limits from the validated configuration.
 The accepted adapter requires HTTPS with standard TLS certificate and hostname verification and rejects cleartext remote URLs before driver construction.
 Plain HTTP may be used only with a literal loopback endpoint in credential-free tests, with no bearer token or production-derived secret attached.
-The current adapter maps ping, migration, account, cursor, credential, lifecycle, current-discovery, gate-decision, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
+The current adapter maps ping, migration, account, cursor, credential, lifecycle, current-discovery, gate-decision, candidate-content, and returned close failures to fixed diagnostics and bounds ping and context-aware storage statements with owned deadlines.
 Authority handling, redirect behavior, successful-response body, cursor-line, row and value limits, and caller-controlled commit, rollback and close cancellation remain accepted unresolved risks.
 The credential-free migration contract verifies parameterized ledger inspection, an exact bounded atomic pipeline sequence, `BEGIN IMMEDIATE` locking, transaction-local validation of the exact row total and every expected pair with null rejection, internally rendered numeric and lowercase-hex catalog metadata, exact checksum drift rejection, bounded rollback attempts with unknown outcomes, no same-invocation replay, and fresh-run reconciliation after an uncertain sequence.
 Every purportedly successful migration commit requires a same-session savepoint sequence that acquires main-database writer serialization through a bounded ledger self-assignment, revalidates the same exact null-rejecting ledger prefix, and refuses to regress a concurrently advanced code-owned `PRAGMA user_version` marker, followed by separate-connection visibility of both the exact ledger and marker while the apply connection remains reserved.
@@ -977,7 +1003,7 @@ Do not automatically replay a statement after a transport failure because its se
 Migrations are append-only numbered SQL files.
 The migration runner records the migration number and checksum.
 It must refuse to run if an already applied migration has a different checksum.
-The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, appends strict account lifecycle state in `0004_account_lifecycle.sql`, appends atomic current-discovery staging in `0005_current_discovery_atomic_commit.sql`, appends strict gate decisions in `0006_gate_decisions.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
+The embedded catalog starts with immutable `0001_migration_ledger.sql`, appends minimum account-cursor schema in `0002_accounts_and_sync_cursors.sql`, appends ciphertext-only provider credentials in `0003_provider_credentials.sql`, appends strict account lifecycle state in `0004_account_lifecycle.sql`, appends atomic current-discovery staging in `0005_current_discovery_atomic_commit.sql`, appends strict gate decisions in `0006_gate_decisions.sql`, appends strict bounded candidate content in `0007_candidate_content.sql`, and is limited to 256 migrations, 256 KiB per file, and 4 MiB total.
 The runner inspects current state outside a transaction, sends pending work as one bounded no-argument `BEGIN IMMEDIATE` through `COMMIT` pipeline sequence, verifies the exact prefix row total and every expected pair under the writer lock while rejecting nulls, proves terminal session state without marker regression through the code-owned `user_version` marker and a separate physical connection, and applies at most one pending migration per transaction.
 The sequence accepts no caller data and renders only a bounded code-derived migration number and validated lowercase-hex checksum as SQL literals because the driver's sequence request cannot carry arguments.
 The prefix guard renders only bounded catalog numbers and validated lowercase-hex checksums, and none of those literals come from users, providers, configuration, or database rows.

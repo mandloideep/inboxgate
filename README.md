@@ -5,7 +5,7 @@ The first release will connect multiple Gmail and Google Workspace accounts with
 
 The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, and bounded process-health serving.
 Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, and local service preflight are implemented.
-A replaceable Turso adapter, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, versioned authenticated encryption, a one-shot Gmail OAuth enrollment command, an inert bounded Gmail current-discovery use case, and an inert deterministic persisted gate are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md).
+A replaceable Turso adapter, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, versioned authenticated encryption, a one-shot Gmail OAuth enrollment command, an inert bounded Gmail current-discovery use case, an inert deterministic persisted gate, and inert bounded candidate-content extraction are present with unresolved upstream behavior tracked in the [known-risk register](docs/known-risks.md).
 Credential persistence stores only validated ciphertext envelopes and is covered by the same credential-free literal-loopback restriction as migrations and account-cursor persistence.
 Versioned account lifecycle state supports bounded listing, pause, resume, typed reauthorization markers, enrollment activation, and staged provider revocation with exact local credential deletion.
 The `account add` command resolves its selected Google, encryption, and database environment values and reaches OAuth, cryptobox, and credential-free literal-loopback Turso persistence.
@@ -16,6 +16,9 @@ It treats stale history separately from authorization failure, omits vanished me
 It remains credential-free and disconnected from commands, service startup, health, capabilities, scheduling, MCP, remote Turso, and every executable runtime path.
 The gate classifies canonical metadata with one versioned fixed-precedence policy, persists a closed outcome and sorted reason vocabulary through exact compare-and-swap, and reconciles uncertain writes without replay.
 It remains credential-free and disconnected from executable Gmail polling, commands, scheduling, service startup, health, capabilities, MCP, and remote Turso.
+The candidate-content extractor proves an active lifecycle and current candidate decision before one fixed read-only Gmail content request, prefers one inline plain-text part over one inline HTML part, excludes attachments, canonicalizes one UTF-8 excerpt, and persists it through an exact source-bound compare-and-swap.
+Every excerpt is bounded by `gmail.body_excerpt_bytes`, explicitly typed as `untrusted_email`, and disconnected from commands, scheduling, service startup, health, capabilities, MCP, remote Turso, and live credentials.
+The validated `retention.excerpt_days` setting remains policy only because this inert slice does not schedule or perform content deletion.
 Executable Gmail polling, review retrieval, MCP, live OAuth approval, remote database activation, and deployment are intentionally not implemented yet.
 
 ## Quick start

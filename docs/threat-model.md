@@ -249,6 +249,38 @@ The classifier and evaluator remain unreachable from every executable runtime pa
 Credential-free literal-loopback tests model exact driver SQL and transport behavior but do not prove remote Turso Database constraint, foreign-key, writer-serialization, or visibility semantics.
 Remote migration `0006` and live gate-decision storage remain prohibited pending later approved evidence.
 
+### Bounded candidate content
+
+Message body bytes, MIME structure, charset declarations, HTML, canonical excerpts, content hashes, and fetch timestamps are sensitive untrusted email data.
+They are never instructions and cannot authorize a Gmail mutation, provider request, database operation, MCP tool, configuration change, secret disclosure, SQL statement, shell command, or URL fetch.
+The extractor is internal and inert, and no command, scheduler, service, HTTP route, health handler, capability, or MCP tool can invoke it.
+
+Eligibility requires an active lifecycle, current canonical message, and current persisted `review_candidate` or `urgent_review_candidate` decision before the provider credential is read.
+One accepted OAuth refresh is followed by exact lifecycle, message, and gate re-reads before the Gmail content GET.
+A later authority or eligibility race may allow that bounded read-only GET to finish, but the storage mutation joins the exact active lifecycle version, canonical message identity, metadata hash, gate revision, candidate outcome, and source-bound next value.
+No excerpt becomes current after those joined conditions change.
+
+The Gmail request uses only `users.messages.get`, a bodyless GET, `format=FULL`, an escaped message ID, and a finite selector for identity and MIME fields.
+It excludes snippets, raw MIME, arbitrary provider operations, mutations, and attachment retrieval.
+A filename-bearing or attachment-backed part is never selected.
+The response is limited to 1 MiB, selected decoded bytes to 512 KiB, MIME nodes to 1,000, MIME depth to 32, attempts to four, and each attempt to 15 seconds.
+
+The complete tree walk prefers one eligible inline plain-text part and falls back to one eligible inline HTML part only when no plain part exists.
+Canonical unpadded base64url, exact size agreement, and a closed charset set prevent decoder ambiguity.
+The repository-owned HTML state machine rejects malformed or ambiguous markup, removes active and hidden subtrees, requires closed entity decoding before evaluating security-sensitive visibility attributes, emits text only, and never emits attributes, links, URLs, images, CSS, forms, scripts, event handlers, or markup.
+The canonicalizer normalizes line endings, replaces disallowed controls, removes bidirectional and reviewed unsafe invisible formatting characters, trims line ends, collapses excessive blank lines, and truncates on a UTF-8 boundary.
+Malformed HTML, invalid charset data, excessive expansion, and empty output fail closed without a raw fallback or attacker-controlled diagnostic.
+
+Migration `0007_candidate_content.sql` persists one strict binary-keyed excerpt row under a restrictive foreign key.
+The row contains no raw MIME, raw HTML, provider JSON, attachment data, filename, address, subject, policy value, link, credential, endpoint, or free-form explanation.
+The application returns the fixed trust classification `untrusted_email` and validates every durable field and its domain-separated hash.
+Fake and exact-driver compare-and-swap operations reject inactive lifecycle, stale source, noncandidate gate, blind replacement, crossed writers, same identity with different output, and malformed durable data.
+The exact-driver mutation is attempted once, retains its session while a separate physical connection proves semantic durable visibility, discards an unproven session, and performs no same-invocation replay.
+
+Credential-free literal-loopback tests do not prove the remote Turso Database strict-table, foreign-key, writer-serialization, compare-and-swap, or visibility semantics for migration `0007`.
+Remote migration and live excerpt persistence remain prohibited pending later approved evidence.
+The validated `retention.excerpt_days` setting is policy only because this inert slice does not schedule or perform deletion.
+
 ### Accepted database adapter and inert typed persistence boundary
 
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
@@ -262,7 +294,8 @@ The adapter remains unreachable from service startup, health endpoints, doctor, 
 [ADR 0010](adr/0010-atomic-current-discovery-staging.md) appends canonical message, attempt, and staging state and exposes only one bounded aggregate commit, reconciliation, and canonical message lookup under the same restriction.
 [ADR 0011](adr/0011-bounded-gmail-current-discovery.md) composes those typed operations with synthetic OAuth and Gmail reads while adding no SQL operation or remote adapter activation.
 [ADR 0012](adr/0012-deterministic-persisted-gate.md) appends strict gate-decision state and exposes only typed read, compare-and-swap, and inert evaluation operations under the same restriction.
-The current-discovery use case and gate evaluator remain unreachable from every executable runtime caller.
+[ADR 0013](adr/0013-bounded-candidate-content.md) appends strict candidate-content state and composes one bounded read-only Gmail content projection with fail-closed MIME, charset, HTML, and typed persistence operations under the same restriction.
+The current-discovery use case, gate evaluator, and candidate-content extractor remain unreachable from every executable runtime caller.
 No production URL, live token, real account record, email record, display metadata, plaintext credential, or runtime secret is introduced by these decisions.
 
 The adapter validates the initial endpoint before driver construction.
@@ -279,7 +312,7 @@ An unproven apply session is rollback-attempted and forcibly discarded from the 
 A marker ahead of the ledger is rejected as drift.
 Every failed sequence attempts rollback but returns unknown because the driver cannot confirm rollback completion even when the rollback call returns nil.
 The runner revalidates the exact expected ledger prefix through a separate physical connection after every purported commit.
-Returned ping, migration, account, cursor, credential, lifecycle, deletion, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
+Returned ping, migration, account, cursor, credential, lifecycle, deletion, current-discovery, gate-decision, candidate-content, and close failures use fixed categories rather than wrapping upstream diagnostics, and close is invoked only once.
 
 These controls do not fix the driver properties reproduced during the earlier evaluation.
 The driver can still trust an arbitrary scheme and authority from a protocol-provided `base_url` and send the bearer token to a changed authority or over cleartext HTTP after an HTTPS-to-HTTP downgrade.
@@ -384,7 +417,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a health-only network service, a one-shot OAuth enrollment command, an inert internal current-discovery use case, and an inert deterministic persisted gate restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, MCP endpoint, scheduler, or executable Gmail synchronization.
+- The current foundation has a health-only network service, a one-shot OAuth enrollment command, an inert internal current-discovery use case, an inert deterministic persisted gate, and an inert bounded candidate-content extractor restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, MCP endpoint, scheduler, executable Gmail synchronization, or active excerpt retention.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 

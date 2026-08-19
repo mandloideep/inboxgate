@@ -39,6 +39,7 @@ It accepts balanced start and end tags, quoted or unquoted bounded attribute val
 It rejects malformed nesting, unterminated tokens, declarations other than comments, processing instructions, duplicate attributes, malformed entities, excessive token bytes, and ambiguous syntax.
 It discards complete subtrees for `script`, `style`, `template`, `noscript`, `svg`, `math`, `head`, `form`, `object`, `embed`, `iframe`, and `canvas`.
 It also discards elements with `hidden`, `aria-hidden=true`, or an inline style containing a case-insensitive declaration exactly equivalent to `display:none`, `visibility:hidden`, or `opacity:0` after bounded ASCII whitespace removal.
+Security-sensitive `aria-hidden` and `style` values first require the same closed entity decoding, so encoded visibility cannot expose a hidden subtree.
 It emits only decoded text and deterministic newlines around a closed block-element set.
 Attributes, links, URLs, images, CSS, forms, scripts, event handlers, and markup are never emitted.
 
