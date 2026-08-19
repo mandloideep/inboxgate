@@ -323,7 +323,7 @@ func fixedCandidateContentCommitError(err error) error {
 
 func buildCandidateContentFields() string {
 	part := "mimeType,headers(name,value),filename,body(size,data,attachmentId)"
-	for depth := MaximumMessagePartDepth - 1; depth >= 1; depth-- {
+	for depth := MaximumMessagePartDepth - 2; depth >= 1; depth-- {
 		part = "mimeType,headers(name,value),filename,body(size,data,attachmentId),parts(" + part + ")"
 	}
 	return "id,threadId,payload(mimeType,headers(name,value),filename,body(size,data,attachmentId),parts(" + part + "))"

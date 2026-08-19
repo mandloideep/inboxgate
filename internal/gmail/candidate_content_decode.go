@@ -174,7 +174,11 @@ func candidatePartHeaderPolicy(raw json.RawMessage, fieldMIMEType string, textPo
 		}
 		name, nameErr := requiredJSONString(header, "name")
 		value, valueErr := requiredJSONString(header, "value")
-		if nameErr != nil || valueErr != nil || len(name) > 256 || len(value) > maximumMIMEFilenameBytes || strings.IndexFunc(name+value, unicode.IsControl) >= 0 {
+		if nameErr != nil || valueErr != nil || len(name) > 256 || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+			return "", false, errCandidateContentDecode
+		}
+		selected := strings.EqualFold(name, "Content-Type") || strings.EqualFold(name, "Content-Disposition")
+		if selected && (len(value) > maximumMIMEFilenameBytes || strings.IndexFunc(value, unicode.IsControl) >= 0) {
 			return "", false, errCandidateContentDecode
 		}
 		switch {
