@@ -76,14 +76,14 @@ Operators are warned to review capability output before sharing it publicly.
 ### Process-health listener and runtime logs
 
 The process-health runtime introduces the first inbound network listener and operational log stream.
-The listener registers only exact liveness and process-readiness paths with fixed bounded JSON documents.
-It has no Gmail, OAuth, database, scheduler, MCP, provider, mutation, operator, URL-fetching, SQL, shell, or static-content route.
+The listener always registers exact liveness and process-readiness paths with fixed bounded JSON documents.
+It conditionally registers only the authenticated MCP capability route described below and has no Gmail, OAuth, database, scheduler, provider, mutation, operator, URL-fetching, SQL, shell, or static-content route.
 Unknown paths, unsupported methods, and request bodies receive fixed errors that never echo request data.
 Percent-encoded alternate spellings of a health path remain unmatched and are logged only as the bounded `unmatched` operation.
 Configured timeouts, a compiled 16 KiB header limit, a compiled limit of 128 concurrently accepted connections, and the configured request-body bound constrain the standard-library server.
 The listener acquires admission before the underlying accept, blocks further application acceptance until a permit is released exactly once by connection close, and unblocks permit waiters during shutdown.
 
-The health routes are unauthenticated because schema v1 has no separate probe credential and the future MCP bearer token belongs to another trust boundary.
+The health routes are unauthenticated because schema v1 has no separate probe credential and the MCP bearer token belongs to another trust boundary.
 They reveal only `live`, `ready`, or `not_ready` and must bind only to an approved private interface or private reverse-proxy path.
 The default all-interface listener is not authorization for public exposure.
 Detailed database, migration, scheduler, account, provider, secret, or connectivity diagnostics remain absent.
@@ -96,6 +96,50 @@ Readiness becomes false before graceful shutdown begins.
 The first termination signal stops new connections and gives active work a compiled 10-second drain deadline.
 A second signal cannot restart or extend that deadline, and an expired deadline forces the server closed with a bounded failure record.
 The local `doctor` command constructs the runtime without binding a socket, reading YAML-named environment values, or activating a provider.
+
+### Authenticated MCP capability boundary
+
+The enabled MCP route is the first authenticated application endpoint and creates an inbound authentication, protocol-parser, SDK, and capability-disclosure boundary from the approved Hermes service identity to InboxGate.
+The route is absent and its selected environment variable is not read when `mcp.enabled` is false.
+Enabled `serve` resolves only the environment variable named by `mcp.bearer_token_env`, requires a canonical unpadded base64url encoding of exactly 32 bytes, and fails before bind through one fixed diagnostic when construction fails.
+The repository clears its temporary encoded byte slice and the handler-owned decoded token on close where practical, but Go strings, compiler copies, garbage-collected memory, and the process environment prevent a complete zeroization guarantee.
+
+The bearer token authenticates one approved Hermes service identity and does not provide per-account or per-tool authorization.
+It is replayable until both copies are rotated, so an approved private network path, TLS with hostname verification, firewall and proxy policy, secret storage, bounded rotation, and incident response remain mandatory before deployment.
+Host validation prevents malformed or ambiguous HTTP authorities but does not authorize a hostname or replace DNS, TLS, proxy, or private-routing policy.
+Forwarded headers, client address, user agent, client information, and Host never influence authorization, routing decisions, response identity, or audit identity.
+
+The outer wrapper rejects every Origin, CORS request header, and browser fetch-metadata header before protocol decoding.
+It accepts POST only on the exact escaped configured path, rejects queries and aliases, requires exact JSON media and JSON acceptance, and emits no CORS response headers.
+These controls reduce browser credential abuse and DNS-rebinding ambiguity but do not make public exposure safe.
+The deployment boundary must reject unapproved hostnames and routes before traffic reaches InboxGate.
+
+The wrapper requires exact protocol revision `2026-07-28` in both the routing header and self-describing request metadata.
+It rejects legacy initialization, initialized notifications, session identifiers, event identifiers, SSE, resumability, older revisions, conflicting method or tool routing, unexpected named components, and every method outside discovery, tools/list, and tools/call for `system_capabilities`.
+The official Go SDK v1.7.0 remains inside this wrapper and cannot independently broaden the exposed authority.
+Tests start isolated processes with each of the eleven documented `MCPGODEBUG` compatibility parameters and all parameters together to prove that sessions, legacy behavior, weak media handling, Origin acceptance, broader methods, broader tools, and unbounded bodies remain unavailable.
+
+The wrapper authenticates before reading or decoding a body and uses constant-time comparison over decoded fixed-length token bytes.
+Missing, malformed, duplicated, joined, padded, case-variant, whitespace-variant, and incorrect credentials receive the same fixed response.
+The token, Authorization header, environment-variable name, secret presence, length, prefix, suffix, hash, fingerprint, and decoded bytes never enter output or audit fields.
+
+Request exhaustion is bounded by the smaller of the configured body limit and 65,536 bytes, JSON depth 16, decoded node count 2,048, one object rather than a batch, 16 concurrent admitted requests, and a five-second application deadline.
+The seventeenth request fails immediately without an unbounded queue.
+Client cancellation and shutdown cancellation reach application work, shutdown closes active request bodies, and complete responses are buffered and rejected before commitment when they exceed 65,536 bytes.
+The server's existing header, connection, timeout, and graceful-shutdown bounds remain additional controls.
+
+The repository parser independently rejects invalid UTF-8, duplicate fields, NUL aliases, case aliases, trailing values, unsupported client capabilities, extra arguments, and header-body routing differences.
+Authenticated JSON-RPC errors use fixed categories without a data field, decoder text, SDK diagnostics, request fragments, or reflected values.
+The SDK is still a supply-chain and parser risk, so the exact v1.7.0 module and full resolved graph are pinned, licensed in third-party notices, checked against published advisories, included in release build metadata and the SBOM, and covered by an accepted removal plan in ADR 0014.
+
+The only registered tool is `system_capabilities` with an empty closed input schema and read-only, idempotent, non-destructive, closed-world annotations.
+It adapts the typed capability registry and cannot reach Gmail, OAuth, Turso, storage, review, backfill, shell, SQL, URL fetching, Vikunja, provider connectivity, or arbitrary JSON-RPC behavior.
+Its result can reveal compiled capability names and validated secret environment-variable names, which are operational metadata and must remain authenticated and reviewed before sharing.
+It never inspects or reveals secret values or presence, account state, database state, migration state, provider state, hostname, time, or process state.
+
+Each request emits one bounded structured audit event containing only a fixed operation, method class, numeric status, bounded duration, and outcome.
+Audit output excludes body, response, arguments, protocol metadata, client identity, capabilities, headers, Host, path, query, address, user agent, token state, secret names, and SDK errors.
+The current audit stream is not durable, so approved retention and operational collection remain a deployment prerequisite and must be revisited before sensitive mail tools are added.
 
 ### Malicious or mistaken configuration
 
@@ -422,7 +466,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a health-only network service, a one-shot OAuth enrollment command, an inert internal current-discovery use case, an inert deterministic persisted gate, and an inert bounded candidate-content extractor restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, MCP endpoint, scheduler, executable Gmail synchronization, or active excerpt retention.
+- The current foundation has a health service plus one authenticated stateless MCP capability route, a one-shot OAuth enrollment command, an inert internal current-discovery use case, an inert deterministic persisted gate, and an inert bounded candidate-content extractor restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, mail-data MCP tool, scheduler, executable Gmail synchronization, or active excerpt retention.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 

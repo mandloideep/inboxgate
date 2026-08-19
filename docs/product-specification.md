@@ -189,11 +189,12 @@ inboxgate migrate
 ```
 
 The completed first-release `serve` command will run the private MCP endpoint, health endpoints, OAuth callback endpoint, and internal poll scheduler.
-The current service slice registers only fixed process-health endpoints and deliberately does not register MCP, OAuth, scheduler, database, or provider behavior.
+The current service slice always registers fixed process-health endpoints and, only when `mcp.enabled` is true, registers one exact authenticated stateless MCP route for capability inspection.
+It deliberately does not register OAuth, scheduler, database, Gmail, review, backfill, or provider behavior.
 The other subcommands are operator surfaces and reuse the same application use cases.
 The local `capabilities` command is available before `serve` and loads inert validated policy without starting any runtime component.
 The local `doctor` command validates configuration and constructs the logger, readiness state, health handler, and bounded HTTP server without binding a listener.
-The future MCP `system_capabilities` tool adapts the same typed registry.
+The implemented MCP `system_capabilities` tool adapts the same typed registry.
 
 Do not create separate server and worker binaries in the first release.
 Do not add a distributed worker until current synchronization and backfill cannot meet measured requirements inside one process.
@@ -425,7 +426,7 @@ A configuration file cannot activate code that the binary does not implement.
 
 The binary contains a typed capability registry with capability name, implementation status, configuration status, required secret names, required database migration, and security classification.
 `inboxgate capabilities` prints that registry as JSON.
-The future read-only `system_capabilities` MCP tool must adapt the same registry rather than create another capability model.
+The read-only `system_capabilities` MCP tool adapts the same registry rather than creating another capability model.
 
 The registry contains `gmail.backfill`, `gmail.current_sync`, `gmail.modify`, `gmail.read`, `mail.review_read`, `mail.review_write`, `system.capabilities`, `vikunja.write`, and `zoho.read` in bytewise lexical order.
 The local inspection behavior makes only `system.capabilities` implemented in the current binary slice.
@@ -444,8 +445,8 @@ Required database migration is null until an exact durable-state migration exist
 The output contains no path data, runtime state, secret presence, provider connectivity, database connectivity, account state, or health state.
 
 Unknown capability keys are validation errors.
-Capability inspection loads inert policy only and does not start or grant Gmail, OAuth, Turso, MCP, HTTP, backfill, review, encryption, logging, or provider behavior.
-Hermes will be able to inspect capabilities but cannot edit configuration through MCP.
+Local capability inspection loads inert policy only and does not start or grant Gmail, OAuth, Turso, HTTP, backfill, review, encryption, logging, or provider behavior.
+Authenticated MCP capability inspection grants only the same typed snapshot and cannot edit configuration or invoke another runtime dependency.
 
 ## 8. Package layout
 
@@ -654,7 +655,7 @@ It rejects every alias among the six selected Google, encryption, and database e
 It uses independently generated 32-byte state and PKCE values, a ten-minute one-time attempt with an owned expiry wake-up, fixed Google endpoints, an owned redirect-rejecting HTTP client, 16,384-byte provider response limits, and one request per token, UserInfo, and Gmail profile operation.
 The callback proves that a body of unknown declared length is empty before consuming the one-time attempt.
 Successful token responses require a supported JSON or form encoding with no duplicate field or noncanonical sensitive JSON field, the exact two-scope set in either order, a bearer token, a refresh token, and a bounded positive expiry before OAuth decoding is accepted.
-The long-running `serve` command remains health-only and does not register the callback.
+The long-running `serve` command does not register the OAuth callback and its optional MCP route cannot invoke enrollment.
 Enrollment resolves the stable OpenID Connect subject before creating or adopting the canonical account and fetches Gmail `historyId` only after the account row is durable.
 It initializes the cursor before encrypting and initializing the refresh token, never replaces an existing cursor or credential, and reports success only after fresh account, cursor, ciphertext, and authenticated-decryption checks.
 Account-only and cursor-only states are restartable, credential-only state requires recovery, and the protocol does not claim three-record atomicity.
@@ -830,7 +831,16 @@ Expose streamable HTTP MCP on a private route.
 Require an independent high-entropy bearer token for Hermes.
 Do not reuse the Gmail OAuth token, Turso token, Tailscale auth key, or Vikunja token.
 
+The currently implemented transport supports only protocol revision `2026-07-28` over stateless JSON-response-only Streamable HTTP.
+It registers the exact configured path only when `mcp.enabled` is true and resolves the selected token before bind.
+It accepts POST only and rejects sessions, SSE, resumability, initialization, legacy revisions, browser Origin and fetch traffic, non-exact JSON media, mismatched routing headers, malformed authorities, oversized bodies, deep or high-node JSON, batches, duplicate fields, and broader methods before application dispatch.
+InboxGate admits at most 16 concurrent MCP requests, applies a five-second application deadline, propagates cancellation, and buffers complete responses under 65,536 bytes.
+Every MCP response uses fixed no-cache and browser-hardening headers, and audit output contains only fixed operation, method class, status, bounded duration, and outcome fields.
+The official Go SDK v1.7.0 is a protocol decoder and dispatcher inside these InboxGate-owned controls and does not define authorization policy.
+
 The first tool set is intentionally small.
+Only `system_capabilities` is implemented in the current slice.
+The remaining tools below require later approved issues and are not registered.
 
 ### 12.1 Read tools
 
@@ -858,7 +868,9 @@ Returns the deterministic gate decision and reason codes for a message or thread
 
 `system_capabilities`
 
-Returns the binary version, configuration schema version, implemented capabilities, enabled capabilities, disabled capabilities, and safe missing prerequisites.
+Returns output version 1, exact MCP protocol revision, binary version and release commit, configuration schema version, deterministic typed capabilities, and safe missing prerequisites.
+Its zero-property input schema rejects every argument and its annotations are read-only, idempotent, non-destructive, and closed-world.
+It returns structured content only and derives data directly from `config.CapabilityRegistry` without inspecting provider, database, account, secret-presence, hostname, time, or process state.
 It never returns secret values.
 
 ### 12.2 Write tools
@@ -957,9 +969,9 @@ The initial registry slice has these surface decisions.
 | Configuration | Five false-by-default gates and strict rejection of unknown or unimplemented enablement |
 | Storage and migration | Not applicable |
 | Gmail and OAuth | Not applicable |
-| MCP | Not implemented in this slice |
+| MCP | Authenticated `2026-07-28` transport exposes only typed `system_capabilities` |
 | Operator CLI | Local deterministic JSON inspection only |
-| Audit, metrics, and health | Not applicable |
+| Audit, metrics, and health | Fixed redacted MCP audit events and unchanged process-health bodies; no metrics |
 | Tests | Unit, parser, renderer, and real-process coverage |
 | Documentation and threat model | Required and updated |
 
@@ -977,7 +989,7 @@ Migration, account-cursor, ciphertext-credential, lifecycle, current-discovery, 
 The one-shot `account add` command connects configuration-selected runtime values, OAuth enrollment, and typed persistence operations.
 The `account list`, `account pause`, `account resume`, and confirmed `account revoke` commands connect only the minimum selected database and encryption values required for their operation.
 Live Turso credentials and remote database activation remain prohibited.
-The health-only service, capability inspection, configuration inspection, and doctor do not activate this persistence boundary.
+The health service, optional capability-only MCP route, capability inspection, configuration inspection, and doctor do not activate this persistence boundary.
 
 The owner accepts the unresolved `base_url` authority, raw remote diagnostic, transaction completion, close context, terminal acknowledgement, private HTTP client and redirect policy, and successful-response bound risks recorded in the [known-risk register](known-risks.md).
 That acceptance permits focused storage implementation to continue but does not describe the risks as fixed.
@@ -1091,9 +1103,10 @@ Reject unexpected content types.
 Use constant-time comparison for fixed bearer secrets where applicable.
 Do not put secrets in URLs.
 
-The initial health-only runtime exposes exactly `GET` and `HEAD` on `/health/live` and `/health/ready`.
+The runtime exposes exactly `GET` and `HEAD` on `/health/live` and `/health/ready` for health.
 Percent-encoded alternate path spellings are unmatched even when URL decoding would produce a health path.
-It uses fixed bounded JSON responses, a compiled 16 KiB header limit, a compiled limit of 128 concurrently accepted connections, the configured timeouts and request-body limit, and no provider, storage, OAuth, MCP, scheduler, or mutation route.
+Health uses fixed bounded JSON responses, a compiled 16 KiB header limit, a compiled limit of 128 concurrently accepted connections, the configured timeouts and request-body limit, and no provider, storage, OAuth, scheduler, or mutation route.
+When MCP is enabled, only the exact authenticated capability route described in section 12 is added.
 The listener acquires an admission permit before accepting a connection into application work and reuses that permit only after the accepted connection closes.
 Readiness reports only an active serving lifecycle after strict configuration validation, logger and server construction, and listener establishment.
 It becomes false before shutdown draining begins.
@@ -1245,8 +1258,9 @@ Do not add model calls.
 
 ### Phase 6: Read-only MCP
 
-Test and implement authenticated MCP transport, account listing, synchronization status, candidate listing, thread retrieval, and gate-reason inspection.
-Integrate Hermes only after protocol tests pass.
+The authenticated stateless transport and `system_capabilities` prerequisite are implemented with synthetic protocol tests.
+Test and implement account listing, synchronization status, candidate listing, thread retrieval, and gate-reason inspection through later focused issues.
+Integrate Hermes only after owner-approved private networking, TLS, secret storage, and deployment approval.
 
 ### Phase 7: Review state
 
