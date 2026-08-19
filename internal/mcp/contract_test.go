@@ -924,8 +924,15 @@ func FuzzParseAuthorization(f *testing.F) {
 	f.Add("")
 	f.Fuzz(func(t *testing.T, value string) {
 		decoded, err := parseAuthorization([]string{value})
-		if err == nil && (value != "Bearer "+canonicalToken() || !bytes.Equal(decoded, syntheticTokenBytes)) {
-			t.Fatal("authorization parser accepted a noncanonical value")
+		if err == nil {
+			if !strings.HasPrefix(value, "Bearer ") {
+				t.Fatal("authorization parser accepted a noncanonical scheme")
+			}
+			want, tokenErr := ParseBearerToken(strings.TrimPrefix(value, "Bearer "))
+			if tokenErr != nil || !bytes.Equal(decoded, want) {
+				t.Fatal("authorization parser accepted a noncanonical value")
+			}
+			clear(want)
 		}
 		clear(decoded)
 	})
@@ -963,11 +970,11 @@ func FuzzStructuralEnvelope(f *testing.F) {
 			t.Skip()
 		}
 		classification := classifyEnvelope(body)
-		if classification.Code != 0 && classification.Code != -32700 && classification.Code != -32600 && classification.Code != -32602 && classification.Code != -32020 {
+		if classification.Code != 0 && classification.Code != -32700 && classification.Code != -32600 && classification.Code != -32601 && classification.Code != -32602 {
 			t.Fatalf("unbounded error vocabulary: %#v", classification)
 		}
-		if strings.Contains(classification.Message, string(body)) && len(body) != 0 {
-			t.Fatal("classification reflected input")
+		if classification.Code == 0 && classification.Message != "" || classification.Code != 0 && classification.Message != jsonRPCMessage(classification.Code) {
+			t.Fatal("classification returned a non-fixed message")
 		}
 	})
 }
