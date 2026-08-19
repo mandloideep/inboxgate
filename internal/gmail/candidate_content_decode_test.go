@@ -412,3 +412,232 @@ func TestCandidateContentExtractorProviderClassificationsAndRetryBound(t *testin
 		})
 	}
 }
+
+func TestCandidateContentExtractorRejectsPostRefreshSourceChanges(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *discoveryFixture, maildomain.Message, storage.GateDecision)
+	}{
+		{name: "message metadata", mutate: func(t *testing.T, fixture *discoveryFixture, message maildomain.Message, _ storage.GateDecision) {
+			fixture.store.candidateMessageRead = 2
+			fixture.store.candidateMessageValue = changedCandidateMessage(t, fixture.accountID, message)
+		}},
+		{name: "gate observation", mutate: func(t *testing.T, fixture *discoveryFixture, _ maildomain.Message, decision storage.GateDecision) {
+			changed, err := storage.DecodeGateDecision(int64(decision.Version()), decision.SourceMetadataHash(), decision.InputHash(), decision.Outcome().String(), decision.ReasonJSON(), decision.EvaluatedAtUnixMS()+1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.store.candidateGateRead = 2
+			fixture.store.candidateGateValue = storage.GateDecisionState{Decision: changed, Current: true}
+		}},
+		{name: "gate input", mutate: func(t *testing.T, fixture *discoveryFixture, message maildomain.Message, _ storage.GateDecision) {
+			policy := config.Defaults().Gate
+			policy.MailingListIsBulkSignal = !policy.MailingListIsBulkSignal
+			fixture.store.candidateGateRead = 2
+			fixture.store.candidateGateValue = storage.GateDecisionState{Decision: candidateDecision(t, message, policy, 2000), Current: true}
+		}},
+		{name: "gate outcome", mutate: func(t *testing.T, fixture *discoveryFixture, message maildomain.Message, _ storage.GateDecision) {
+			policy := config.Defaults().Gate
+			policy.DirectRecipientIsCandidate = false
+			fixture.store.candidateGateRead = 2
+			fixture.store.candidateGateValue = storage.GateDecisionState{Decision: candidateDecision(t, message, policy, 2000), Current: true}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDiscoveryFixture(t, 1)
+			message, decision := seedCandidateMessage(t, fixture, true)
+			test.mutate(t, fixture, message, decision)
+			calls := 0
+			extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if request.URL.Path != "/token" {
+					t.Fatalf("content request crossed changed source: %s", request.URL.Path)
+				}
+				return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+			}), fixture.sleep)
+			if _, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, ErrCandidateContentConflict) || calls != 1 || fixture.store.candidateCommitCount != 0 {
+				t.Fatalf("error=%v provider_calls=%d writes=%d", err, calls, fixture.store.candidateCommitCount)
+			}
+		})
+	}
+}
+
+func TestCandidateContentExtractorRejectsPostGETAuthorityChanges(t *testing.T) {
+	tests := []struct {
+		name string
+		want error
+		hook func(*testing.T, *discoveryFixture, maildomain.Message, storage.GateDecision)
+	}{
+		{name: "lifecycle", want: ErrCandidateContentInactiveAccount, hook: func(t *testing.T, fixture *discoveryFixture, _ maildomain.Message, _ storage.GateDecision) {
+			lifecycle, err := fixture.store.Handle.GetAccountLifecycle(context.Background(), fixture.accountID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := fixture.store.Handle.CommitAccountLifecycle(context.Background(), storage.LifecycleCommit{AccountID: fixture.accountID, ExpectedState: lifecycle.State, ExpectedVersion: lifecycle.Version, ExpectedRevocationStatus: lifecycle.RevocationStatus, NextState: storage.AccountStatePaused, RevocationStatus: storage.RevocationStatusNone}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "message metadata", want: ErrCandidateContentConflict, hook: func(t *testing.T, fixture *discoveryFixture, message maildomain.Message, _ storage.GateDecision) {
+			next, _ := storage.ParseHistoryID("102")
+			if err := fixture.store.Handle.CommitCurrentDiscovery(context.Background(), storage.CurrentDiscoveryCommit{AccountID: fixture.accountID, Expected: mustHistoryID(t, "101"), Next: next, Messages: []maildomain.Message{changedCandidateMessage(t, fixture.accountID, message)}}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "gate", want: ErrCandidateContentConflict, hook: func(t *testing.T, fixture *discoveryFixture, message maildomain.Message, decision storage.GateDecision) {
+			policy := config.Defaults().Gate
+			policy.MailingListIsBulkSignal = !policy.MailingListIsBulkSignal
+			next := candidateDecision(t, message, policy, 2000)
+			revision := decision.Revision()
+			if err := fixture.store.Handle.CommitGateDecision(context.Background(), storage.GateDecisionCommit{Source: message, Expected: &revision, Next: next}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDiscoveryFixture(t, 1)
+			message, decision := seedCandidateMessage(t, fixture, true)
+			fixture.store.beforeCandidateCommit = func(context.Context, storage.CandidateContentCommit) {
+				test.hook(t, fixture, message, decision)
+			}
+			calls := 0
+			extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if request.URL.Path == "/token" {
+					return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+				}
+				return jsonResponse(http.StatusOK, string(candidateDocument(message.GmailMessageID(), message.GmailThreadID(), textPart("text/plain", "utf-8", []byte("visible"))))), nil
+			}), fixture.sleep)
+			if _, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, test.want) || calls != 2 || fixture.store.candidateCommitCount != 1 {
+				t.Fatalf("error=%v provider_calls=%d writes=%d", err, calls, fixture.store.candidateCommitCount)
+			}
+		})
+	}
+}
+
+func TestCandidateContentExtractorRefreshClassifications(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		error  string
+		reason storage.ReauthorizationReason
+	}{
+		{name: "invalid grant", error: "invalid_grant", reason: storage.ReauthorizationReasonRefreshInvalidGrant},
+		{name: "admin policy", error: "admin_policy_enforced", reason: storage.ReauthorizationReasonRefreshAdminPolicyEnforced},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDiscoveryFixture(t, 1)
+			message, _ := seedCandidateMessage(t, fixture, true)
+			calls := 0
+			extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return jsonResponse(http.StatusBadRequest, `{"error":"`+test.error+`"}`), nil
+			}), fixture.sleep)
+			if _, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, ErrCandidateContentReauthorizationRequired) || calls != 1 || fixture.store.candidateCommitCount != 0 {
+				t.Fatalf("error=%v provider_calls=%d writes=%d", err, calls, fixture.store.candidateCommitCount)
+			}
+			lifecycle, err := fixture.store.Handle.GetAccountLifecycle(context.Background(), fixture.accountID)
+			if err != nil || lifecycle.ReauthorizationReason == nil || *lifecycle.ReauthorizationReason != test.reason {
+				t.Fatalf("lifecycle=%#v err=%v", lifecycle, err)
+			}
+		})
+	}
+}
+
+func TestCandidateContentExtractorCancellationAndDiagnosticSuppression(t *testing.T) {
+	t.Run("preflight cancellation", func(t *testing.T) {
+		fixture := newDiscoveryFixture(t, 1)
+		message, _ := seedCandidateMessage(t, fixture, true)
+		calls := 0
+		extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls++
+			return nil, errors.New("provider contact forbidden")
+		}), fixture.sleep)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := extractor.Extract(ctx, fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, context.Canceled) || calls != 0 || fixture.store.candidateCommitCount != 0 {
+			t.Fatalf("error=%v provider_calls=%d writes=%d", err, calls, fixture.store.candidateCommitCount)
+		}
+	})
+	t.Run("provider deadline", func(t *testing.T) {
+		fixture := newDiscoveryFixture(t, 1)
+		message, _ := seedCandidateMessage(t, fixture, true)
+		calls := 0
+		extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			calls++
+			if request.URL.Path == "/token" {
+				return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+			}
+			return nil, context.DeadlineExceeded
+		}), func(context.Context, time.Duration) error { return context.DeadlineExceeded })
+		if _, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, context.DeadlineExceeded) || calls != 2 || fixture.store.candidateCommitCount != 0 {
+			t.Fatalf("error=%v provider_calls=%d writes=%d", err, calls, fixture.store.candidateCommitCount)
+		}
+	})
+	t.Run("retry sleep cancellation", func(t *testing.T) {
+		fixture := newDiscoveryFixture(t, 1)
+		message, _ := seedCandidateMessage(t, fixture, true)
+		calls, sleeps := 0, 0
+		ctx, cancel := context.WithCancel(context.Background())
+		extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			calls++
+			if request.URL.Path == "/token" {
+				return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+			}
+			return jsonResponse(http.StatusTooManyRequests, googleErrorJSON("rateLimitExceeded")), nil
+		}), func(context.Context, time.Duration) error {
+			sleeps++
+			cancel()
+			return ctx.Err()
+		})
+		if _, err := extractor.Extract(ctx, fixture.accountID, message.GmailMessageID(), 1024); !errors.Is(err, context.Canceled) || calls != 2 || sleeps != 1 || fixture.store.candidateCommitCount != 0 {
+			t.Fatalf("error=%v provider_calls=%d sleeps=%d writes=%d", err, calls, sleeps, fixture.store.candidateCommitCount)
+		}
+	})
+	t.Run("raw provider diagnostic", func(t *testing.T) {
+		fixture := newDiscoveryFixture(t, 1)
+		message, _ := seedCandidateMessage(t, fixture, true)
+		extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path == "/token" {
+				return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+			}
+			return nil, errors.New("synthetic-private-provider-diagnostic")
+		}), func(context.Context, time.Duration) error { return nil })
+		_, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024)
+		if !errors.Is(err, ErrCandidateContentUnavailable) || strings.Contains(err.Error(), "synthetic-private") {
+			t.Fatalf("diagnostic crossed boundary: %v", err)
+		}
+	})
+}
+
+func candidateExtractorForTest(t *testing.T, fixture *discoveryFixture, transport http.RoundTripper, sleep func(context.Context, time.Duration) error) *CandidateContentExtractor {
+	t.Helper()
+	extractor, err := newCandidateContentExtractor(candidateContentOptions{clientID: []byte(syntheticClientID), clientSecret: []byte(syntheticClientSecret), store: fixture.store, keyring: fixture.keyring}, candidateContentDependencies{endpoints: candidateContentEndpoints{token: discoveryLoopbackEndpoints.token, message: discoveryLoopbackEndpoints.message}, transport: transport, jitter: zeroReader{}, sleep: sleep, now: func() time.Time { return time.UnixMilli(1700000000123) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(extractor.Close)
+	return extractor
+}
+
+func changedCandidateMessage(t *testing.T, accountID storage.AccountID, message maildomain.Message) maildomain.Message {
+	t.Helper()
+	changed, err := maildomain.Normalize(accountID.String(), maildomain.MessageInput{GmailMessageID: message.GmailMessageID(), GmailThreadID: message.GmailThreadID(), Subject: "changed metadata", To: []string{"owner@example.test"}, CC: []string{}, DeliveredTo: []string{}, Labels: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return changed
+}
+
+func candidateDecision(t *testing.T, message maildomain.Message, policy config.Gate, timestamp int64) storage.GateDecision {
+	t.Helper()
+	classification, err := gate.Classify(message, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := storage.NewGateDecision(classification, timestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decision
+}

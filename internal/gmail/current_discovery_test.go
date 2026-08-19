@@ -1351,6 +1351,15 @@ type discoveryStoreProbe struct {
 	secondLifecycleOverride *storage.AccountLifecycle
 	credentialOverride      *storage.ProviderCredential
 	lifecycleReads          int
+	candidateMessageReads   int
+	candidateGateReads      int
+	candidateCommitCount    int
+	candidateMessageRead    int
+	candidateMessageValue   maildomain.Message
+	candidateGateRead       int
+	candidateGateValue      storage.GateDecisionState
+	beforeCandidateCommit   func(context.Context, storage.CandidateContentCommit)
+	failCandidateCommit     error
 }
 
 func (store *discoveryStoreProbe) action(name string) {
@@ -1418,6 +1427,47 @@ func (store *discoveryStoreProbe) CommitSynchronization(ctx context.Context, com
 func (store *discoveryStoreProbe) CommitAccountLifecycle(ctx context.Context, commit storage.LifecycleCommit) error {
 	store.action("lifecycle_commit")
 	return store.Handle.CommitAccountLifecycle(ctx, commit)
+}
+
+func (store *discoveryStoreProbe) GetDiscoveredMessage(ctx context.Context, accountID storage.AccountID, gmailMessageID string) (maildomain.Message, error) {
+	store.mu.Lock()
+	store.candidateMessageReads++
+	read := store.candidateMessageReads
+	overrideRead := store.candidateMessageRead
+	override := store.candidateMessageValue
+	store.mu.Unlock()
+	if read == overrideRead && override.Valid() {
+		return override, nil
+	}
+	return store.Handle.GetDiscoveredMessage(ctx, accountID, gmailMessageID)
+}
+
+func (store *discoveryStoreProbe) GetGateDecision(ctx context.Context, accountID storage.AccountID, gmailMessageID string) (storage.GateDecisionState, error) {
+	store.mu.Lock()
+	store.candidateGateReads++
+	read := store.candidateGateReads
+	overrideRead := store.candidateGateRead
+	override := store.candidateGateValue
+	store.mu.Unlock()
+	if read == overrideRead && override.Decision.Valid() {
+		return override, nil
+	}
+	return store.Handle.GetGateDecision(ctx, accountID, gmailMessageID)
+}
+
+func (store *discoveryStoreProbe) CommitCandidateContent(ctx context.Context, commit storage.CandidateContentCommit) error {
+	store.mu.Lock()
+	store.candidateCommitCount++
+	before := store.beforeCandidateCommit
+	fail := store.failCandidateCommit
+	store.mu.Unlock()
+	if before != nil {
+		before(ctx, commit)
+	}
+	if fail != nil {
+		return fail
+	}
+	return store.Handle.CommitCandidateContent(ctx, commit)
 }
 
 func (store *discoveryStoreProbe) CommitCurrentDiscovery(ctx context.Context, commit storage.CurrentDiscoveryCommit) error {
