@@ -117,9 +117,13 @@ func TestDecodeCandidateRejectsAttachmentsMalformedAndBounds(t *testing.T) {
 	}
 
 	part := textPart("text/plain", "utf-8", []byte("ok"))
-	for depth := 0; depth < MaximumMessagePartDepth; depth++ {
+	for depth := 1; depth < MaximumMessagePartDepth; depth++ {
 		part = fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[{"name":"Content-Type","value":"multipart/mixed"}],"filename":"","body":{"size":0},"parts":[%s]}`, part)
 	}
+	if _, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", part), "m", "t", 1024); err != nil || excerpt != "ok" {
+		t.Fatalf("exact MIME depth rejected: excerpt=%q err=%v", excerpt, err)
+	}
+	part = fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[{"name":"Content-Type","value":"multipart/mixed"}],"filename":"","body":{"size":0},"parts":[%s]}`, part)
 	if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", part), "m", "t", 1024); err == nil {
 		t.Fatal("one-over MIME depth accepted")
 	}
@@ -154,6 +158,43 @@ func TestDecodeCandidateResponseAndMIMECountBoundaries(t *testing.T) {
 	payload = strings.Replace(payload, `]}`, ","+emptyPart+`]}`, 1)
 	if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024); err == nil {
 		t.Fatal("one-over MIME node bound accepted")
+	}
+}
+
+func TestDecodeCandidateDecodedAndHTMLBoundaries(t *testing.T) {
+	exactDecoded := bytes.Repeat([]byte("x"), maildomain.MaximumDecodedContentBytes)
+	if _, excerpt, truncated, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/plain", "utf-8", exactDecoded)), "m", "t", 1024); err != nil || len(excerpt) != 1024 || !truncated {
+		t.Fatalf("exact decoded bound rejected: bytes=%d truncated=%t err=%v", len(excerpt), truncated, err)
+	}
+	oneOverDecoded := append(append([]byte(nil), exactDecoded...), 'x')
+	if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/plain", "utf-8", oneOverDecoded)), "m", "t", 1024); err == nil {
+		t.Fatal("one-over decoded bound accepted")
+	}
+	exactExpansion := bytes.Repeat([]byte{0xe9}, maildomain.MaximumDecodedContentBytes/2)
+	if _, excerpt, truncated, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/plain", "iso-8859-1", exactExpansion)), "m", "t", 1024); err != nil || len(excerpt) != 1024 || !truncated {
+		t.Fatalf("exact charset expansion bound rejected: bytes=%d truncated=%t err=%v", len(excerpt), truncated, err)
+	}
+	oneOverExpansion := append(append([]byte(nil), exactExpansion...), 0xe9)
+	if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/plain", "iso-8859-1", oneOverExpansion)), "m", "t", 1024); err == nil {
+		t.Fatal("one-over charset expansion bound accepted")
+	}
+
+	exactTokens := strings.Repeat("<br>", maximumHTMLTokens) + "ok"
+	if _, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/html", "utf-8", []byte(exactTokens))), "m", "t", 1024); err != nil || excerpt != "ok" {
+		t.Fatalf("exact HTML token bound rejected: excerpt=%q err=%v", excerpt, err)
+	}
+	oneOverTokens := "<br>" + exactTokens
+	if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/html", "utf-8", []byte(oneOverTokens))), "m", "t", 1024); err == nil {
+		t.Fatal("one-over HTML token bound accepted")
+	}
+
+	exactDepth := strings.Repeat("<div>", MaximumMessagePartDepth) + "ok" + strings.Repeat("</div>", MaximumMessagePartDepth)
+	if _, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/html", "utf-8", []byte(exactDepth))), "m", "t", 1024); err != nil || excerpt != "ok" {
+		t.Fatalf("exact HTML depth rejected: excerpt=%q err=%v", excerpt, err)
+	}
+	oneOverDepth := "<div>" + exactDepth + "</div>"
+	if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", textPart("text/html", "utf-8", []byte(oneOverDepth))), "m", "t", 1024); err == nil {
+		t.Fatal("one-over HTML depth accepted")
 	}
 }
 
