@@ -108,11 +108,13 @@ func walkCandidatePart(raw json.RawMessage, depth int, excludedAncestor bool, se
 		return errCandidateContentDecode
 	}
 	excluded := excludedAncestor || filename != "" || attachmentID != ""
-	eligible := !excluded && data != "" && (strings.EqualFold(mimeType, "text/plain") || strings.EqualFold(mimeType, "text/html"))
-	charset, err := candidatePartCharset(part["headers"], mimeType, eligible)
+	textPotential := !excluded && data != "" && (strings.EqualFold(mimeType, "text/plain") || strings.EqualFold(mimeType, "text/html"))
+	charset, dispositionExcluded, err := candidatePartHeaderPolicy(part["headers"], mimeType, textPotential)
 	if err != nil {
 		return errCandidateContentDecode
 	}
+	excluded = excluded || dispositionExcluded
+	eligible := textPotential && !dispositionExcluded
 	if eligible {
 		if size > int64(maildomain.MaximumDecodedContentBytes) || len(data) > base64.RawURLEncoding.EncodedLen(maildomain.MaximumDecodedContentBytes) {
 			return errCandidateContentDecode
@@ -151,50 +153,82 @@ func walkCandidatePart(raw json.RawMessage, depth int, excludedAncestor bool, se
 	return nil
 }
 
-func candidatePartCharset(raw json.RawMessage, fieldMIMEType string, eligible bool) (string, error) {
+func candidatePartHeaderPolicy(raw json.RawMessage, fieldMIMEType string, textPotential bool) (string, bool, error) {
 	charset := "us-ascii"
 	if len(raw) == 0 || isJSONNull(raw) {
-		return charset, nil
+		return charset, false, nil
 	}
 	headers, err := decodeJSONArray(raw)
 	if err != nil || len(headers) > MaximumMessageHeaderEntries {
-		return "", errCandidateContentDecode
+		return "", false, errCandidateContentDecode
 	}
-	found := false
+	var contentType string
+	var contentDisposition string
+	contentTypeCount := 0
+	contentDispositionCount := 0
 	selectedBytes := 0
 	for _, rawHeader := range headers {
 		header, err := decodeExactObject(rawHeader, "name", "value")
 		if err != nil {
-			return "", errCandidateContentDecode
+			return "", false, errCandidateContentDecode
 		}
 		name, nameErr := requiredJSONString(header, "name")
 		value, valueErr := requiredJSONString(header, "value")
 		if nameErr != nil || valueErr != nil || len(name) > 256 || len(value) > maximumMIMEFilenameBytes || strings.IndexFunc(name+value, unicode.IsControl) >= 0 {
-			return "", errCandidateContentDecode
+			return "", false, errCandidateContentDecode
 		}
-		if !strings.EqualFold(name, "Content-Type") {
-			continue
+		switch {
+		case strings.EqualFold(name, "Content-Type"):
+			contentTypeCount++
+			contentType = value
+			selectedBytes += len(name) + len(value)
+		case strings.EqualFold(name, "Content-Disposition"):
+			contentDispositionCount++
+			contentDisposition = value
+			selectedBytes += len(name) + len(value)
 		}
-		if !eligible {
-			continue
+		if selectedBytes > MaximumSelectedHeaderBytes {
+			return "", false, errCandidateContentDecode
 		}
-		selectedBytes += len(name) + len(value)
-		if found || selectedBytes > MaximumSelectedHeaderBytes {
-			return "", errCandidateContentDecode
+	}
+	if contentDispositionCount > 1 {
+		return "", false, errCandidateContentDecode
+	}
+	dispositionExcluded := false
+	if contentDispositionCount == 1 {
+		disposition, parameters, err := mime.ParseMediaType(contentDisposition)
+		if err != nil {
+			return "", false, errCandidateContentDecode
 		}
-		found = true
-		mediaType, parameters, err := mime.ParseMediaType(value)
-		if err != nil || !strings.EqualFold(mediaType, fieldMIMEType) {
-			return "", errCandidateContentDecode
+		switch strings.ToLower(disposition) {
+		case "attachment":
+			dispositionExcluded = true
+		case "inline":
+		default:
+			return "", false, errCandidateContentDecode
 		}
-		if value, ok := parameters["charset"]; ok {
-			charset = strings.ToLower(strings.TrimSpace(value))
+		if _, present := parameters["filename"]; present {
+			dispositionExcluded = true
+		}
+	}
+	if textPotential && !dispositionExcluded {
+		if contentTypeCount > 1 {
+			return "", false, errCandidateContentDecode
+		}
+		if contentTypeCount == 1 {
+			mediaType, parameters, err := mime.ParseMediaType(contentType)
+			if err != nil || !strings.EqualFold(mediaType, fieldMIMEType) {
+				return "", false, errCandidateContentDecode
+			}
+			if value, ok := parameters["charset"]; ok {
+				charset = strings.ToLower(strings.TrimSpace(value))
+			}
 		}
 	}
 	if !validCandidateCharset(charset) {
-		return "", errCandidateContentDecode
+		return "", false, errCandidateContentDecode
 	}
-	return charset, nil
+	return charset, dispositionExcluded, nil
 }
 
 func candidatePartBody(raw json.RawMessage) (int64, string, string, error) {
@@ -688,6 +722,18 @@ func candidateSpace(value byte) bool {
 }
 
 func canonicalizeCandidateText(input string, limit int) (string, bool) {
+	canonical := normalizeCandidateText(input)
+	if len(canonical) <= limit {
+		return canonical, false
+	}
+	boundary := limit
+	for boundary > 0 && !utf8.RuneStart(canonical[boundary]) {
+		boundary--
+	}
+	return normalizeCandidateText(canonical[:boundary]), true
+}
+
+func normalizeCandidateText(input string) string {
 	input = strings.ReplaceAll(strings.ReplaceAll(input, "\r\n", "\n"), "\r", "\n")
 	var cleaned strings.Builder
 	for _, value := range input {
@@ -708,14 +754,7 @@ func canonicalizeCandidateText(input string, limit int) (string, bool) {
 	for strings.Contains(canonical, "\n\n\n") {
 		canonical = strings.ReplaceAll(canonical, "\n\n\n", "\n\n")
 	}
-	if len(canonical) <= limit {
-		return canonical, false
-	}
-	boundary := limit
-	for boundary > 0 && !utf8.RuneStart(canonical[boundary]) {
-		boundary--
-	}
-	return canonical[:boundary], true
+	return canonical
 }
 
 func unsafeInvisibleCandidateRune(value rune) bool {
