@@ -1,0 +1,147 @@
+{
+  "output_version": 1,
+  "protocol_version": "2026-07-28",
+  "binary_version": "dev",
+  "binary_commit": null,
+  "configuration_schema_version": 1,
+  "capabilities": [
+    {
+      "name": "gmail.backfill",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "missing_prerequisites": [
+        "implementation_not_available",
+        "disabled_by_configuration"
+      ],
+      "required_secret_names": [
+        "SYNTHETIC_DATABASE_TOKEN",
+        "SYNTHETIC_DATABASE_URL",
+        "SYNTHETIC_GOOGLE_CLIENT_ID",
+        "SYNTHETIC_GOOGLE_CLIENT_SECRET",
+        "SYNTHETIC_GOOGLE_REDIRECT_URL",
+        "SYNTHETIC_MASTER_KEY"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    },
+    {
+      "name": "gmail.current_sync",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "missing_prerequisites": [
+        "implementation_not_available",
+        "disabled_by_configuration"
+      ],
+      "required_secret_names": [
+        "SYNTHETIC_DATABASE_TOKEN",
+        "SYNTHETIC_DATABASE_URL",
+        "SYNTHETIC_GOOGLE_CLIENT_ID",
+        "SYNTHETIC_GOOGLE_CLIENT_SECRET",
+        "SYNTHETIC_GOOGLE_REDIRECT_URL",
+        "SYNTHETIC_MASTER_KEY"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    },
+    {
+      "name": "gmail.modify",
+      "implementation_status": "not_implemented",
+      "configuration_status": "not_configurable",
+      "enabled": false,
+      "missing_prerequisites": [
+        "implementation_not_available"
+      ],
+      "required_secret_names": [],
+      "required_database_migration": null,
+      "security_classification": "prohibited"
+    },
+    {
+      "name": "gmail.read",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "missing_prerequisites": [
+        "implementation_not_available",
+        "disabled_by_configuration"
+      ],
+      "required_secret_names": [
+        "SYNTHETIC_DATABASE_TOKEN",
+        "SYNTHETIC_DATABASE_URL",
+        "SYNTHETIC_GOOGLE_CLIENT_ID",
+        "SYNTHETIC_GOOGLE_CLIENT_SECRET",
+        "SYNTHETIC_GOOGLE_REDIRECT_URL",
+        "SYNTHETIC_MASTER_KEY"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    },
+    {
+      "name": "mail.review_read",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "missing_prerequisites": [
+        "implementation_not_available",
+        "disabled_by_configuration"
+      ],
+      "required_secret_names": [
+        "SYNTHETIC_DATABASE_TOKEN",
+        "SYNTHETIC_DATABASE_URL"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    },
+    {
+      "name": "mail.review_write",
+      "implementation_status": "not_implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "missing_prerequisites": [
+        "implementation_not_available",
+        "disabled_by_configuration"
+      ],
+      "required_secret_names": [
+        "SYNTHETIC_DATABASE_TOKEN",
+        "SYNTHETIC_DATABASE_URL"
+      ],
+      "required_database_migration": null,
+      "security_classification": "sensitive_write"
+    },
+    {
+      "name": "system.capabilities",
+      "implementation_status": "implemented",
+      "configuration_status": "not_configurable",
+      "enabled": true,
+      "missing_prerequisites": [],
+      "required_secret_names": [],
+      "required_database_migration": null,
+      "security_classification": "operational_metadata"
+    },
+    {
+      "name": "vikunja.write",
+      "implementation_status": "not_implemented",
+      "configuration_status": "not_configurable",
+      "enabled": false,
+      "missing_prerequisites": [
+        "implementation_not_available"
+      ],
+      "required_secret_names": [],
+      "required_database_migration": null,
+      "security_classification": "sensitive_write"
+    },
+    {
+      "name": "zoho.read",
+      "implementation_status": "not_implemented",
+      "configuration_status": "not_configurable",
+      "enabled": false,
+      "missing_prerequisites": [
+        "implementation_not_available"
+      ],
+      "required_secret_names": [],
+      "required_database_migration": null,
+      "security_classification": "sensitive_read"
+    }
+  ]
+}
