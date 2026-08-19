@@ -15,7 +15,7 @@ func TestCandidateContentKnownVectorAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if content.ContentHash() != "2a90f591f6f2cbe3a2fe4da453b56ef2aa82172ba5eb8de07889aac2f907e4e2" {
+	if content.ContentHash() != "24c6b640fa2c199cce21fb1c8e75de9378313db558448a7f2fe937a9d9703926" {
 		t.Fatalf("content hash = %s", content.ContentHash())
 	}
 	if content.ExcerptBytes() != len(input.Excerpt) || content.ContentTrust() != ContentTrustUntrustedEmail || !content.Valid() {

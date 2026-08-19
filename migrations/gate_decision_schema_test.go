@@ -30,8 +30,8 @@ func TestGateDecisionMigrationIsAppendOnlyOrderedAndGuarded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog) != 6 || catalog[5].Number != 6 || catalog[5].Name != "0006_gate_decisions.sql" {
-		t.Fatalf("catalog count = %d, want append-only migration 0006", len(catalog))
+	if len(catalog) != 7 || catalog[5].Number != 6 || catalog[5].Name != "0006_gate_decisions.sql" {
+		t.Fatalf("catalog count = %d, want retained migration 0006 followed by append-only migration 0007", len(catalog))
 	}
 	if catalog[5].Checksum != "846a62f6a8533d8a9005e25d5cf2ed5922c3d4ee9d7bfff344bf9e1885d1a48f" {
 		t.Fatalf("migration 0006 checksum = %s", catalog[5].Checksum)

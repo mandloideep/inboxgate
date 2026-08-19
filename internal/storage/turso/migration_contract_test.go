@@ -97,6 +97,19 @@ var expectedGateDecisionMigrationChecksum = func() string {
 	return hex.EncodeToString(sum[:])
 }()
 
+var expectedCandidateContentMigrationSQL = func() string {
+	catalog, err := migrations.Catalog()
+	if err != nil || len(catalog) < 7 {
+		panic("embedded candidate content migration unavailable")
+	}
+	return catalog[6].SQL
+}()
+
+var expectedCandidateContentMigrationChecksum = func() string {
+	sum := sha256.Sum256([]byte(expectedCandidateContentMigrationSQL))
+	return hex.EncodeToString(sum[:])
+}()
+
 var expectedMigrationSequence = beginImmediateSQL + ";\n" + expectedMigrationSQL +
 	"CREATE TEMP TABLE " + guardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
 	"INSERT INTO " + guardTable + " (valid) SELECT CASE WHEN (SELECT COUNT(*) FROM " + ledgerTable + ") = 0 THEN 1 ELSE 0 END;\n" +
@@ -149,6 +162,12 @@ var expectedGateDecisionMigrationSequence = beginImmediateSQL + ";\n" + expected
 	"DROP TABLE temp." + guardTable + ";\n" +
 	sequenceInsertSQL + "6, '" + expectedGateDecisionMigrationChecksum + "');\n" + commitSQL + ";"
 
+var expectedCandidateContentMigrationSequence = beginImmediateSQL + ";\n" + expectedCandidateContentMigrationSQL +
+	"CREATE TEMP TABLE " + guardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
+	"INSERT INTO " + guardTable + " (valid) SELECT CASE WHEN (SELECT COUNT(*) FROM " + ledgerTable + ") = 6 AND NOT EXISTS (SELECT 1 FROM " + ledgerTable + " WHERE number IS NULL OR checksum IS NULL) AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 1 AND checksum = '" + expectedMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 2 AND checksum = '" + expectedAccountMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 3 AND checksum = '" + expectedCredentialMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 4 AND checksum = '" + expectedLifecycleMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 5 AND checksum = '" + expectedCurrentDiscoveryMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 6 AND checksum = '" + expectedGateDecisionMigrationChecksum + "') = 1 THEN 1 ELSE 0 END;\n" +
+	"DROP TABLE temp." + guardTable + ";\n" +
+	sequenceInsertSQL + "7, '" + expectedCandidateContentMigrationChecksum + "');\n" + commitSQL + ";"
+
 var expectedTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";\n" +
 	"UPDATE " + ledgerTable + " SET checksum = checksum WHERE number = 1;\n" +
 	"CREATE TEMP TABLE " + terminalGuardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
@@ -191,6 +210,13 @@ var expectedGateDecisionTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";
 	"DROP TABLE temp." + terminalGuardTable + ";\n" +
 	"PRAGMA user_version = 6;\nRELEASE SAVEPOINT " + terminalSavepoint + ";"
 
+var expectedCandidateContentTerminalSequence = "SAVEPOINT " + terminalSavepoint + ";\n" +
+	"UPDATE " + ledgerTable + " SET checksum = checksum WHERE number = 7;\n" +
+	"CREATE TEMP TABLE " + terminalGuardTable + " (valid INTEGER NOT NULL CHECK (valid = 1));\n" +
+	"INSERT INTO " + terminalGuardTable + " (valid) SELECT CASE WHEN (SELECT COUNT(*) FROM " + ledgerTable + ") = 7 AND NOT EXISTS (SELECT 1 FROM " + ledgerTable + " WHERE number IS NULL OR checksum IS NULL) AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 1 AND checksum = '" + expectedMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 2 AND checksum = '" + expectedAccountMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 3 AND checksum = '" + expectedCredentialMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 4 AND checksum = '" + expectedLifecycleMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 5 AND checksum = '" + expectedCurrentDiscoveryMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 6 AND checksum = '" + expectedGateDecisionMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM " + ledgerTable + " WHERE number = 7 AND checksum = '" + expectedCandidateContentMigrationChecksum + "') = 1 AND (SELECT COUNT(*) FROM pragma_user_version) = 1 AND (SELECT user_version FROM pragma_user_version) BETWEEN 0 AND 7 THEN 1 ELSE 0 END;\n" +
+	"DROP TABLE temp." + terminalGuardTable + ";\n" +
+	"PRAGMA user_version = 7;\nRELEASE SAVEPOINT " + terminalSavepoint + ";"
+
 func TestMigrationContractEmptyApplication(t *testing.T) {
 
 	server := newMigrationProtocolServer(t)
@@ -200,8 +226,8 @@ func TestMigrationContractEmptyApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
-		t.Fatalf("Migrate() result = %#v, want six applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
+		t.Fatalf("Migrate() result = %#v, want seven applied migrations", result)
 	}
 	server.assertCommittedCatalog(t)
 	server.assertSeparateVerificationStream(t)
@@ -212,7 +238,7 @@ func TestMigrationContractEmptyApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 0, Current: 6}) {
+	if result != (storage.MigrationResult{Applied: 0, Current: 7}) {
 		t.Fatalf("second Migrate() result = %#v, want bounded no-op", result)
 	}
 	if got := server.mutationCount(); got != firstMutationCount {
@@ -226,7 +252,7 @@ func TestMigrationFromAccountSchemaSendsExactCredentialSchemaBytes(t *testing.T)
 	server.seedLedger(2, expectedAccountMigrationChecksum)
 	handle := openMigrationContractHandle(t, server.URL)
 	result, err := handle.Migrate(context.Background())
-	if err != nil || result.Applied != 4 || result.Current != 6 {
+	if err != nil || result.Applied != 5 || result.Current != 7 {
 		t.Fatalf("Migrate() = (%#v, %v), want one credential migration", result, err)
 	}
 	server.mu.Lock()
@@ -438,10 +464,10 @@ func TestMigrationContractDroppedCommitDoesNotReplayAndFreshRunReconciles(t *tes
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 5, Current: 6}) {
+	if result != (storage.MigrationResult{Applied: 6, Current: 7}) {
 		t.Fatalf("fresh Migrate() result = %#v, want durable reconciliation", result)
 	}
-	if got := server.sequenceCount(); got != 6 {
+	if got := server.sequenceCount(); got != 7 {
 		t.Fatalf("sequence requests after reconciliation = %d, want only pending migrations 2 and 3", got)
 	}
 }
@@ -464,11 +490,11 @@ func TestMigrationContractDroppedCommitBeforeDurabilityAppliesOnceOnFreshRun(t *
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
+	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
 		t.Fatalf("fresh Migrate() result = %#v, want three newly durable migrations", result)
 	}
-	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("sequence requests across explicit invocations = %d, want 7", got)
+	if got := server.sequenceCount(); got != 8 {
+		t.Fatalf("sequence requests across explicit invocations = %d, want 8", got)
 	}
 	server.assertCommittedCatalog(t)
 }
@@ -482,13 +508,13 @@ func TestMigrationHeaderOnlyStandaloneCommitPathIsNotUsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
+	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
 		t.Fatalf("Migrate() result = %#v, want six atomic sequences", result)
 	}
 	if got := server.commitCount(); got != 0 {
 		t.Fatalf("standalone commit requests = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 6 {
+	if got := server.sequenceCount(); got != 7 {
 		t.Fatalf("sequence requests = %d, want 6", got)
 	}
 }
@@ -502,7 +528,7 @@ func TestMigrationHeaderOnlyBeginCannotMoveWritesToAutocommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
+	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
 		t.Fatalf("Migrate() result = %#v, want six atomic sequences", result)
 	}
 	if got := server.countSQL(beginImmediateSQL); got != 0 {
@@ -511,7 +537,7 @@ func TestMigrationHeaderOnlyBeginCannotMoveWritesToAutocommit(t *testing.T) {
 	if got := server.migrationStatementCount(); got != 0 {
 		t.Fatalf("standalone migration requests = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 6 {
+	if got := server.sequenceCount(); got != 7 {
 		t.Fatalf("sequence requests = %d, want 6", got)
 	}
 }
@@ -525,7 +551,7 @@ func TestMigrationHeaderOnlyPendingStatementCannotCreateFalseLedgerSuccess(t *te
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
+	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
 		t.Fatalf("Migrate() result = %#v, want six atomic sequences", result)
 	}
 	if got := server.migrationStatementCount(); got != 0 {
@@ -534,7 +560,7 @@ func TestMigrationHeaderOnlyPendingStatementCannotCreateFalseLedgerSuccess(t *te
 	if got := server.insertCount(); got != 0 {
 		t.Fatalf("standalone ledger inserts = %d, want 0", got)
 	}
-	if got := server.sequenceCount(); got != 6 {
+	if got := server.sequenceCount(); got != 7 {
 		t.Fatalf("sequence requests = %d, want 6", got)
 	}
 }
@@ -557,8 +583,8 @@ func TestMigrationDroppedSequenceReturnsUnknownWithoutReplayAndFreshRunReconcile
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
-		t.Fatalf("fresh Migrate() result = %#v, want six applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
+		t.Fatalf("fresh Migrate() result = %#v, want seven applied migrations", result)
 	}
 }
 
@@ -606,11 +632,11 @@ func TestMigrationRejectsIncompleteSequenceResultsAndReconcilesFresh(t *testing.
 			if err != nil {
 				t.Fatalf("fresh Migrate() error = %v", err)
 			}
-			if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
+			if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
 				t.Fatalf("fresh Migrate() result = %#v, want six atomic migrations", result)
 			}
-			if got := server.sequenceCount(); got != 7 {
-				t.Fatalf("sequence requests across explicit invocations = %d, want 7", got)
+			if got := server.sequenceCount(); got != 8 {
+				t.Fatalf("sequence requests across explicit invocations = %d, want 8", got)
 			}
 		})
 	}
@@ -635,13 +661,13 @@ func TestMigrationSequenceResponseRequiresSemanticTerminalProof(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Migrate() error = %v", err)
 			}
-			if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
+			if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
 				t.Fatalf("Migrate() result = %#v, want six semantically proven migrations", result)
 			}
-			if got := server.terminalSequenceCount(); got != 6 {
+			if got := server.terminalSequenceCount(); got != 7 {
 				t.Fatalf("terminal proof sequences = %d, want 6", got)
 			}
-			if got := server.userVersionValue(); got != 6 {
+			if got := server.userVersionValue(); got != 7 {
 				t.Fatalf("durable user_version = %d, want 6", got)
 			}
 		})
@@ -674,11 +700,11 @@ func TestMigrationUnprovenApplySessionIsDiscardedBeforeFreshReconciliation(t *te
 	if err != nil {
 		t.Fatalf("fresh explicit Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
-		t.Fatalf("fresh explicit Migrate() result = %#v, want six applied migrations", result)
+	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
+		t.Fatalf("fresh explicit Migrate() result = %#v, want seven applied migrations", result)
 	}
-	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("migration sequences across explicit invocations = %d, want 7", got)
+	if got := server.sequenceCount(); got != 8 {
+		t.Fatalf("migration sequences across explicit invocations = %d, want 8", got)
 	}
 }
 
@@ -692,7 +718,7 @@ func TestMigrationRepairsCommittedLedgerWithoutTerminalMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 6}) {
+	if result != (storage.MigrationResult{Current: 7}) {
 		t.Fatalf("Migrate() result = %#v, want marker-only reconciliation", result)
 	}
 	if got := server.sequenceCount(); got != 0 {
@@ -701,7 +727,7 @@ func TestMigrationRepairsCommittedLedgerWithoutTerminalMarker(t *testing.T) {
 	if got := server.terminalSequenceCount(); got != 1 {
 		t.Fatalf("terminal sequences = %d, want one marker repair", got)
 	}
-	if got := server.userVersionValue(); got != 6 {
+	if got := server.userVersionValue(); got != 7 {
 		t.Fatalf("durable user_version = %d, want 6", got)
 	}
 }
@@ -725,7 +751,7 @@ func TestMigrationMarkerRepairDoesNotOverwriteConcurrentAdvance(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("marker repair did not reach the locked race point")
 	}
-	server.setUserVersion(7)
+	server.setUserVersion(8)
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case err := <-result:
@@ -735,8 +761,8 @@ func TestMigrationMarkerRepairDoesNotOverwriteConcurrentAdvance(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("marker repair did not return after race release")
 	}
-	if got := server.userVersionValue(); got != 7 {
-		t.Fatalf("durable user_version = %d, want concurrent value 7 preserved", got)
+	if got := server.userVersionValue(); got != 8 {
+		t.Fatalf("durable user_version = %d, want concurrent value 8 preserved", got)
 	}
 
 	fresh := openMigrationContractHandle(t, server.URL)
@@ -839,10 +865,10 @@ func TestMigrationTerminalSequenceResponsesRequireSeparateMarkerVisibility(t *te
 				if err != nil {
 					t.Fatalf("Migrate() error = %v", err)
 				}
-				if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
+				if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
 					t.Fatalf("Migrate() result = %#v, want proven migration", result)
 				}
-				if got := server.userVersionValue(); got != 6 {
+				if got := server.userVersionValue(); got != 7 {
 					t.Fatalf("durable user_version = %d, want 6", got)
 				}
 				return
@@ -864,10 +890,10 @@ func TestMigrationTerminalSequenceResponsesRequireSeparateMarkerVisibility(t *te
 			if freshErr != nil {
 				t.Fatalf("fresh Migrate() error = %v", freshErr)
 			}
-			if freshResult != (storage.MigrationResult{Applied: 5, Current: 6}) {
+			if freshResult != (storage.MigrationResult{Applied: 6, Current: 7}) {
 				t.Fatalf("fresh Migrate() result = %#v, want marker repair and migrations 2 through 4", freshResult)
 			}
-			if got := server.sequenceCount(); got != 6 {
+			if got := server.sequenceCount(); got != 7 {
 				t.Fatalf("migration sequences after fresh reconciliation = %d, want only migrations 2 through 5 after no schema replay", got)
 			}
 		})
@@ -923,7 +949,7 @@ func TestMigrationCurrentSchemaAvoidsAmbiguousFinalCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 6}) {
+	if result != (storage.MigrationResult{Current: 7}) {
 		t.Fatalf("Migrate() result = %#v, want current migration 3", result)
 	}
 	if got := server.countSQL(beginImmediateSQL); got != 0 {
@@ -1013,11 +1039,11 @@ func TestMigrationStatementFailureAttemptsRollbackAndReturnsUnknown(t *testing.T
 	if err != nil {
 		t.Fatalf("fresh Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Applied: 6, Current: 6}) {
+	if result != (storage.MigrationResult{Applied: 7, Current: 7}) {
 		t.Fatalf("fresh Migrate() result = %#v, want atomic reconciliation", result)
 	}
-	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("sequence requests across explicit invocations = %d, want 7", got)
+	if got := server.sequenceCount(); got != 8 {
+		t.Fatalf("sequence requests across explicit invocations = %d, want 8", got)
 	}
 }
 
@@ -1450,11 +1476,11 @@ func TestMigrationStalledWriteCommitAndCleanupAreNotReplayed(t *testing.T) {
 			if freshErr != nil {
 				t.Fatalf("fresh Migrate() error = %v", freshErr)
 			}
-			wantFresh := storage.MigrationResult{Applied: 6, Current: 6}
-			wantSequences := 7
+			wantFresh := storage.MigrationResult{Applied: 7, Current: 7}
+			wantSequences := 8
 			if tt.wantDurable {
-				wantFresh = storage.MigrationResult{Applied: 5, Current: 6}
-				wantSequences = 6
+				wantFresh = storage.MigrationResult{Applied: 6, Current: 7}
+				wantSequences = 7
 			}
 			if freshResult != wantFresh {
 				t.Fatalf("fresh Migrate() result = %#v, want %#v", freshResult, wantFresh)
@@ -1535,11 +1561,11 @@ func TestMigrationRollbackCleanupUsesIndependentContext(t *testing.T) {
 	if freshErr != nil {
 		t.Fatalf("fresh Migrate() error = %v", freshErr)
 	}
-	if freshResult != (storage.MigrationResult{Applied: 6, Current: 6}) {
+	if freshResult != (storage.MigrationResult{Applied: 7, Current: 7}) {
 		t.Fatalf("fresh Migrate() result = %#v, want four applied migrations", freshResult)
 	}
-	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("migration sequences after fresh reconciliation = %d, want 7", got)
+	if got := server.sequenceCount(); got != 8 {
+		t.Fatalf("migration sequences after fresh reconciliation = %d, want 8", got)
 	}
 }
 
@@ -1581,11 +1607,11 @@ func TestConcurrentMigrationSequencesConvergeAfterUnknownLockOutcome(t *testing.
 	if err != nil {
 		t.Fatalf("reconciliation Migrate() error = %v", err)
 	}
-	if result != (storage.MigrationResult{Current: 6}) {
+	if result != (storage.MigrationResult{Current: 7}) {
 		t.Fatalf("reconciliation result = %#v, want current migration 3", result)
 	}
-	if got := server.sequenceCount(); got != 7 {
-		t.Fatalf("sequence requests = %d, want six successful and one rejected sequence", got)
+	if got := server.sequenceCount(); got != 8 {
+		t.Fatalf("sequence requests = %d, want seven successful and one rejected sequence", got)
 	}
 }
 
@@ -1726,6 +1752,7 @@ type migrationProtocolServer struct {
 	pendingLifecycleSchema        bool
 	pendingCurrentDiscoverySchema bool
 	pendingGateDecisionSchema     bool
+	pendingCandidateContentSchema bool
 	drop                          bool
 	dropBeforeCommit              bool
 	headerOnlyCommit              bool
@@ -1765,6 +1792,7 @@ type migrationProtocolServer struct {
 	lifecycleSchema               bool
 	currentDiscoverySchema        bool
 	gateDecisionSchema            bool
+	candidateContentSchema        bool
 	accounts                      map[string]string
 	cursors                       map[string]string
 	credentials                   map[string]syntheticCredential
@@ -1773,6 +1801,7 @@ type migrationProtocolServer struct {
 	discoveredMessages            map[string]map[string]syntheticDiscoveredMessage
 	discoveredRecords             map[string]syntheticDiscoveredMessage
 	gateDecisions                 map[string]syntheticGateDecision
+	candidateContents             map[string]syntheticCandidateContent
 	persistenceMode               string
 	persistenceStatement          string
 	persistenceStarted            chan struct{}
@@ -1856,6 +1885,20 @@ type syntheticGateDecision struct {
 	evaluatedAt int64
 }
 
+type syntheticCandidateContent struct {
+	extractorVersion int64
+	sourceHash       string
+	gateVersion      int64
+	gateInputHash    string
+	sourceKind       string
+	excerpt          string
+	excerptBytes     int64
+	excerptLimit     int64
+	truncated        int64
+	contentHash      string
+	fetchedAt        int64
+}
+
 func syntheticRowWitness(message syntheticDiscoveredMessage) string {
 	return fmt.Sprintf("%08x%s%08x%s%08x%s%08x%08x%s%08x%s",
 		len(message.recordID), hex.EncodeToString([]byte(message.recordID)),
@@ -1924,6 +1967,7 @@ func newMigrationProtocolServer(t *testing.T) *migrationProtocolServer {
 		discoveredMessages: make(map[string]map[string]syntheticDiscoveredMessage),
 		discoveredRecords:  make(map[string]syntheticDiscoveredMessage),
 		gateDecisions:      make(map[string]syntheticGateDecision),
+		candidateContents:  make(map[string]syntheticCandidateContent),
 		persistenceRows:    make(map[string][][]any),
 		persistenceColumns: make(map[string][]any),
 		closedCursorAt:     make(map[string]int),
@@ -2327,6 +2371,36 @@ func (s *migrationProtocolServer) serveCursor(w http.ResponseWriter, r *http.Req
 			map[string]any{"name": "reason_codes", "decltype": "TEXT"},
 			map[string]any{"name": "evaluated_at_unix_ms", "decltype": "INTEGER"},
 		}
+	} else if statement.SQL == candidateContentLookupSQL {
+		columns = []any{
+			map[string]any{"name": "sentinel", "decltype": "INTEGER"},
+			map[string]any{"name": "account_count", "decltype": "INTEGER"},
+			map[string]any{"name": "lifecycle_count", "decltype": "INTEGER"},
+			map[string]any{"name": "state", "decltype": "TEXT"},
+			map[string]any{"name": "state_version", "decltype": "INTEGER"},
+			map[string]any{"name": "message_count", "decltype": "INTEGER"},
+			map[string]any{"name": "record_id", "decltype": "TEXT"},
+			map[string]any{"name": "metadata_hash", "decltype": "TEXT"},
+			map[string]any{"name": "decision_count", "decltype": "INTEGER"},
+			map[string]any{"name": "gate_version", "decltype": "INTEGER"},
+			map[string]any{"name": "gate_source_hash", "decltype": "TEXT"},
+			map[string]any{"name": "gate_input_hash", "decltype": "TEXT"},
+			map[string]any{"name": "gate_outcome", "decltype": "TEXT"},
+			map[string]any{"name": "gate_reasons", "decltype": "TEXT"},
+			map[string]any{"name": "gate_evaluated_at", "decltype": "INTEGER"},
+			map[string]any{"name": "content_count", "decltype": "INTEGER"},
+			map[string]any{"name": "extractor_version", "decltype": "INTEGER"},
+			map[string]any{"name": "content_source_hash", "decltype": "TEXT"},
+			map[string]any{"name": "content_gate_version", "decltype": "INTEGER"},
+			map[string]any{"name": "content_gate_input_hash", "decltype": "TEXT"},
+			map[string]any{"name": "source_kind", "decltype": "TEXT"},
+			map[string]any{"name": "excerpt", "decltype": "TEXT"},
+			map[string]any{"name": "excerpt_bytes", "decltype": "INTEGER"},
+			map[string]any{"name": "excerpt_limit", "decltype": "INTEGER"},
+			map[string]any{"name": "truncated", "decltype": "INTEGER"},
+			map[string]any{"name": "content_hash", "decltype": "TEXT"},
+			map[string]any{"name": "fetched_at", "decltype": "INTEGER"},
+		}
 	}
 	if overrideColumns != nil {
 		columns = overrideColumns
@@ -2447,6 +2521,7 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 		s.lifecycleSchema = s.pendingLifecycleSchema
 		s.currentDiscoverySchema = s.pendingCurrentDiscoverySchema
 		s.gateDecisionSchema = s.pendingGateDecisionSchema
+		s.candidateContentSchema = s.pendingCandidateContentSchema
 		s.inTxn = false
 		if s.drop {
 			s.drop = false
@@ -2467,6 +2542,7 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 		s.pendingLifecycleSchema = false
 		s.pendingCurrentDiscoverySchema = false
 		s.pendingGateDecisionSchema = false
+		s.pendingCandidateContentSchema = false
 		s.inTxn = false
 		return nil, 0, false
 	case accountLookupSQL:
@@ -2917,6 +2993,75 @@ func (s *migrationProtocolServer) execute(statement string, args []protocolValue
 			return nil, 1, false
 		}
 		return nil, 0, false
+	case candidateContentLookupSQL:
+		accountID := parseProtocolValue(args[0])
+		messageID := parseProtocolValue(args[1])
+		accountCount := int64(0)
+		if _, ok := s.accounts[accountID]; ok {
+			accountCount = 1
+		}
+		row := []any{integerValue(1), integerValue(accountCount), integerValue(0), nullValue(), nullValue(), integerValue(0), nullValue(), nullValue(), integerValue(0), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), integerValue(0), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue(), nullValue()}
+		if lifecycle, ok := s.lifecycles[accountID]; ok {
+			row[2] = integerValue(1)
+			row[3] = textValue(lifecycle.state)
+			row[4] = integerValue(lifecycle.version)
+		}
+		if message, ok := s.discoveredMessages[accountID][messageID]; ok {
+			row[5] = integerValue(1)
+			row[6] = textValue(message.recordID)
+			row[7] = textValue(message.metadataHash)
+			if decision, exists := s.gateDecisions[message.recordID]; exists {
+				row[8] = integerValue(1)
+				row[9] = integerValue(decision.version)
+				row[10] = textValue(decision.sourceHash)
+				row[11] = textValue(decision.inputHash)
+				row[12] = textValue(decision.outcome)
+				row[13] = textValue(decision.reasonJSON)
+				row[14] = integerValue(decision.evaluatedAt)
+			}
+			if content, exists := s.candidateContents[message.recordID]; exists {
+				row[15] = integerValue(1)
+				row[16] = integerValue(content.extractorVersion)
+				row[17] = textValue(content.sourceHash)
+				row[18] = integerValue(content.gateVersion)
+				row[19] = textValue(content.gateInputHash)
+				row[20] = textValue(content.sourceKind)
+				row[21] = textValue(content.excerpt)
+				row[22] = integerValue(content.excerptBytes)
+				row[23] = integerValue(content.excerptLimit)
+				row[24] = integerValue(content.truncated)
+				row[25] = textValue(content.contentHash)
+				row[26] = integerValue(content.fetchedAt)
+			}
+		}
+		return [][]any{row}, 0, false
+	case candidateContentCommitSQL:
+		recordID := parseProtocolValue(args[0])
+		accountID := parseProtocolValue(args[1])
+		messageID := parseProtocolValue(args[2])
+		lifecycleVersion, _ := strconv.ParseInt(parseProtocolValue(args[3]), 10, 64)
+		sourceHash := parseProtocolValue(args[4])
+		gateVersion, _ := strconv.ParseInt(parseProtocolValue(args[5]), 10, 64)
+		gateInputHash := parseProtocolValue(args[6])
+		message, messageOK := s.discoveredMessages[accountID][messageID]
+		lifecycle, lifecycleOK := s.lifecycles[accountID]
+		decision, decisionOK := s.gateDecisions[recordID]
+		if !messageOK || message.recordID != recordID || message.metadataHash != sourceHash || !lifecycleOK || lifecycle.state != "active" || lifecycle.version != lifecycleVersion || !decisionOK || decision.version != gateVersion || decision.sourceHash != sourceHash || decision.inputHash != gateInputHash || decision.outcome != parseProtocolValue(args[7]) || decision.reasonJSON != parseProtocolValue(args[8]) || strconv.FormatInt(decision.evaluatedAt, 10) != parseProtocolValue(args[9]) || decision.outcome != "review_candidate" && decision.outcome != "urgent_review_candidate" {
+			return nil, 0, false
+		}
+		expectedPresent, _ := strconv.ParseInt(parseProtocolValue(args[10]), 10, 64)
+		current, exists := s.candidateContents[recordID]
+		expectedMatches := exists && expectedPresent == 1 && strconv.FormatInt(current.extractorVersion, 10) == parseProtocolValue(args[11]) && current.sourceHash == parseProtocolValue(args[12]) && current.gateInputHash == parseProtocolValue(args[13]) && strconv.FormatInt(current.excerptLimit, 10) == parseProtocolValue(args[14]) && current.contentHash == parseProtocolValue(args[15])
+		if !exists && expectedPresent == 0 || expectedMatches {
+			extractor, _ := strconv.ParseInt(parseProtocolValue(args[16]), 10, 64)
+			excerptBytes, _ := strconv.ParseInt(parseProtocolValue(args[19]), 10, 64)
+			excerptLimit, _ := strconv.ParseInt(parseProtocolValue(args[20]), 10, 64)
+			truncated, _ := strconv.ParseInt(parseProtocolValue(args[21]), 10, 64)
+			fetchedAt, _ := strconv.ParseInt(parseProtocolValue(args[23]), 10, 64)
+			s.candidateContents[recordID] = syntheticCandidateContent{extractorVersion: extractor, sourceHash: sourceHash, gateVersion: gateVersion, gateInputHash: gateInputHash, sourceKind: parseProtocolValue(args[17]), excerpt: parseProtocolValue(args[18]), excerptBytes: excerptBytes, excerptLimit: excerptLimit, truncated: truncated, contentHash: parseProtocolValue(args[22]), fetchedAt: fetchedAt}
+			return nil, 1, false
+		}
+		return nil, 0, false
 	default:
 		if strings.HasPrefix(statement, "CREATE TABLE inboxgate_schema_migrations") {
 			if s.inTxn {
@@ -3151,6 +3296,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	s.pendingLifecycleSchema = s.lifecycleSchema
 	s.pendingCurrentDiscoverySchema = s.currentDiscoverySchema
 	s.pendingGateDecisionSchema = s.gateDecisionSchema
+	s.pendingCandidateContentSchema = s.candidateContentSchema
 	s.stallSequenceStage("sequence", beginImmediateSQL)
 	if s.failSequenceStage(beginImmediateSQL) {
 		s.mu.Unlock()
@@ -3162,6 +3308,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	lifecycleMigration := false
 	currentDiscoveryMigration := false
 	gateDecisionMigration := false
+	candidateContentMigration := false
 	switch {
 	case strings.Contains(sequence, expectedMigrationSQL):
 		migrationNumber = 1
@@ -3179,6 +3326,9 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	case strings.Contains(sequence, expectedGateDecisionMigrationSQL):
 		migrationNumber = 6
 		gateDecisionMigration = true
+	case strings.Contains(sequence, expectedCandidateContentMigrationSQL):
+		migrationNumber = 7
+		candidateContentMigration = true
 	case strings.Contains(sequence, expectedSecondMigrationSQL):
 		migrationNumber = 2
 	case strings.Contains(sequence, expectedThirdMigrationSQL):
@@ -3212,6 +3362,8 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 		s.pendingCurrentDiscoverySchema = true
 	} else if gateDecisionMigration {
 		s.pendingGateDecisionSchema = true
+	} else if candidateContentMigration {
+		s.pendingCandidateContentSchema = true
 	} else {
 		s.pendingThirdSchema = true
 	}
@@ -3244,6 +3396,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 		s.pendingLifecycleSchema = false
 		s.pendingCurrentDiscoverySchema = false
 		s.pendingGateDecisionSchema = false
+		s.pendingCandidateContentSchema = false
 		s.mu.Unlock()
 		writeDroppedPipelineResponse(w)
 		return
@@ -3281,6 +3434,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	s.lifecycleSchema = s.pendingLifecycleSchema
 	s.currentDiscoverySchema = s.pendingCurrentDiscoverySchema
 	s.gateDecisionSchema = s.pendingGateDecisionSchema
+	s.candidateContentSchema = s.pendingCandidateContentSchema
 	s.inTxn = false
 	s.pending = nil
 	s.pendingExists = false
@@ -3291,6 +3445,7 @@ func (s *migrationProtocolServer) serveMigrationSequence(w http.ResponseWriter, 
 	s.pendingLifecycleSchema = false
 	s.pendingCurrentDiscoverySchema = false
 	s.pendingGateDecisionSchema = false
+	s.pendingCandidateContentSchema = false
 	s.stallSequenceStage(commitAfterDurabilityStage)
 	if s.drop {
 		s.drop = false
@@ -3498,12 +3653,14 @@ func (s *migrationProtocolServer) seedEmbeddedCatalog() {
 	s.ledger[4] = expectedLifecycleMigrationChecksum
 	s.ledger[5] = expectedCurrentDiscoveryMigrationChecksum
 	s.ledger[6] = expectedGateDecisionMigrationChecksum
+	s.ledger[7] = expectedCandidateContentMigrationChecksum
 	s.secondSchema = true
 	s.credentialSchema = true
 	s.lifecycleSchema = true
 	s.currentDiscoverySchema = true
 	s.gateDecisionSchema = true
-	s.userVersion = 6
+	s.candidateContentSchema = true
+	s.userVersion = 7
 }
 
 func (s *migrationProtocolServer) dropNextCommit() {
@@ -3722,7 +3879,7 @@ func (s *migrationProtocolServer) assertCommittedCatalog(t *testing.T) {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.exists || s.ledger[1] != expectedMigrationChecksum || s.ledger[2] != expectedAccountMigrationChecksum || s.ledger[3] != expectedCredentialMigrationChecksum || s.ledger[4] != expectedLifecycleMigrationChecksum || s.ledger[5] != expectedCurrentDiscoveryMigrationChecksum || s.ledger[6] != expectedGateDecisionMigrationChecksum {
+	if !s.exists || s.ledger[1] != expectedMigrationChecksum || s.ledger[2] != expectedAccountMigrationChecksum || s.ledger[3] != expectedCredentialMigrationChecksum || s.ledger[4] != expectedLifecycleMigrationChecksum || s.ledger[5] != expectedCurrentDiscoveryMigrationChecksum || s.ledger[6] != expectedGateDecisionMigrationChecksum || s.ledger[7] != expectedCandidateContentMigrationChecksum {
 		t.Fatalf("durable ledger = %#v, want exact embedded catalog", s.ledger)
 	}
 }
@@ -3731,6 +3888,9 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 	t.Helper()
 	expected := []migrationRequest{
 		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
+		{sql: userVersionSQL, wantRows: true},
+		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
+		{sql: ledgerRowsSQL, args: []protocolValue{integerProtocolValue(expectedMaximumMigrationCount + 1)}, wantRows: true},
 		{sql: userVersionSQL, wantRows: true},
 		{sql: ledgerExistsSQL, args: []protocolValue{textProtocolValue("table"), textProtocolValue(ledgerTable)}, wantRows: true},
 		{sql: ledgerRowsSQL, args: []protocolValue{integerProtocolValue(expectedMaximumMigrationCount + 1)}, wantRows: true},
@@ -3773,8 +3933,8 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 			}
 		}
 	}
-	if len(s.pipelineRecords) != 12 {
-		t.Fatalf("pipeline request shape = %#v, want six apply and terminal sequence pairs", s.pipelineRecords)
+	if len(s.pipelineRecords) != 14 {
+		t.Fatalf("pipeline request shape = %#v, want seven apply and terminal sequence pairs", s.pipelineRecords)
 	}
 	for index := range s.pipelineRecords {
 		if len(s.pipelineRecords[index].requests) != 2 {
@@ -3840,6 +4000,14 @@ func (s *migrationProtocolServer) assertExactFirstApplicationSequence(t *testing
 	if gateDecisionTerminal.Type != "sequence" || gateDecisionTerminal.SQL != expectedGateDecisionTerminalSequence || len(gateDecisionTerminal.Args) != 0 || len(gateDecisionTerminal.NamedArgs) != 0 {
 		t.Fatal("gate decision pipeline terminal sequence differs from exact reviewed proof bytes")
 	}
+	candidateContentSequence := s.pipelineRecords[12].requests[0]
+	if candidateContentSequence.Type != "sequence" || candidateContentSequence.SQL != expectedCandidateContentMigrationSequence || len(candidateContentSequence.Args) != 0 || len(candidateContentSequence.NamedArgs) != 0 {
+		t.Fatal("candidate content pipeline sequence differs from exact reviewed transaction bytes")
+	}
+	candidateContentTerminal := s.pipelineRecords[13].requests[0]
+	if candidateContentTerminal.Type != "sequence" || candidateContentTerminal.SQL != expectedCandidateContentTerminalSequence || len(candidateContentTerminal.Args) != 0 || len(candidateContentTerminal.NamedArgs) != 0 {
+		t.Fatal("candidate content pipeline terminal sequence differs from exact reviewed proof bytes")
+	}
 }
 
 func textProtocolValue(value string) protocolValue {
@@ -3856,7 +4024,7 @@ func (s *migrationProtocolServer) assertSeparateVerificationStream(t *testing.T)
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.records) != 20 || s.records[0].baton != nil {
+	if len(s.records) != 23 || s.records[0].baton != nil {
 		t.Fatal("first migration request did not start a fresh physical stream")
 	}
 	if s.records[1].baton == nil {
@@ -4112,7 +4280,7 @@ func (s *migrationProtocolServer) persistenceRecords() []migrationRequest {
 	defer s.mu.Unlock()
 	records := make([]migrationRequest, 0, len(s.records))
 	for _, record := range s.records {
-		if record.sql == accountLookupSQL || record.sql == accountInsertSQL || record.sql == cursorLookupSQL || record.sql == cursorCommitSQL || record.sql == credentialLookupSQL || record.sql == credentialCommitSQL || record.sql == lifecycleLookupSQL || record.sql == accountListSQL || record.sql == lifecycleCommitSQL || record.sql == revokedCredentialDeleteSQL || record.sql == currentDiscoveryAttemptLookupSQL || record.sql == currentDiscoveryAttemptCreateSQL || record.sql == currentDiscoveryStageLookupSQL || record.sql == currentDiscoveryStageSQL || record.sql == currentDiscoveryStageProofSQL || record.sql == currentDiscoverySealSQL || record.sql == currentDiscoveryFinalizeSQL || record.sql == currentDiscoveryAbortSQL || record.sql == currentDiscoveryMessageLookupSQL || record.sql == currentDiscoveryRecordLookupSQL || record.sql == currentDiscoveryNaturalKeyLookupSQL || record.sql == currentDiscoveryProofSQL || record.sql == gateDecisionLookupSQL || record.sql == gateDecisionCommitSQL {
+		if record.sql == accountLookupSQL || record.sql == accountInsertSQL || record.sql == cursorLookupSQL || record.sql == cursorCommitSQL || record.sql == credentialLookupSQL || record.sql == credentialCommitSQL || record.sql == lifecycleLookupSQL || record.sql == accountListSQL || record.sql == lifecycleCommitSQL || record.sql == revokedCredentialDeleteSQL || record.sql == currentDiscoveryAttemptLookupSQL || record.sql == currentDiscoveryAttemptCreateSQL || record.sql == currentDiscoveryStageLookupSQL || record.sql == currentDiscoveryStageSQL || record.sql == currentDiscoveryStageProofSQL || record.sql == currentDiscoverySealSQL || record.sql == currentDiscoveryFinalizeSQL || record.sql == currentDiscoveryAbortSQL || record.sql == currentDiscoveryMessageLookupSQL || record.sql == currentDiscoveryRecordLookupSQL || record.sql == currentDiscoveryNaturalKeyLookupSQL || record.sql == currentDiscoveryProofSQL || record.sql == gateDecisionLookupSQL || record.sql == gateDecisionCommitSQL || record.sql == candidateContentLookupSQL || record.sql == candidateContentCommitSQL {
 			records = append(records, record)
 		}
 	}

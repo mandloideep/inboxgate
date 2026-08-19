@@ -19,8 +19,8 @@ func TestEmbeddedCatalogIsCanonicalAndExactByteChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Catalog() error = %v", err)
 	}
-	if len(catalog) != 6 {
-		t.Fatalf("Catalog() count = %d, want 6", len(catalog))
+	if len(catalog) != 7 {
+		t.Fatalf("Catalog() count = %d, want 7", len(catalog))
 	}
 	migration := catalog[0]
 	if migration.Number != 1 || migration.Name != "0001_migration_ledger.sql" {
