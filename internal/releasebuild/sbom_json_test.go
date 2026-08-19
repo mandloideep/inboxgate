@@ -62,6 +62,36 @@ func TestValidateSBOMPreservesUniqueUnrelatedSPDXFields(t *testing.T) {
 	}
 }
 
+func TestValidateSBOMJSONPreflightHasLiteralSizeDepthAndTokenBounds(t *testing.T) {
+	valid := string(validSBOMJSON(t))
+	const literalMaximumBytes = 4 * 1024 * 1024
+	if len(valid) >= literalMaximumBytes {
+		t.Fatalf("valid synthetic SBOM length = %d, want below literal boundary", len(valid))
+	}
+	if err := validateRawSBOM(t, valid+strings.Repeat(" ", literalMaximumBytes-len(valid))); err != nil {
+		t.Fatalf("ValidateSBOM rejected exact literal byte limit: %v", err)
+	}
+	if err := validateRawSBOM(t, valid+strings.Repeat(" ", literalMaximumBytes-len(valid)+1)); err == nil {
+		t.Fatal("ValidateSBOM accepted one byte above the literal byte limit")
+	}
+
+	for _, test := range []struct {
+		containers int
+		wantError  bool
+	}{{containers: 63, wantError: false}, {containers: 64, wantError: true}} {
+		raw := `{"unrelated":` + strings.Repeat("[", test.containers) + "0" + strings.Repeat("]", test.containers) + "," + valid[1:]
+		err := validateRawSBOM(t, raw)
+		if (err != nil) != test.wantError {
+			t.Errorf("additional container count %d error = %v, wantError %t", test.containers, err, test.wantError)
+		}
+	}
+
+	tokenHeavy := `{"unrelated":[` + strings.Repeat("0,", 140_000) + `0],` + valid[1:]
+	if err := validateRawSBOM(t, tokenHeavy); err == nil {
+		t.Fatal("ValidateSBOM accepted input above the bounded token limit")
+	}
+}
+
 func validateRawSBOM(t *testing.T, raw string) error {
 	t.Helper()
 	directory := t.TempDir()

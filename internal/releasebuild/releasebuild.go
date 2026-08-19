@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"debug/buildinfo"
@@ -609,17 +610,29 @@ type spdxFile struct {
 	FileName string `json:"fileName"`
 }
 
+const (
+	maximumSBOMBytes      = 4 << 20
+	maximumSBOMJSONDepth  = 64
+	maximumSBOMJSONTokens = 131_072
+)
+
+var recognizedSBOMJSONKeys = [...]string{
+	"spdxVersion", "dataLicense", "SPDXID", "name", "documentNamespace", "creationInfo", "packages", "files",
+	"created", "creators", "versionInfo", "sourceInfo", "downloadLocation", "licenseConcluded", "licenseDeclared",
+	"copyrightText", "filesAnalyzed", "fileName",
+}
+
 // ValidateSBOM checks required SPDX fields, product identity, version, and sensitive local paths.
 func ValidateSBOM(path, version, workspace string) error {
 	if err := ValidateMetadata(version, strings.Repeat("0", 40)); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readBoundedSBOM(path)
 	if err != nil {
 		return err
 	}
-	if !json.Valid(data) {
-		return errors.New("SBOM is not valid JSON")
+	if err := preflightSBOMJSON(data); err != nil {
+		return errors.New("SBOM JSON structure is invalid")
 	}
 	absoluteWorkspace, err := filepath.Abs(workspace)
 	if err != nil {
@@ -781,4 +794,114 @@ func ValidateSBOM(path, version, workspace string) error {
 		return fmt.Errorf("SBOM is missing %d release binaries", len(wantFiles))
 	}
 	return nil
+}
+
+func readBoundedSBOM(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maximumSBOMBytes+1))
+	if err != nil {
+		return nil, errors.New("read SBOM")
+	}
+	if len(data) > maximumSBOMBytes {
+		return nil, errors.New("SBOM exceeds the maximum supported size")
+	}
+	return data, nil
+}
+
+type sbomJSONState struct {
+	tokens int
+}
+
+func preflightSBOMJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	state := sbomJSONState{}
+	if err := scanSBOMJSONValue(decoder, &state, 0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("trailing JSON value")
+	}
+	return nil
+}
+
+func scanSBOMJSONValue(decoder *json.Decoder, state *sbomJSONState, depth int) error {
+	token, err := nextSBOMJSONToken(decoder, state)
+	if err != nil {
+		return err
+	}
+	delimiter, container := token.(json.Delim)
+	if !container {
+		return nil
+	}
+	depth++
+	if depth > maximumSBOMJSONDepth {
+		return errors.New("JSON depth exceeds limit")
+	}
+	switch delimiter {
+	case '{':
+		keys := map[string]struct{}{}
+		for decoder.More() {
+			keyToken, err := nextSBOMJSONToken(decoder, state)
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("JSON object key is not a string")
+			}
+			if _, duplicate := keys[key]; duplicate {
+				return errors.New("duplicate JSON object key")
+			}
+			keys[key] = struct{}{}
+			if nonExactRecognizedSBOMJSONKey(key) {
+				return errors.New("non-exact recognized JSON key")
+			}
+			if err := scanSBOMJSONValue(decoder, state, depth); err != nil {
+				return err
+			}
+		}
+		closing, err := nextSBOMJSONToken(decoder, state)
+		if err != nil || closing != json.Delim('}') {
+			return errors.New("invalid JSON object closing token")
+		}
+	case '[':
+		for decoder.More() {
+			if err := scanSBOMJSONValue(decoder, state, depth); err != nil {
+				return err
+			}
+		}
+		closing, err := nextSBOMJSONToken(decoder, state)
+		if err != nil || closing != json.Delim(']') {
+			return errors.New("invalid JSON array closing token")
+		}
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
+	return nil
+}
+
+func nextSBOMJSONToken(decoder *json.Decoder, state *sbomJSONState) (json.Token, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	state.tokens++
+	if state.tokens > maximumSBOMJSONTokens {
+		return nil, errors.New("JSON token count exceeds limit")
+	}
+	return token, nil
+}
+
+func nonExactRecognizedSBOMJSONKey(key string) bool {
+	for _, recognized := range recognizedSBOMJSONKeys {
+		if key != recognized && strings.EqualFold(key, recognized) {
+			return true
+		}
+	}
+	return false
 }

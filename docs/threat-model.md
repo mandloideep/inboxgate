@@ -447,6 +447,8 @@ A compromised Action or SBOM tool could alter artifacts or disclose runner data.
 Every executable Action is pinned to a full commit, tools use exact versions, checkout credentials are not persisted, and the release supply-chain decision records licenses and dependency impact.
 Repository-owned code validates binary build information, archive metadata, the SPDX document with one application root and one complete reviewed module and standard-library inventory at each exact canonical binary location, the checksum set, and the exact asset set.
 Repeated SBOM module rows are accepted only across distinct expected binary locations, never as a same-location duplicate, path alias, escape, inconsistent version, or unreviewed scope.
+The SPDX JSON boundary is limited to 4 MiB, 64 container levels, and 131,072 tokens before typed decoding.
+It rejects duplicate keys at every object depth and non-exact case aliases of recognized security fields so `encoding/json` overwrite and case-fold behavior cannot change the validated document.
 
 An external tool installer could execute unreviewed shell logic before the intended executable is authenticated.
 InboxGate does not use the rejected Syft download Action or an ambient installer.

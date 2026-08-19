@@ -301,6 +301,7 @@ Validation must include focused repeated handler tests, isolated compatibility-f
 It must also include `go mod tidy -diff`, `go mod verify`, exact `go list -m all`, exact `go mod graph`, checksum and notice review, `make vuln`, `make check`, SBOM inclusion, and all six CGO-disabled release-target builds.
 The checksum-verified Syft v1.51.0 Linux amd64 binary emits one root row, six main-module rows, six rows for each reviewed linked module, six `stdlib go1.26.6` rows, and two Windows binary-classifier rows when it scans the complete release directory.
 SBOM validation must require one complete consistent reviewed inventory at each exact canonical binary location and reject missing, additional, aliased, escaped, same-location duplicate, or version-inconsistent rows.
+Before typed SPDX decoding, the validator must enforce fixed byte, container-depth, and token-count bounds, reject duplicate JSON keys at every object depth, and reject non-exact case aliases of recognized security fields.
 The final review must inventory runtime imports and methods, dependency and license impact, secret access, network endpoints, capabilities, Gmail and storage authority, workflow and release changes, deletions, em dash characters, and coauthors.
 
 ## Evidence sources
