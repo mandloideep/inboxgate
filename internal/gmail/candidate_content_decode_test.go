@@ -125,6 +125,27 @@ func TestDecodeCandidateHTMLRejectsNonvoidSelfClosingAndAmbiguousHiddenCSS(t *te
 	}
 }
 
+func TestCandidateHTMLDiscardHiddenAndVoidVocabularies(t *testing.T) {
+	for _, tag := range []string{"script", "style", "template", "noscript", "svg", "math", "head", "form", "object", "iframe", "canvas"} {
+		html := "<p>before</p><" + tag + ">secret</" + tag + "><p>after</p>"
+		text, err := candidateHTMLToText(html)
+		if err != nil || strings.TrimSpace(text) != "before\nafter" {
+			t.Fatalf("discard tag %q: text=%q err=%v", tag, text, err)
+		}
+	}
+	for _, attribute := range []string{`hidden`, `aria-hidden="true"`, `style="display:none!important"`, `style="visibility:collapse"`, `style="opacity:0%"`} {
+		html := "<p>before</p><div " + attribute + ">secret</div><p>after</p>"
+		text, err := candidateHTMLToText(html)
+		if err != nil || strings.TrimSpace(text) != "before\nafter" {
+			t.Fatalf("hidden attribute %q: text=%q err=%v", attribute, text, err)
+		}
+	}
+	voids := "<area/><base/><br/><col/><embed/><hr/><img/><input/><link/><meta/><param/><source/><track/><wbr/>"
+	if text, err := candidateHTMLToText("before" + voids + "after"); err != nil || text != "before\nafter" {
+		t.Fatalf("void vocabulary: text=%q err=%v", text, err)
+	}
+}
+
 func TestDecodeCandidateCharsetsAndUTF8Truncation(t *testing.T) {
 	tests := []struct {
 		charset string
@@ -609,6 +630,21 @@ func TestCandidateContentExtractorCancellationAndDiagnosticSuppression(t *testin
 		_, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024)
 		if !errors.Is(err, ErrCandidateContentUnavailable) || strings.Contains(err.Error(), "synthetic-private") {
 			t.Fatalf("diagnostic crossed boundary: %v", err)
+		}
+	})
+	t.Run("raw storage diagnostic", func(t *testing.T) {
+		fixture := newDiscoveryFixture(t, 1)
+		message, _ := seedCandidateMessage(t, fixture, true)
+		fixture.store.failCandidateCommit = errors.New("synthetic-private-storage-diagnostic")
+		extractor := candidateExtractorForTest(t, fixture, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path == "/token" {
+				return jsonResponse(http.StatusOK, refreshSuccessJSON()), nil
+			}
+			return jsonResponse(http.StatusOK, string(candidateDocument(message.GmailMessageID(), message.GmailThreadID(), textPart("text/plain", "utf-8", []byte("visible"))))), nil
+		}), fixture.sleep)
+		_, err := extractor.Extract(context.Background(), fixture.accountID, message.GmailMessageID(), 1024)
+		if !errors.Is(err, ErrCandidateContentRecoveryRequired) || strings.Contains(err.Error(), "synthetic-private") || fixture.store.candidateCommitCount != 1 {
+			t.Fatalf("diagnostic crossed boundary: %v writes=%d", err, fixture.store.candidateCommitCount)
 		}
 	})
 }
