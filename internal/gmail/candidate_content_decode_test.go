@@ -66,7 +66,9 @@ func TestDecodeCandidateContentDispositionExcludesAttachmentsAndDescendants(t *t
 	plainAttachment := `{"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=utf-8"},{"name":"Content-Disposition","value":"attachment"}],"filename":"","body":{"size":15,"data":"YXR0YWNoZWQgc2VjcmV0"}}`
 	visible := textPart("text/html", "utf-8", []byte(`<p>visible</p>`))
 	container := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[{"name":"Content-Disposition","value":"attachment; filename=synthetic.eml"}],"filename":"","body":{"size":0},"parts":[%s]}`, textPart("text/plain", "utf-8", []byte("nested secret")))
-	for _, attached := range []string{plainAttachment, container} {
+	inlineFilenameLeaf := `{"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=utf-8"},{"name":"Content-Disposition","value":"inline; filename=synthetic.txt"}],"filename":"","body":{"size":15,"data":"YXR0YWNoZWQgc2VjcmV0"}}`
+	inlineFilenameContainer := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[{"name":"Content-Disposition","value":"inline; filename=synthetic.eml"}],"filename":"","body":{"size":0},"parts":[%s]}`, textPart("text/plain", "utf-8", []byte("nested secret")))
+	for _, attached := range []string{plainAttachment, container, inlineFilenameLeaf, inlineFilenameContainer} {
 		payload := fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[],"filename":"","body":{"size":0},"parts":[%s,%s]}`, attached, visible)
 		_, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", payload), "m", "t", 1024)
 		if err != nil || excerpt != "visible" {
@@ -84,6 +86,29 @@ func TestDecodeCandidateContentDispositionExcludesAttachmentsAndDescendants(t *t
 		if _, _, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", invalid), "m", "t", 1024); err == nil {
 			t.Fatal("conflicting or malformed Content-Disposition accepted")
 		}
+	}
+}
+
+func TestDecodeCandidateIgnoresUnselectedHeaderValues(t *testing.T) {
+	for _, value := range []string{strings.Repeat("x", maximumMIMEFilenameBytes+1), "synthetic\tprivate"} {
+		part := fmt.Sprintf(`{"mimeType":"text/plain","headers":[{"name":"X-Synthetic-Ignored","value":%q},{"name":"Content-Type","value":"text/plain; charset=utf-8"}],"filename":"","body":{"size":7,"data":"dmlzaWJsZQ"}}`, value)
+		_, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", part), "m", "t", 1024)
+		if err != nil || excerpt != "visible" {
+			t.Fatalf("ignored header bytes=%d excerpt=%q err=%v", len(value), excerpt, err)
+		}
+	}
+}
+
+func TestCandidateContentProjectionMatchesParserDepth(t *testing.T) {
+	if got := strings.Count(candidateContentFields, "mimeType"); got != MaximumMessagePartDepth {
+		t.Fatalf("projection MIME levels=%d want=%d", got, MaximumMessagePartDepth)
+	}
+	part := textPart("text/plain", "utf-8", []byte("visible"))
+	for depth := 1; depth < MaximumMessagePartDepth; depth++ {
+		part = fmt.Sprintf(`{"mimeType":"multipart/mixed","headers":[],"filename":"","body":{"size":0},"parts":[%s]}`, part)
+	}
+	if _, excerpt, _, err := decodeCandidateContentResponse(candidateDocument("m", "t", part), "m", "t", 1024); err != nil || excerpt != "visible" {
+		t.Fatalf("root plus 31 child levels rejected: excerpt=%q err=%v", excerpt, err)
 	}
 }
 
