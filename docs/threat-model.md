@@ -78,6 +78,7 @@ Operators are warned to review capability output before sharing it publicly.
 The process-health runtime introduces the first inbound network listener and operational log stream.
 The listener always registers exact liveness and process-readiness paths with fixed bounded JSON documents.
 It conditionally registers only the authenticated MCP capability route described below and has no Gmail, OAuth, database, scheduler, provider, mutation, operator, URL-fetching, SQL, shell, or static-content route.
+Configuration validation and runtime construction reserve both health paths against MCP overlap whether MCP is enabled or disabled.
 Unknown paths, unsupported methods, and request bodies receive fixed errors that never echo request data.
 Percent-encoded alternate spellings of a health path remain unmatched and are logged only as the bounded `unmatched` operation.
 Configured timeouts, a compiled 16 KiB header limit, a compiled limit of 128 concurrently accepted connections, and the configured request-body bound constrain the standard-library server.
@@ -93,7 +94,7 @@ The implementation omits raw errors and suppresses the standard-library server e
 It never logs raw paths, queries, hosts, remote addresses, headers, bodies, user agents, configuration paths, listener addresses, YAML-named environment variables, secret presence, account identifiers, provider data, or message data.
 
 Readiness becomes false before graceful shutdown begins.
-The first termination signal stops new connections and gives active work a compiled 10-second drain deadline.
+The first termination signal starts one compiled 10-second deadline before MCP Close and HTTP draining, and MCP cancellation and the server shutdown share it.
 A second signal cannot restart or extend that deadline, and an expired deadline forces the server closed with a bounded failure record.
 The local `doctor` command constructs the runtime without binding a socket, reading YAML-named environment values, or activating a provider.
 
@@ -123,21 +124,23 @@ The wrapper authenticates before reading or decoding a body and uses constant-ti
 Missing, malformed, duplicated, joined, padded, case-variant, whitespace-variant, and incorrect credentials receive the same fixed response.
 The token, Authorization header, environment-variable name, secret presence, length, prefix, suffix, hash, fingerprint, and decoded bytes never enter output or audit fields.
 
-Request exhaustion is bounded by the smaller of the configured body limit and 65,536 bytes, JSON depth 16, decoded node count 2,048, one object rather than a batch, 16 concurrent admitted requests, and a five-second application deadline.
+Request exhaustion is bounded by the smaller of the configured body limit and 65,536 bytes, JSON container depth 16, decoded node count 2,048, one object rather than a batch, 16 concurrent admitted requests, and a five-second application deadline.
 The seventeenth request fails immediately without an unbounded queue.
-Client cancellation and shutdown cancellation reach application work, shutdown closes active request bodies, and complete responses are buffered and rejected before commitment when they exceed 65,536 bytes.
+The application deadline, client cancellation, and shutdown cancellation close active request bodies and reach application work.
+Complete SDK and InboxGate-owned JSON-RPC responses are buffered and rejected before commitment when they exceed 65,536 bytes, including errors that contain expandable valid request IDs.
 The server's existing header, connection, timeout, and graceful-shutdown bounds remain additional controls.
 
 The repository parser independently rejects invalid UTF-8, duplicate fields, NUL aliases, case aliases, trailing values, unsupported client capabilities, extra arguments, and header-body routing differences.
 Authenticated JSON-RPC errors use fixed categories without a data field, decoder text, SDK diagnostics, request fragments, or reflected values.
-The SDK is still a supply-chain and parser risk, so the exact v1.7.0 module and full resolved graph are pinned, licensed in third-party notices, checked against published advisories, included in release build metadata and the SBOM, and covered by an accepted removal plan in ADR 0014.
+The SDK is still a supply-chain and parser risk, so the exact v1.7.0 module and full resolved graph are pinned, licensed in third-party notices, checked against published advisories, included in release build metadata and the exact SBOM runtime-module inventory, and covered by an accepted removal plan in ADR 0014.
 
 The only registered tool is `system_capabilities` with an empty closed input schema and read-only, idempotent, non-destructive, closed-world annotations.
 It adapts the typed capability registry and cannot reach Gmail, OAuth, Turso, storage, review, backfill, shell, SQL, URL fetching, Vikunja, provider connectivity, or arbitrary JSON-RPC behavior.
 Its result can reveal compiled capability names and validated secret environment-variable names, which are operational metadata and must remain authenticated and reviewed before sharing.
 It never inspects or reveals secret values or presence, account state, database state, migration state, provider state, hostname, time, or process state.
 
-Each request emits one bounded structured audit event containing only a fixed operation, method class, numeric status, bounded duration, and outcome.
+Each request emits exactly one bounded structured audit event at every valid configured log level containing only a fixed operation, method class, numeric status, bounded duration, and outcome.
+JSON-RPC semantic failures retain a failure outcome independently of their HTTP `200` transport status.
 Audit output excludes body, response, arguments, protocol metadata, client identity, capabilities, headers, Host, path, query, address, user agent, token state, secret names, and SDK errors.
 The current audit stream is not durable, so approved retention and operational collection remain a deployment prerequisite and must be revisited before sensitive mail tools are added.
 
@@ -442,7 +445,7 @@ Generated release notes are handled only as GitHub API data.
 
 A compromised Action or SBOM tool could alter artifacts or disclose runner data.
 Every executable Action is pinned to a full commit, tools use exact versions, checkout credentials are not persisted, and the release supply-chain decision records licenses and dependency impact.
-Repository-owned code validates binary build information, archive metadata, the SPDX document, the checksum set, and the exact asset set.
+Repository-owned code validates binary build information, archive metadata, the SPDX document with exactly the application and every reviewed linked runtime module and version, the checksum set, and the exact asset set.
 
 An external tool installer could execute unreviewed shell logic before the intended executable is authenticated.
 InboxGate does not use the rejected Syft download Action or an ambient installer.

@@ -74,6 +74,7 @@ sha256sum --check SHA256SUMS
 
 On macOS, use `shasum -a 256 -c SHA256SUMS` when GNU `sha256sum` is unavailable.
 The checksum file covers all six platform archives and the SPDX SBOM.
+The SPDX validator requires exactly InboxGate plus every reviewed linked runtime module at its accepted version, and rejects omissions, substitutions, duplicates, and unexpected runtime modules.
 The build-provenance attestation covers all eight published assets.
 A separate SBOM attestation associates the SPDX document with all six archives.
 

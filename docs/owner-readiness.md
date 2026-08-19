@@ -40,6 +40,7 @@ The candidate-content slice uses synthetic message bodies and HTML, fake provide
 It does not access live Gmail, fetch attachments, activate remote Turso, expose content through MCP, or enforce `retention.excerpt_days` deletion.
 No owner should create, inject, reveal, or test a Google, Gmail, Turso, encryption, private-endpoint, or production value for these slices.
 The authenticated MCP implementation uses only generated synthetic in-memory tokens and literal loopback tests, so it also requires no owner secret for implementation, review, merge, or validation.
+Its reserved health paths, body-read cancellation, one-deadline shutdown, complete response cap, audit semantics, exact SBOM inventory, and required bounded fuzz gate add no new owner input.
 The model does not execute a Turso Database engine and does not prove the 514-parameter statement, strict tables, trigger rollback, writer serialization, or concurrent finalization.
 A supplementary credential-free local SQLite execution proves commitment mismatch rollback with an unchanged cursor, no canonical insert, and retained sealed recovery state, but it does not replace Turso Database engine evidence.
 The implemented one-shot enrollment flow remains restricted to fake OAuth, OpenID Connect, Gmail, and credential-free loopback storage until explicit owner approval and database runtime activation.

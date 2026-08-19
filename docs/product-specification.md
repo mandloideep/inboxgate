@@ -375,7 +375,7 @@ Sender allow and block lists each contain at most 256 unique lowercase ASCII DNS
 Subject lists each contain at most 256 case-insensitively unique trimmed literal terms of 1 through 128 UTF-8 bytes without controls.
 Review page sizes are 1 through 100 with the default not above the maximum.
 Metadata retention is 0 or 1 through 36,500 days, excerpt and audit retention are 1 through 3,650 days, and nonzero metadata retention cannot be shorter than excerpt retention.
-The MCP path is a clean absolute ASCII HTTP path of 2 through 128 bytes using unescaped RFC 3986 `pchar` characters and `/` separators, and cannot be `/`, contain whitespace, controls, backslashes, repeated slashes, dot segments, percent escapes, a query, or a fragment.
+The MCP path is a clean absolute ASCII HTTP path of 2 through 128 bytes using unescaped RFC 3986 `pchar` characters and `/` separators, and cannot be `/`, `/health/live`, `/health/ready`, contain whitespace, controls, backslashes, repeated slashes, dot segments, percent escapes, a query, or a fragment.
 Logging level is `debug`, `info`, `warn`, or `error`, and logging format is `json` or `text`.
 Every field ending in `_env` stores only a name matching `[A-Z_][A-Z0-9_]{0,127}`.
 The top-level `capabilities` mapping accepts only `gmail.read`, `gmail.current_sync`, `gmail.backfill`, `mail.review_read`, and `mail.review_write`.
@@ -834,8 +834,10 @@ Do not reuse the Gmail OAuth token, Turso token, Tailscale auth key, or Vikunja 
 The currently implemented transport supports only protocol revision `2026-07-28` over stateless JSON-response-only Streamable HTTP.
 It registers the exact configured path only when `mcp.enabled` is true and resolves the selected token before bind.
 It accepts POST only and rejects sessions, SSE, resumability, initialization, legacy revisions, browser Origin and fetch traffic, non-exact JSON media, mismatched routing headers, malformed authorities, oversized bodies, deep or high-node JSON, batches, duplicate fields, and broader methods before application dispatch.
-InboxGate admits at most 16 concurrent MCP requests, applies a five-second application deadline, propagates cancellation, and buffers complete responses under 65,536 bytes.
-Every MCP response uses fixed no-cache and browser-hardening headers, and audit output contains only fixed operation, method class, status, bounded duration, and outcome fields.
+InboxGate admits at most 16 concurrent MCP requests, applies a five-second application deadline to body reads and application work, propagates cancellation by closing active bodies, and buffers complete responses under 65,536 bytes.
+Every MCP success and error is bounded before HTTP commitment, including a response containing an expandable valid request ID.
+Every MCP request emits exactly one audit event at every valid configured log level using only fixed operation, method class, status, bounded duration, and outcome fields.
+JSON-RPC semantic errors are audit failures even when the HTTP status is `200`.
 The official Go SDK v1.7.0 is a protocol decoder and dispatcher inside these InboxGate-owned controls and does not define authorization policy.
 
 The first tool set is intentionally small.
@@ -1107,11 +1109,12 @@ The runtime exposes exactly `GET` and `HEAD` on `/health/live` and `/health/read
 Percent-encoded alternate path spellings are unmatched even when URL decoding would produce a health path.
 Health uses fixed bounded JSON responses, a compiled 16 KiB header limit, a compiled limit of 128 concurrently accepted connections, the configured timeouts and request-body limit, and no provider, storage, OAuth, scheduler, or mutation route.
 When MCP is enabled, only the exact authenticated capability route described in section 12 is added.
+Configuration and runtime construction reject either health path as `mcp.path` even while MCP is disabled.
 The listener acquires an admission permit before accepting a connection into application work and reuses that permit only after the accepted connection closes.
 Readiness reports only an active serving lifecycle after strict configuration validation, logger and server construction, and listener establishment.
 It becomes false before shutdown draining begins.
 The unauthenticated health routes disclose no configuration, address, host, account, connectivity, provider, secret, migration, scheduler, or process details and must remain on an approved private interface or private reverse-proxy path.
-The first termination signal permits active requests to drain for up to a compiled 10 seconds without allowing another signal to extend the deadline.
+The first termination signal starts one compiled 10-second deadline before MCP draining and HTTP shutdown, and no second signal or blocking MCP close can extend it.
 
 Apply least privilege to the container.
 Run as a non-root user.
