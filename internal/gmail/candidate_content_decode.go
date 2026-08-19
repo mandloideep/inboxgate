@@ -356,7 +356,11 @@ func candidateHTMLToText(input string) (string, error) {
 			}
 		} else {
 			inherited := candidateHTMLDiscarded(stack)
-			discard := inherited || candidateDiscardTag(name) || candidateHidden(attributes)
+			hidden, err := candidateHidden(attributes)
+			if err != nil {
+				return "", errCandidateContentDecode
+			}
+			discard := inherited || candidateDiscardTag(name) || hidden
 			if !discard && candidateBlockTag(name) {
 				writeBreak()
 			}
@@ -548,14 +552,22 @@ func candidateHTMLDiscarded(stack []candidateHTMLFrame) bool {
 	return len(stack) != 0 && stack[len(stack)-1].discard
 }
 
-func candidateHidden(attributes map[string]string) bool {
+func candidateHidden(attributes map[string]string) (bool, error) {
 	if _, exists := attributes["hidden"]; exists {
-		return true
+		return true, nil
 	}
-	if strings.EqualFold(strings.TrimSpace(attributes["aria-hidden"]), "true") {
-		return true
+	ariaHidden, err := decodeCandidateAttributeEntities(attributes["aria-hidden"])
+	if err != nil {
+		return false, err
 	}
-	for _, declaration := range strings.Split(attributes["style"], ";") {
+	if strings.EqualFold(strings.TrimSpace(ariaHidden), "true") {
+		return true, nil
+	}
+	style, err := decodeCandidateAttributeEntities(attributes["style"])
+	if err != nil {
+		return false, err
+	}
+	for _, declaration := range strings.Split(style, ";") {
 		key, value, found := strings.Cut(declaration, ":")
 		if !found {
 			continue
@@ -563,10 +575,21 @@ func candidateHidden(attributes map[string]string) bool {
 		key = strings.ToLower(strings.TrimSpace(key))
 		value = strings.ToLower(strings.Join(strings.Fields(value), ""))
 		if key == "display" && value == "none" || key == "visibility" && value == "hidden" || key == "opacity" && value == "0" {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+func decodeCandidateAttributeEntities(value string) (string, error) {
+	if !strings.Contains(value, "&") {
+		return value, nil
+	}
+	decoded, err := decodeCandidateEntities(value)
+	if err != nil {
+		return "", errCandidateContentDecode
+	}
+	return decoded, nil
 }
 
 func candidateDiscardTag(name string) bool {
