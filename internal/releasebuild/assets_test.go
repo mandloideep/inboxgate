@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -58,28 +59,7 @@ func validSBOMJSON(t *testing.T) []byte {
 			"created":  "2026-08-16T00:00:00Z",
 			"creators": []string{"Tool: syft-1.51.0"},
 		},
-		"packages": []map[string]any{
-			{
-				"name":             "InboxGate",
-				"SPDXID":           "SPDXRef-Package-InboxGate",
-				"versionInfo":      "v0.1.0",
-				"downloadLocation": "NOASSERTION",
-				"filesAnalyzed":    false,
-				"licenseConcluded": "NOASSERTION",
-				"licenseDeclared":  "NOASSERTION",
-				"copyrightText":    "NOASSERTION",
-			},
-			{
-				"name":             mcpModulePath,
-				"SPDXID":           "SPDXRef-Package-go-sdk",
-				"versionInfo":      mcpModuleVersion,
-				"downloadLocation": "NOASSERTION",
-				"filesAnalyzed":    false,
-				"licenseConcluded": "Apache-2.0",
-				"licenseDeclared":  "Apache-2.0",
-				"copyrightText":    "NOASSERTION",
-			},
-		},
+		"packages": validSBOMPackages(),
 		"files": []map[string]any{
 			{"fileName": "inboxgate_0.1.0_darwin_amd64/inboxgate"},
 			{"fileName": "inboxgate_0.1.0_darwin_arm64/inboxgate"},
@@ -94,4 +74,38 @@ func validSBOMJSON(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func validSBOMPackages() []map[string]any {
+	packages := []struct {
+		name    string
+		version string
+	}{
+		{name: "InboxGate", version: "v0.1.0"},
+		{name: "github.com/google/jsonschema-go", version: "v0.4.3"},
+		{name: "github.com/modelcontextprotocol/go-sdk", version: "v1.7.0"},
+		{name: "github.com/segmentio/asm", version: "v1.1.3"},
+		{name: "github.com/segmentio/encoding", version: "v0.5.4"},
+		{name: "github.com/yosida95/uritemplate/v3", version: "v3.0.2"},
+		{name: "go.yaml.in/yaml/v3", version: "v3.0.5"},
+		{name: "golang.org/x/oauth2", version: "v0.36.0"},
+		{name: "golang.org/x/sync", version: "v0.20.0"},
+		{name: "golang.org/x/sys", version: "v0.41.0"},
+		{name: "golang.org/x/time", version: "v0.15.0"},
+		{name: "turso.tech/database/tursogo-serverless", version: "v0.0.0-20260817122138-24adc316cdc4"},
+	}
+	result := make([]map[string]any, 0, len(packages))
+	for index, pkg := range packages {
+		result = append(result, map[string]any{
+			"name":             pkg.name,
+			"SPDXID":           "SPDXRef-Package-" + strings.NewReplacer("/", "-", ".", "-").Replace(pkg.name) + "-" + strconv.Itoa(index),
+			"versionInfo":      pkg.version,
+			"downloadLocation": "NOASSERTION",
+			"filesAnalyzed":    false,
+			"licenseConcluded": "NOASSERTION",
+			"licenseDeclared":  "NOASSERTION",
+			"copyrightText":    "NOASSERTION",
+		})
+	}
+	return result
 }

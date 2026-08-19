@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -634,26 +635,46 @@ func TestCompatibilityFlagsCannotBroadenWrapper(t *testing.T) {
 func assertCompatibilityBoundary(t *testing.T) {
 	t.Helper()
 	handler := newContractHandler(t, config.Defaults())
-	checks := []*http.Request{
-		validRequest(t, "tools/list", requestBody("tools/list")),
-		validRequest(t, "tools/list", requestBody("tools/list")),
-		validRequest(t, "tools/list", requestBody("tools/list")),
-		validRequest(t, "initialize", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`),
-		validRequest(t, "tools/call", strings.Replace(requestBody("tools/call"), `"system_capabilities"`, `"broader_tool"`, 1)),
-		validRequest(t, "tools/list", strings.Replace(requestBody("tools/list"), protocolVersion, "2025-11-25", 1)),
-		validRequest(t, "tools/list", strings.Repeat(" ", MaximumRequestBytes)+requestBody("tools/list")),
+	type check struct {
+		name    string
+		request *http.Request
+		status  int
+		body    string
+		code    int
 	}
-	checks[0].Method = http.MethodDelete
-	checks[0].Header.Set("Mcp-Session-Id", "synthetic-session")
-	checks[1].Header.Set("Content-Type", "text/plain")
-	checks[2].Header.Set("Origin", "https://private.invalid")
-	for index, request := range checks {
-		response := perform(t, handler, request)
-		if response.Code == http.StatusOK && !strings.Contains(response.Body.String(), `"error"`) {
-			t.Errorf("compatibility check %d broadened wrapper: %d %q", index, response.Code, response.Body.String())
+	deleteRequest := validRequest(t, "tools/list", requestBody("tools/list"))
+	deleteRequest.Method = http.MethodDelete
+	textRequest := validRequest(t, "tools/list", requestBody("tools/list"))
+	textRequest.Header.Set("Content-Type", "text/plain")
+	originRequest := validRequest(t, "tools/list", requestBody("tools/list"))
+	originRequest.Header.Set("Origin", "https://private.invalid")
+	broaderTool := validRequest(t, "tools/call", strings.Replace(requestBody("tools/call"), `"system_capabilities"`, `"broader_tool"`, 1))
+	broaderTool.Header.Set("Mcp-Name", "broader_tool")
+	sessionRequest := validRequest(t, "tools/list", requestBody("tools/list"))
+	sessionRequest.Header.Set("Mcp-Session-Id", "synthetic-session")
+	checks := []check{
+		{name: "delete", request: deleteRequest, status: http.StatusMethodNotAllowed, body: "method_not_allowed\n"},
+		{name: "text media", request: textRequest, status: http.StatusUnsupportedMediaType, body: "unsupported_media_type\n"},
+		{name: "origin", request: originRequest, status: http.StatusForbidden, body: "forbidden\n"},
+		{name: "legacy revision", request: validRequest(t, "tools/list", strings.Replace(requestBody("tools/list"), protocolVersion, "2025-11-25", 1)), status: http.StatusOK, code: -32602},
+		{name: "oversized", request: validRequest(t, "tools/list", strings.Repeat(" ", 65_536)+requestBody("tools/list")), status: http.StatusRequestEntityTooLarge, body: "request_too_large\n"},
+		{name: "initialize", request: validRequest(t, "initialize", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`), status: http.StatusOK, code: -32601},
+		{name: "broader tool", request: broaderTool, status: http.StatusOK, code: -32601},
+		{name: "session", request: sessionRequest, status: http.StatusBadRequest, body: "invalid_mcp_request\n"},
+	}
+	for _, check := range checks {
+		response := perform(t, handler, check.request)
+		if response.Code != check.status {
+			t.Errorf("compatibility %s status = %d, want %d", check.name, response.Code, check.status)
+		}
+		if check.body != "" && response.Body.String() != check.body {
+			t.Errorf("compatibility %s body = %q, want %q", check.name, response.Body.String(), check.body)
+		}
+		if check.code != 0 && !strings.Contains(response.Body.String(), `"code":`+strconv.Itoa(check.code)) {
+			t.Errorf("compatibility %s body = %q, want code %d", check.name, response.Body.String(), check.code)
 		}
 		if response.Header().Get("Mcp-Session-Id") != "" || response.Header().Get("Content-Type") == "text/event-stream" {
-			t.Errorf("compatibility check %d enabled sessions or SSE", index)
+			t.Errorf("compatibility %s enabled sessions or SSE", check.name)
 		}
 	}
 }
