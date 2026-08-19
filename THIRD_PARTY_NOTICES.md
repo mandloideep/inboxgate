@@ -18,9 +18,89 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-## Apache-licensed files
+## Model Context Protocol Go SDK
 
-The following notice applies to the remaining files in the upstream module.
+InboxGate includes `github.com/modelcontextprotocol/go-sdk` v1.7.0.
+The upstream project is undergoing a transition from MIT to Apache License 2.0.
+New code and specification contributions are licensed under Apache License 2.0, contributions whose authors have not consented to relicensing remain under MIT, and non-specification documentation is licensed under Creative Commons Attribution 4.0.
+The complete transition notice and applicable license texts are available at <https://github.com/modelcontextprotocol/go-sdk/blob/v1.7.0/LICENSE>.
+
+Copyright (c) 2024-2025 Model Context Protocol a Series of LF Projects, LLC.
+
+Apache-2.0 and retained MIT software are provided without warranties or conditions of any kind.
+CC-BY-4.0 documentation attribution is retained through this notice and the upstream project link.
+
+## Go JSON Web Token
+
+InboxGate includes `github.com/golang-jwt/jwt/v5` v5.3.1 under the MIT License.
+
+Copyright (c) 2012 Dave Grijalva
+
+Copyright (c) 2021 golang-jwt maintainers
+
+Permission is granted to use, copy, modify, merge, publish, distribute, sublicense, and sell copies when the copyright and permission notice are retained.
+The software is provided without warranty, and its authors are not liable for damages arising from its use.
+
+## Go comparison library
+
+InboxGate includes `github.com/google/go-cmp` v0.7.0 under the BSD 3-Clause License.
+
+Copyright (c) 2017 The Go Authors.
+
+Redistribution in source and binary forms is permitted when the copyright notice, conditions, and disclaimer are retained.
+Neither Google LLC nor contributor names may be used to endorse derived products without specific prior permission.
+The software is provided without warranties, and its authors are not liable for damages arising from its use.
+
+## JSON Schema Go
+
+InboxGate includes `github.com/google/jsonschema-go` v0.4.3 under the MIT License.
+
+Copyright (c) 2025 JSON Schema Go Project Authors
+
+Permission is granted to use, copy, modify, merge, publish, distribute, sublicense, and sell copies when the copyright and permission notice are retained.
+The software is provided without warranty, and its authors are not liable for damages arising from its use.
+
+## Segment assembly helpers
+
+InboxGate includes `github.com/segmentio/asm` v1.1.3 under the MIT License.
+
+Copyright (c) 2021 Segment
+
+Permission is granted to use, copy, modify, merge, publish, distribute, sublicense, and sell copies when the copyright and permission notice are retained.
+The software is provided without warranty, and its authors are not liable for damages arising from its use.
+
+## Segment encoding library
+
+InboxGate includes `github.com/segmentio/encoding` v0.5.4 under the MIT License.
+
+Copyright (c) 2019 Segment.io, Inc.
+
+Permission is granted to use, copy, modify, merge, publish, distribute, sublicense, and sell copies when the copyright and permission notice are retained.
+The software is provided without warranty, and its authors are not liable for damages arising from its use.
+
+## URI Template v3
+
+InboxGate includes `github.com/yosida95/uritemplate/v3` v3.0.2 under the BSD 3-Clause License.
+
+Copyright (c) 2016, Kohei YOSHIDA <https://yosida95.com/>.
+
+Redistribution in source and binary forms is permitted when the copyright notice, conditions, and disclaimer are retained.
+Neither the copyright holder nor contributor names may be used to endorse derived products without specific prior permission.
+The software is provided without warranties, and its authors are not liable for damages arising from its use.
+
+## Go synchronization, system, time, and tools modules
+
+InboxGate includes `golang.org/x/sync` v0.20.0, `golang.org/x/sys` v0.41.0, `golang.org/x/time` v0.15.0, and `golang.org/x/tools` v0.42.0 under the BSD 3-Clause License.
+
+Copyright 2009 The Go Authors.
+
+Redistribution in source and binary forms is permitted when the copyright notice, conditions, and disclaimer are retained.
+Neither Google LLC nor contributor names may be used to endorse derived products without specific prior permission.
+The software is provided without warranties, and its authors are not liable for damages arising from its use.
+
+## YAML Apache-licensed files
+
+The following notice applies to the remaining files in `go.yaml.in/yaml/v3` v3.0.5.
 
 Copyright (c) 2011-2019 Canonical Ltd
 
