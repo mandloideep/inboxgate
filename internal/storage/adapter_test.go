@@ -83,6 +83,12 @@ func (h *fakeHandle) GetGateDecision(context.Context, storage.AccountID, string)
 func (h *fakeHandle) CommitGateDecision(context.Context, storage.GateDecisionCommit) error {
 	return nil
 }
+func (h *fakeHandle) GetCandidateContent(context.Context, storage.AccountID, string, int) (storage.CandidateContentState, error) {
+	return storage.CandidateContentState{}, nil
+}
+func (h *fakeHandle) CommitCandidateContent(context.Context, storage.CandidateContentCommit) error {
+	return nil
+}
 func (h *fakeHandle) Close() error { return nil }
 
 var _ storage.Adapter = (*fakeAdapter)(nil)

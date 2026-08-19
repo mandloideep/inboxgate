@@ -6,7 +6,7 @@ Complete a provider step only after the corresponding implementation issue is ac
 
 ## Current blocker
 
-No owner credential or provider setup is required to implement, review, merge, or synthetically validate Gmail OAuth enrollment, current discovery, or deterministic persisted gating.
+No owner credential or provider setup is required to implement, review, merge, or synthetically validate Gmail OAuth enrollment, current discovery, deterministic persisted gating, or bounded candidate-content extraction.
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts the current official `turso.tech/database/tursogo-serverless` remote driver behind a narrow inert adapter.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner restricted to credential-free literal-loopback tests.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) adds minimum Gmail identity and synchronization-cursor persistence under the same credential-free literal-loopback restriction.
@@ -15,8 +15,9 @@ No owner credential or provider setup is required to implement, review, merge, o
 [ADR 0010](adr/0010-atomic-current-discovery-staging.md) adds bounded atomic current-discovery staging and canonical metadata persistence under the same restriction.
 [ADR 0011](adr/0011-bounded-gmail-current-discovery.md) adds one bounded internal Gmail current-discovery invocation against synthetic OAuth and Gmail providers and fake or credential-free literal-loopback storage.
 [ADR 0012](adr/0012-deterministic-persisted-gate.md) adds one pure deterministic classifier, a strict append-only gate-decision table, typed fake and Turso persistence, and an inert evaluator under the same credential-free restriction.
+[ADR 0013](adr/0013-bounded-candidate-content.md) adds one bounded read-only Gmail content projection, fail-closed MIME, charset, and HTML processing, strict append-only candidate-content persistence, and an inert extractor under the same credential-free restriction.
 The adapter is connected only to one-shot account enrollment and lifecycle commands after a credential-free literal-loopback endpoint check.
-The current-discovery use case and gate evaluator remain inert and have no command, scheduler, service, health, capability, HTTP, or MCP caller.
+The current-discovery use case, gate evaluator, and candidate-content extractor remain inert and have no command, scheduler, service, health, capability, HTTP, or MCP caller.
 It remains disconnected from service startup, health, configuration inspection, capabilities, doctor, executable synchronization, MCP, remote database endpoints, and production credentials.
 
 The owner accepts five unresolved driver risks for the exact selected version.
@@ -34,6 +35,8 @@ The atomic current-discovery slice uses synthetic untrusted metadata and a crede
 The bounded Gmail discovery slice uses synthetic refresh material, synthetic account and message data, fixed loopback provider transports, and fake or credential-free literal-loopback storage and requires no owner action.
 It performs one synthetic access-token refresh, at most ten bounded history pages, body-excluding projected message metadata reads, and one atomic storage commit.
 The deterministic gate slice uses synthetic canonical messages, compiled policy values, fake storage, and credential-free literal-loopback storage and requires no owner action.
+The candidate-content slice uses synthetic message bodies and HTML, fake provider transports, fake storage, and credential-free literal-loopback exact-driver storage and requires no owner action.
+It does not access live Gmail, fetch attachments, activate remote Turso, expose content through MCP, or enforce `retention.excerpt_days` deletion.
 No owner should create, inject, reveal, or test a Google, Gmail, Turso, encryption, private-endpoint, or production value for these slices.
 The model does not execute a Turso Database engine and does not prove the 514-parameter statement, strict tables, trigger rollback, writer serialization, or concurrent finalization.
 A supplementary credential-free local SQLite execution proves commitment mismatch rollback with an unchanged cursor, no canonical insert, and retained sealed recovery state, but it does not replace Turso Database engine evidence.
@@ -65,7 +68,7 @@ Use these status meanings throughout this runbook.
 
 | Area | Status | What the owner should do now | What unblocks it |
 | --- | --- | --- | --- |
-| Turso architecture | `Resolved for synthetic migrations and inert typed persistence` | Review ADR 0004 through ADR 0012 and the known-risk register | A later superseding decision only if the driver or architecture changes |
+| Turso architecture | `Resolved for synthetic migrations and inert typed persistence` | Review ADR 0004 through ADR 0013 and the known-risk register | A later superseding decision only if the driver or architecture changes |
 | Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | An approved production-readiness issue with explicit owner authorization |
 | Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | Explicit owner approval and approved live storage activation |
 | Encryption key | `Future owner action` | Do not generate or provide a key yet | Runtime secret resolution, an approved credential rotation workflow, and explicit owner approval |
@@ -83,6 +86,8 @@ They are listed so the owner can recognize the safe next action when the relevan
 | Accepted Turso driver risks | Before any runtime activation, credential use, migration, or new query path | Review `TURSO-001` through `TURSO-005`, keep the use within the explicit acceptance, and require a new decision if the surface broadens |
 | Current-discovery engine semantics unproven | Before remote migration `0005` or live email metadata storage | Require pinned credential-free engine evidence or approve a redacted owner-run check for the exact 514-parameter statement, ordered `group_concat` witness reconstruction, strict tables, trigger rollback, writer serialization, and competing finalization without sharing database or message data |
 | Gate-decision engine semantics unproven | Before remote migration `0006` or live gate-decision storage | Require pinned credential-free engine evidence or approve a redacted owner-run check for the strict table, restrictive foreign key, fixed compare-and-swap statement, competing writers, and separate-connection visibility without sharing database or message data |
+| Candidate-content engine semantics unproven | Before remote migration `0007` or live excerpt storage | Require pinned credential-free engine evidence or approve a redacted owner-run check for the strict table, restrictive foreign key, lifecycle and gate joins, exact compare-and-swap statement, competing writers, and separate-connection visibility without sharing database, account, or message data |
+| Excerpt retention is policy only | Before executable extraction or release readiness claims retention enforcement | Approve a separate bounded deletion and recovery issue, then require synthetic expiry, interruption, restart, and audit evidence before activation |
 | Stale Gmail history cursor | Before executable synchronization or release | Require a later approved slice to persist bounded stale status and perform restart-safe full reconciliation without silently resetting the cursor or starting an unlimited backfill |
 | Google testing-mode refresh-token expiration | During OAuth enrollment testing for an external app that remains in testing mode | Review Google's current testing-mode policy and plan reauthorization or approved publication without sharing tokens or user identities |
 | Google Workspace administrator restrictions | Before authorizing a managed Workspace account | Ask the Workspace administrator to review the exact read-only scope and app policy through Google controls |

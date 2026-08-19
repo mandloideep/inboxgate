@@ -195,6 +195,14 @@ Durations use Go duration syntax and must also satisfy the documented field boun
 - Logging level and format use fixed enumerations.
 - Policy booleans are parsed only as policy in this slice and do not activate MCP, Gmail, database, review, or task behavior.
 - The `capabilities` mapping accepts only the five false-by-default gates documented above.
+
+The inert candidate-content extractor accepts the existing validated `gmail.body_excerpt_bytes` value only as its final UTF-8 excerpt byte limit.
+The accepted range is 1,024 through 65,536 bytes, and the exact limit is part of durable current-content identity.
+Changing the configured limit makes a prior excerpt stale and requires a later explicit extraction invocation rather than silent reuse.
+No command, scheduler, service, health route, capability, or MCP tool invokes that extractor in the current binary.
+
+The validated `retention.excerpt_days` value remains policy only.
+No current runtime schedules or performs excerpt deletion, and operators must not claim retention enforcement from configuration validation alone.
 - A true value is rejected until the corresponding binary behavior is implemented.
 
 See [product specification section 7](product-specification.md#7-configuration-model) for the complete schema defaults and validation contract.

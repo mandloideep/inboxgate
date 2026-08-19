@@ -21,6 +21,7 @@ type Store struct {
 	records     map[string]messageNaturalKey
 	attempts    map[storage.AccountID]*currentDiscoveryAttempt
 	decisions   map[string]storage.GateDecision
+	contents    map[string]mail.CandidateContent
 }
 
 type messageNaturalKey struct {
@@ -45,6 +46,7 @@ func New() *Store {
 		records:     make(map[string]messageNaturalKey),
 		attempts:    make(map[storage.AccountID]*currentDiscoveryAttempt),
 		decisions:   make(map[string]storage.GateDecision),
+		contents:    make(map[string]mail.CandidateContent),
 	}
 }
 
@@ -54,7 +56,7 @@ func (s *Store) Migrate(ctx context.Context) (storage.MigrationResult, error) {
 	if err := ctx.Err(); err != nil {
 		return storage.MigrationResult{}, err
 	}
-	return storage.MigrationResult{Current: 6}, nil
+	return storage.MigrationResult{Current: 7}, nil
 }
 
 func (s *Store) EnsureAccount(ctx context.Context, seed storage.AccountSeed) (storage.Account, error) {
@@ -481,6 +483,96 @@ func (s *Store) CommitGateDecision(ctx context.Context, commit storage.GateDecis
 	}
 	s.decisions[message.RecordID()] = commit.Next
 	return nil
+}
+
+func (s *Store) GetCandidateContent(ctx context.Context, accountID storage.AccountID, gmailMessageID string, excerptLimit int) (storage.CandidateContentState, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.CandidateContentState{}, err
+	}
+	if parsed, err := storage.ParseAccountID(accountID.String()); err != nil || parsed != accountID || storage.ValidateGmailMessageID(gmailMessageID) != nil || excerptLimit < mail.MinimumExcerptBytes || excerptLimit > mail.MaximumExcerptBytes {
+		return storage.CandidateContentState{}, storage.ErrInvalidValue
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.accounts[accountID]; !exists {
+		return storage.CandidateContentState{}, storage.ErrAccountNotFound
+	}
+	message, exists := s.messages[accountID][gmailMessageID]
+	if !exists {
+		return storage.CandidateContentState{}, storage.ErrMessageNotFound
+	}
+	content, exists := s.contents[message.RecordID()]
+	if !exists {
+		return storage.CandidateContentState{}, storage.ErrCandidateContentNotFound
+	}
+	decoded, err := mail.DecodeCandidateContent(
+		int64(content.ExtractorVersion()), content.RecordID(), content.SourceMetadataHash(), int64(content.GateVersion()),
+		content.GateInputHash(), content.SourceKind().String(), content.Excerpt(), int64(content.ExcerptBytes()), int64(content.ExcerptLimit()),
+		boolInteger(content.Truncated()), content.ContentHash(), content.FetchedAtUnixMS(),
+	)
+	if err != nil || !decoded.Equal(content) {
+		return storage.CandidateContentState{}, storage.ErrCandidateContentRecoveryRequired
+	}
+	decision, decisionExists := s.decisions[message.RecordID()]
+	lifecycle, lifecycleExists := s.lifecycles[accountID]
+	current := lifecycleExists && lifecycle.State == storage.AccountStateActive &&
+		content.SourceMetadataHash() == message.MetadataHash() && content.ExcerptLimit() == excerptLimit &&
+		decisionExists && storage.CandidateOutcome(decision.Outcome()) && decision.SourceMetadataHash() == message.MetadataHash() &&
+		content.GateVersion() == decision.Version() && content.GateInputHash() == decision.InputHash()
+	return storage.CandidateContentState{Content: decoded, Current: current}, nil
+}
+
+func (s *Store) CommitCandidateContent(ctx context.Context, commit storage.CandidateContentCommit) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := storage.ValidateCandidateContentCommit(commit); err != nil {
+		return err
+	}
+	accountID, _ := storage.ParseAccountID(commit.Source.AccountID())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.accounts[accountID]; !exists {
+		return storage.ErrAccountNotFound
+	}
+	lifecycle, exists := s.lifecycles[accountID]
+	if !exists || lifecycle.State != storage.AccountStateActive || lifecycle.Version != commit.LifecycleVersion {
+		return storage.ErrLifecycleConflict
+	}
+	message, exists := s.messages[accountID][commit.Source.GmailMessageID()]
+	if !exists {
+		return storage.ErrMessageNotFound
+	}
+	if message.RecordID() != commit.Source.RecordID() || !message.MutableMetadataEqual(commit.Source) {
+		return storage.ErrCandidateContentStaleSource
+	}
+	decision, exists := s.decisions[message.RecordID()]
+	if !exists || !decision.Equal(commit.Gate) || !storage.CandidateOutcome(decision.Outcome()) || decision.SourceMetadataHash() != message.MetadataHash() {
+		return storage.ErrCandidateContentIneligible
+	}
+	current, exists := s.contents[message.RecordID()]
+	if exists && current.SemanticEqual(commit.Next) {
+		return nil
+	}
+	if !exists {
+		if commit.Expected != nil {
+			return storage.ErrCandidateContentConflict
+		}
+		s.contents[message.RecordID()] = commit.Next
+		return nil
+	}
+	if commit.Expected == nil || current.Revision() != *commit.Expected {
+		return storage.ErrCandidateContentConflict
+	}
+	s.contents[message.RecordID()] = commit.Next
+	return nil
+}
+
+func boolInteger(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) finalizeCurrentDiscovery(prepared storage.PreparedCurrentDiscovery) error {
