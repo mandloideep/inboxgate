@@ -90,7 +90,11 @@ func TestCandidateContentExactDriverUncertainResponseUsesSeparateProofAndNoRepla
 			if !lookupStartedOnSeparateStreamAfterMutation(server.persistenceRecords(), candidateContentCommitSQL, candidateContentLookupSQL, baton) {
 				t.Fatal("post-mutation proof did not use a separate physical stream")
 			}
-			if err := handle.CommitCandidateContent(context.Background(), commit); err != nil {
+			if err := handle.Close(); err != nil {
+				t.Fatalf("close original handle: %v", err)
+			}
+			fresh := openPersistenceContractHandle(t, server.URL)
+			if err := fresh.CommitCandidateContent(context.Background(), commit); err != nil {
 				t.Fatalf("fresh reconciliation error = %v", err)
 			}
 			wantAttempts := 2
@@ -99,6 +103,35 @@ func TestCandidateContentExactDriverUncertainResponseUsesSeparateProofAndNoRepla
 			}
 			if got := countPersistenceSQL(server.persistenceRecords(), candidateContentCommitSQL); got != wantAttempts {
 				t.Fatalf("mutation attempts across invocations = %d, want %d", got, wantAttempts)
+			}
+		})
+	}
+}
+
+func TestCandidateContentMalformedDurableRowsFailClosed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*syntheticCandidateContent)
+	}{
+		{name: "extractor version", mutate: func(value *syntheticCandidateContent) { value.extractorVersion = 2 }},
+		{name: "source kind", mutate: func(value *syntheticCandidateContent) { value.sourceKind = "raw" }},
+		{name: "excerpt bytes", mutate: func(value *syntheticCandidateContent) { value.excerptBytes++ }},
+		{name: "content hash", mutate: func(value *syntheticCandidateContent) { value.contentHash = strings.Repeat("A", 64) }},
+		{name: "timestamp", mutate: func(value *syntheticCandidateContent) { value.fetchedAt = -1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server, handle, commit := candidateContentDriverFixture(t)
+			if err := handle.CommitCandidateContent(context.Background(), commit); err != nil {
+				t.Fatal(err)
+			}
+			server.mu.Lock()
+			value := server.candidateContents[commit.Source.RecordID()]
+			test.mutate(&value)
+			server.candidateContents[commit.Source.RecordID()] = value
+			server.mu.Unlock()
+			accountID, _ := storage.ParseAccountID(commit.Source.AccountID())
+			if _, err := handle.GetCandidateContent(context.Background(), accountID, commit.Source.GmailMessageID(), commit.Next.ExcerptLimit()); !errors.Is(err, storage.ErrPersistenceInspect) {
+				t.Fatalf("malformed durable row error=%v", err)
 			}
 		})
 	}
