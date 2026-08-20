@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -306,22 +307,65 @@ func TestReviewCancellationDeadlineAndCloseReachSource(t *testing.T) {
 }
 
 func TestReviewAuditsUseOnlyFixedOperations(t *testing.T) {
-	service := &reviewInspectionStub{}
-	var audit bytes.Buffer
-	handler := reviewInspectionHandler(t, service, &audit)
-	for _, test := range []struct{ name, operation, arguments string }{
-		{listReviewCandidatesTool, "mcp.mail_list_review_candidates", `{}`},
-		{getGateReasonTool, "mcp.mail_get_gate_reason", `{"account_id":"0000000000000000000000000000000a","gmail_message_id":"message"}`},
-	} {
-		audit.Reset()
+	listAccount := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	reasonAccount := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	inputCursor := "igrc1.AUDITCURSORCANARY"
+	outputCursor := "igrc1.OUTPUTCURSORCANARY"
+	tests := []struct {
+		name, operation, arguments, wantOutcome string
+		service                                 *reviewInspectionStub
+		canaries                                []string
+	}{
+		{
+			name: listReviewCandidatesTool, operation: "mcp.mail_list_review_candidates", wantOutcome: "success",
+			arguments: `{"account_ids":["` + listAccount + `"],"urgency":"urgent","internal_date_min_unix_ms":123,"internal_date_max_unix_ms":456,"page_size":1,"cursor":"` + inputCursor + `"}`,
+			service:   &reviewInspectionStub{page: reviewinspect.CandidatePage{OutputVersion: 1, Candidates: []reviewinspect.Candidate{{AccountID: listAccount, GmailThreadID: "audit-thread-canary", GmailMessageID: "audit-list-message-canary", SenderDisplayPreview: "audit-sender-canary", SenderAddress: "audit-address@example.test", SubjectPreview: "audit-subject-canary", ContentTrust: "untrusted_email"}}, NextCursor: &outputCursor}},
+			canaries:  []string{listAccount, inputCursor, outputCursor, "audit-thread-canary", "audit-list-message-canary", "audit-sender-canary", "audit-address@example.test", "audit-subject-canary"},
+		},
+		{
+			name: getGateReasonTool, operation: "mcp.mail_get_gate_reason", wantOutcome: "success",
+			arguments: `{"account_id":"` + reasonAccount + `","gmail_message_id":"audit-reason-message-canary"}`,
+			service:   &reviewInspectionStub{reason: reviewinspect.GateReason{OutputVersion: 1, AccountID: reasonAccount, GmailThreadID: "audit-reason-thread-canary", GmailMessageID: "audit-reason-message-canary", Outcome: "ignore", ReasonCodes: []string{"excluded_label"}, SourceCurrent: true, PolicyCurrent: true}},
+			canaries:  []string{reasonAccount, "audit-reason-thread-canary", "audit-reason-message-canary", "excluded_label"},
+		},
+		{
+			name: getGateReasonTool, operation: "mcp.mail_get_gate_reason", wantOutcome: "failure",
+			arguments: `{"account_id":"` + reasonAccount + `","gmail_message_id":"audit-failure-message-canary"}`,
+			service:   &reviewInspectionStub{err: errors.New("audit-source-error-canary")},
+			canaries:  []string{reasonAccount, "audit-failure-message-canary", "audit-source-error-canary"},
+		},
+	}
+	wantKeys := []string{"duration_ms", "event", "level", "method", "msg", "operation", "outcome", "status", "time"}
+	for _, test := range tests {
+		var audit bytes.Buffer
+		handler := reviewInspectionHandler(t, test.service, &audit)
 		perform(t, handler, reviewToolRequest(t, test.name, test.arguments))
-		value := audit.String()
-		if !strings.Contains(value, `"operation":"`+test.operation+`"`) {
-			t.Errorf("audit = %s", value)
+		raw := strings.TrimSpace(audit.String())
+		fields := decodeAuditFields(t, "json", raw)
+		keys := make([]string, 0, len(fields))
+		for key := range fields {
+			keys = append(keys, key)
 		}
-		for _, forbidden := range []string{"0000000000000000000000000000000a", "message", "candidate", "cursor", "reason", "outcome", "sender", "subject", "token", "endpoint", "response"} {
-			if strings.Contains(value, forbidden) && forbidden != "candidate" {
-				t.Errorf("audit exposes %q: %s", forbidden, value)
+		slices.Sort(keys)
+		if !reflect.DeepEqual(keys, wantKeys) || fields["event"] != "mcp_request" || fields["msg"] != "mcp_request" || fields["operation"] != test.operation || fields["method"] != "POST" || fields["status"] != float64(http.StatusOK) || fields["outcome"] != test.wantOutcome || fields["level"] != "INFO" {
+			t.Fatalf("audit fields = %#v", fields)
+		}
+		duration, durationOK := fields["duration_ms"].(float64)
+		timestamp, timeOK := fields["time"].(string)
+		if !durationOK || duration < 0 || duration > 60_000 || !timeOK {
+			t.Fatalf("audit bounds = %#v", fields)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, timestamp); err != nil {
+			t.Fatalf("audit time = %q: %v", timestamp, err)
+		}
+		for _, canary := range append(test.canaries, canonicalToken()) {
+			if strings.Contains(raw, canary) {
+				t.Errorf("raw audit exposes %q: %s", canary, raw)
+			}
+			for key, value := range fields {
+				if strings.Contains(fmt.Sprint(value), canary) {
+					t.Errorf("decoded audit field %q exposes %q: %#v", key, canary, value)
+				}
 			}
 		}
 	}
