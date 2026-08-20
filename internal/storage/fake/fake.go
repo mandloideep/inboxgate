@@ -3,9 +3,11 @@ package fake
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 
+	"github.com/mandloideep/inboxgate/internal/gate"
 	"github.com/mandloideep/inboxgate/internal/mail"
 	"github.com/mandloideep/inboxgate/internal/storage"
 )
@@ -439,6 +441,100 @@ func (s *Store) GetGateDecision(ctx context.Context, accountID storage.AccountID
 		return storage.GateDecisionState{}, storage.ErrGateDecisionRecoveryRequired
 	}
 	return storage.GateDecisionState{Decision: decoded, Current: decoded.SourceMetadataHash() == message.MetadataHash()}, nil
+}
+
+func (s *Store) ListReviewCandidates(ctx context.Context, query storage.ReviewCandidateQuery) ([]storage.ReviewCandidateRow, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	selected := make(map[storage.AccountID]struct{}, len(query.AccountIDs()))
+	for _, accountID := range query.AccountIDs() {
+		selected[accountID] = struct{}{}
+	}
+	result := make([]storage.ReviewCandidateRow, 0, query.Limit())
+	for accountID, messages := range s.messages {
+		if len(selected) != 0 {
+			if _, ok := selected[accountID]; !ok {
+				continue
+			}
+		}
+		lifecycle, ok := s.lifecycles[accountID]
+		if !ok || lifecycle.State != storage.AccountStateActive {
+			continue
+		}
+		for _, message := range messages {
+			decision, ok := s.decisions[message.RecordID()]
+			if !ok || decision.SourceMetadataHash() != message.MetadataHash() {
+				continue
+			}
+			if decision.Outcome() != gate.OutcomeReviewCandidate && decision.Outcome() != gate.OutcomeUrgentReviewCandidate {
+				continue
+			}
+			if query.Urgency() == storage.ReviewUrgencyStandard && decision.Outcome() != gate.OutcomeReviewCandidate || query.Urgency() == storage.ReviewUrgencyUrgent && decision.Outcome() != gate.OutcomeUrgentReviewCandidate {
+				continue
+			}
+			row, err := storage.NewReviewCandidateRow(message, decision)
+			if err != nil {
+				return nil, storage.ErrPersistenceInspect
+			}
+			result = append(result, row)
+		}
+	}
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].Message.AccountID() != result[right].Message.AccountID() {
+			return result[left].Message.AccountID() < result[right].Message.AccountID()
+		}
+		if result[left].Message.GmailThreadID() != result[right].Message.GmailThreadID() {
+			return result[left].Message.GmailThreadID() < result[right].Message.GmailThreadID()
+		}
+		return result[left].Message.GmailMessageID() < result[right].Message.GmailMessageID()
+	})
+	after := query.After()
+	if after.Present {
+		result = slices.DeleteFunc(result, func(row storage.ReviewCandidateRow) bool {
+			if row.Message.AccountID() != after.AccountID().String() {
+				return row.Message.AccountID() < after.AccountID().String()
+			}
+			if row.Message.GmailThreadID() != after.ThreadID() {
+				return row.Message.GmailThreadID() < after.ThreadID()
+			}
+			return row.Message.GmailMessageID() <= after.MessageID()
+		})
+	}
+	if len(result) > query.Limit() {
+		result = result[:query.Limit()]
+	}
+	return result, nil
+}
+
+func (s *Store) GetCurrentGateInspection(ctx context.Context, accountID storage.AccountID, gmailMessageID string) (storage.CurrentGateInspection, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.CurrentGateInspection{}, err
+	}
+	if parsed, err := storage.ParseAccountID(accountID.String()); err != nil || parsed != accountID || storage.ValidateGmailMessageID(gmailMessageID) != nil {
+		return storage.CurrentGateInspection{}, storage.ErrInvalidValue
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lifecycle, ok := s.lifecycles[accountID]
+	if !ok || lifecycle.State != storage.AccountStateActive {
+		return storage.CurrentGateInspection{}, storage.ErrReviewInspectionNotFound
+	}
+	message, ok := s.messages[accountID][gmailMessageID]
+	if !ok {
+		return storage.CurrentGateInspection{}, storage.ErrReviewInspectionNotFound
+	}
+	decision, ok := s.decisions[message.RecordID()]
+	if !ok || decision.SourceMetadataHash() != message.MetadataHash() {
+		return storage.CurrentGateInspection{}, storage.ErrReviewInspectionNotFound
+	}
+	inspection, err := storage.NewCurrentGateInspection(message, decision)
+	if err != nil {
+		return storage.CurrentGateInspection{}, storage.ErrPersistenceInspect
+	}
+	return inspection, nil
 }
 
 func (s *Store) CommitGateDecision(ctx context.Context, commit storage.GateDecisionCommit) error {

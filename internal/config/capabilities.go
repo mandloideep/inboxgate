@@ -74,6 +74,7 @@ const (
 	capabilityPrerequisitesGmail
 	capabilityPrerequisitesDatabase
 	capabilityPrerequisitesAccountStatus
+	capabilityPrerequisitesReviewRead
 )
 
 type capabilityDefinition struct {
@@ -90,7 +91,7 @@ var capabilityDefinitions = []capabilityDefinition{
 	{Name: CapabilityGmailCurrentSync, ConfigBinding: capabilityConfigGmailCurrentSync, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesGmail, SecurityClassification: SecuritySensitiveRead},
 	{Name: CapabilityGmailModify, ConfigBinding: capabilityConfigNone, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesNone, SecurityClassification: SecurityProhibited},
 	{Name: CapabilityGmailRead, ConfigBinding: capabilityConfigGmailRead, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesGmail, SecurityClassification: SecuritySensitiveRead},
-	{Name: CapabilityMailReviewRead, ConfigBinding: capabilityConfigMailReviewRead, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesDatabase, SecurityClassification: SecuritySensitiveRead},
+	{Name: CapabilityMailReviewRead, ConfigBinding: capabilityConfigMailReviewRead, ImplementationStatus: ImplementationStatusImplemented, Prerequisites: capabilityPrerequisitesReviewRead, SecurityClassification: SecuritySensitiveRead, RequiredDatabaseMigration: "0006_gate_decisions.sql"},
 	{Name: CapabilityMailReviewWrite, ConfigBinding: capabilityConfigMailReviewWrite, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesDatabase, SecurityClassification: SecuritySensitiveWrite},
 	{Name: CapabilitySystemAccountStatus, ConfigBinding: capabilityConfigMCPOperator, ImplementationStatus: ImplementationStatusImplemented, Prerequisites: capabilityPrerequisitesAccountStatus, SecurityClassification: SecuritySensitiveRead, RequiredDatabaseMigration: "0004_account_lifecycle.sql"},
 	{Name: CapabilitySystemCapabilities, ConfigBinding: capabilityConfigNone, ImplementationStatus: ImplementationStatusImplemented, Prerequisites: capabilityPrerequisitesNone, SecurityClassification: SecurityOperationalMetadata},
@@ -147,7 +148,7 @@ func capabilityConfigured(configuration Config, binding capabilityConfigBinding)
 	case capabilityConfigGmailRead:
 		return configuration.Capabilities.GmailRead
 	case capabilityConfigMailReviewRead:
-		return configuration.Capabilities.MailReviewRead
+		return configuration.MCP.Enabled && configuration.Capabilities.MailReviewRead
 	case capabilityConfigMailReviewWrite:
 		return configuration.Capabilities.MailReviewWrite
 	case capabilityConfigMCPOperator:
@@ -171,6 +172,8 @@ func requiredSecretNames(configuration Config, prerequisites capabilityPrerequis
 	case capabilityPrerequisitesDatabase:
 		return sortedSecretNames(configuration.Database.AuthTokenEnv, configuration.Database.URLEnv)
 	case capabilityPrerequisitesAccountStatus:
+		return sortedSecretNames(configuration.Database.AuthTokenEnv, configuration.Database.URLEnv, configuration.MCP.BearerTokenEnv)
+	case capabilityPrerequisitesReviewRead:
 		return sortedSecretNames(configuration.Database.AuthTokenEnv, configuration.Database.URLEnv, configuration.MCP.BearerTokenEnv)
 	default:
 		return []string{}

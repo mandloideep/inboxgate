@@ -20,6 +20,7 @@ import (
 	"github.com/mandloideep/inboxgate/internal/cryptobox"
 	"github.com/mandloideep/inboxgate/internal/gmail"
 	inboxmcp "github.com/mandloideep/inboxgate/internal/mcp"
+	"github.com/mandloideep/inboxgate/internal/reviewinspect"
 	"github.com/mandloideep/inboxgate/internal/server"
 	"github.com/mandloideep/inboxgate/internal/storage"
 	"github.com/mandloideep/inboxgate/internal/storage/turso"
@@ -470,14 +471,44 @@ var openOperatorAccountStatusSource = func(ctx context.Context, endpoint storage
 	return adapter.Open(ctx, endpoint)
 }
 
-type accountStatusMCPCloser struct {
+func openMCPReadSource(ctx context.Context, endpoint storage.Endpoint) (storage.Handle, error) {
+	return openOperatorAccountStatusSource(ctx, endpoint)
+}
+
+func openMCPReadServices(ctx context.Context, configuration config.Config, endpoint storage.Endpoint) (storage.Handle, *accountstatus.Service, *reviewinspect.Service, error) {
+	sharedMCPSource, err := openMCPReadSource(ctx, endpoint)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var accountStatus *accountstatus.Service
+	var reviewInspection *reviewinspect.Service
+	if configuration.MCP.EnableOperatorTools {
+		accountStatus, err = accountstatus.New(sharedMCPSource, config.CapabilityRegistry(configuration))
+		if err != nil {
+			_ = sharedMCPSource.Close()
+			return nil, nil, nil, err
+		}
+	}
+	if configuration.Capabilities.MailReviewRead {
+		reviewInspection, err = reviewinspect.New(sharedMCPSource, configuration.Gate, configuration.Review)
+		if err != nil {
+			_ = sharedMCPSource.Close()
+			return nil, nil, nil, err
+		}
+	}
+	return sharedMCPSource, accountStatus, reviewInspection, nil
+}
+
+type mcpReadCloser struct {
 	handler *inboxmcp.Handler
 	source  storage.Handle
 }
 
-func (closer *accountStatusMCPCloser) Close() error {
+func (closer *mcpReadCloser) Close() error {
 	return errors.Join(closer.handler.Close(), closer.source.Close())
 }
+
+type accountStatusMCPCloser = mcpReadCloser
 
 func runServe(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
@@ -509,8 +540,9 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 			return 1
 		}
 		var accountStatus *accountstatus.Service
-		var accountSource storage.Handle
-		if configuration.MCP.EnableOperatorTools {
+		var reviewInspection *reviewinspect.Service
+		var sharedMCPSource storage.Handle
+		if configuration.MCP.EnableOperatorTools || configuration.Capabilities.MailReviewRead {
 			if configuration.Database.URLEnv == configuration.Database.AuthTokenEnv ||
 				configuration.Database.URLEnv == configuration.MCP.BearerTokenEnv ||
 				configuration.Database.AuthTokenEnv == configuration.MCP.BearerTokenEnv {
@@ -527,15 +559,8 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 				return 1
 			}
 			var adapterErr error
-			accountSource, adapterErr = openOperatorAccountStatusSource(context.Background(), storage.Endpoint{URL: databaseURL})
+			sharedMCPSource, accountStatus, reviewInspection, adapterErr = openMCPReadServices(context.Background(), configuration, storage.Endpoint{URL: databaseURL})
 			if adapterErr != nil {
-				clear(encodedToken)
-				fmt.Fprintln(stderr, "cannot construct MCP runtime")
-				return 1
-			}
-			accountStatus, adapterErr = accountstatus.New(accountSource, config.CapabilityRegistry(configuration))
-			if adapterErr != nil {
-				_ = accountSource.Close()
 				clear(encodedToken)
 				fmt.Fprintln(stderr, "cannot construct MCP runtime")
 				return 1
@@ -543,24 +568,25 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 		}
 		var err error
 		mcpHandler, err = inboxmcp.New(inboxmcp.Options{
-			Configuration: configuration,
-			BinaryVersion: version,
-			BinaryCommit:  commit,
-			BearerToken:   encodedToken,
-			AuditOutput:   stderr,
-			AccountStatus: accountStatus,
+			Configuration:    configuration,
+			BinaryVersion:    version,
+			BinaryCommit:     commit,
+			BearerToken:      encodedToken,
+			AuditOutput:      stderr,
+			AccountStatus:    accountStatus,
+			ReviewInspection: reviewInspection,
 		})
 		clear(encodedToken)
 		if err != nil {
-			if accountSource != nil {
-				_ = accountSource.Close()
+			if sharedMCPSource != nil {
+				_ = sharedMCPSource.Close()
 			}
 			fmt.Fprintln(stderr, "cannot construct MCP runtime")
 			return 1
 		}
 		mcpCloser = mcpHandler
-		if accountSource != nil {
-			mcpCloser = &accountStatusMCPCloser{handler: mcpHandler, source: accountSource}
+		if sharedMCPSource != nil {
+			mcpCloser = &mcpReadCloser{handler: mcpHandler, source: sharedMCPSource}
 		}
 		runtimeOptions = append(runtimeOptions, server.WithMCP(mcpHandler, mcpCloser))
 	}
@@ -571,9 +597,6 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 		}
 		fmt.Fprintln(stderr, "cannot construct service runtime")
 		return 1
-	}
-	if mcpCloser != nil {
-		defer mcpCloser.Close()
 	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)

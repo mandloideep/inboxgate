@@ -8,11 +8,12 @@ import (
 )
 
 type envelopeClassification struct {
-	Code    int
-	Message string
-	ID      any
-	Method  string
-	Name    string
+	Code      int
+	Message   string
+	ID        any
+	Method    string
+	Name      string
+	Arguments map[string]any
 }
 
 type structuralError uint8
@@ -82,9 +83,13 @@ func classifyEnvelope(data []byte) envelopeClassification {
 		}
 		classification.Name = name
 		arguments, ok := params["arguments"].(map[string]any)
-		if !ok || len(arguments) != 0 {
+		if !ok {
 			return classification.withError(-32602)
 		}
+		if classification.Name != toolMailListReviewCandidates && classification.Name != toolMailGetGateReason && len(arguments) != 0 {
+			return classification.withError(-32602)
+		}
+		classification.Arguments = arguments
 	} else if !exactKeys(params, "_meta") {
 		return classification.withError(-32602)
 	}
@@ -95,7 +100,7 @@ func classifyEnvelope(data []byte) envelopeClassification {
 	case "server/discover", "tools/list":
 		return classification
 	case "tools/call":
-		if classification.Name != toolAccountsList && classification.Name != toolMailSyncStatus && classification.Name != systemCapabilitiesTool {
+		if classification.Name != toolAccountsList && classification.Name != toolMailSyncStatus && classification.Name != systemCapabilitiesTool && classification.Name != toolMailListReviewCandidates && classification.Name != toolMailGetGateReason {
 			return classification.withError(-32601)
 		}
 		return classification
