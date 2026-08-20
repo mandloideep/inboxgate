@@ -1,6 +1,6 @@
 # ADR 0017: Bound MCP candidate and gate-reason inspection
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-20
 - Issue: #44
 - Owners: @mandloideep
