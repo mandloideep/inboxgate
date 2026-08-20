@@ -369,7 +369,8 @@ Returned ping, migration, account, cursor, credential, lifecycle, deletion, curr
 These controls do not fix the driver properties reproduced during the earlier evaluation.
 The driver can still trust an arbitrary scheme and authority from a protocol-provided `base_url` and send the bearer token to a changed authority or over cleartext HTTP after an HTTPS-to-HTTP downgrade.
 It can still reflect valid remote error text internally.
-The migration path avoids the driver's background-context `database/sql.Tx` completion methods, but stream close still uses a background context through a private HTTP client without an owned timeout or redirect policy.
+The migration path avoids the driver's background-context `database/sql.Tx` completion methods, and the provenance-pinned local fork gives only stream close a caller-owned context, error propagation, bounded fallback, two-worker join, and terminal idempotence.
+The fork does not change transaction completion, redirect policy, protocol-provided authority, remote diagnostic construction, or successful-response allocation.
 An unacknowledged sequence or rollback remains uncertain and requires reconciliation on a new explicit invocation.
 Successful pipeline bodies, cursor lines, accumulated rows, and individual values still lack repository-owned total limits.
 

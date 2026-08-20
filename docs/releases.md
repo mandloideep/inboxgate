@@ -75,6 +75,8 @@ sha256sum --check SHA256SUMS
 On macOS, use `shasum -a 256 -c SHA256SUMS` when GNU `sha256sum` is unavailable.
 The checksum file covers all six platform archives and the SPDX SBOM.
 Pinned Syft emits one InboxGate document root and, for each of the six canonical binary locations, one main-module row, every reviewed linked runtime module at its accepted version, and `stdlib` at the pinned Go version.
+The local `tursogo-serverless` replacement appears as exact version `UNKNOWN` in pinned Syft output, while each binary's Go build metadata must retain the exact accepted upstream pseudo-version and identify only `./third_party/tursogo-serverless` as its `(devel)` replacement.
+The packaged third-party notice and repository provenance manifest bind that replacement to the full accepted upstream commit and exact copied and modified file hashes.
 It also emits one binary-classifier row for each Windows executable.
 The SPDX validator accepts duplicate approved module and version rows only once at each exact canonical binary location and rejects omissions, substitutions, same-location duplicates, location aliases or escapes, inconsistent versions, and unexpected packages or locations.
 Before typed SPDX decoding, it reads at most 4 MiB and token-scans at most 131,072 JSON tokens and 64 container levels.
