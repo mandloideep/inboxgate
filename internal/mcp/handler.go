@@ -302,7 +302,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	classification := classifyEnvelope(body)
 	if classification.Code == 0 && classification.Method == "tools/call" &&
 		(classification.Name == toolAccountsList || classification.Name == toolMailSyncStatus) &&
-		!handler.configuration.MCP.EnableOperatorTools {
+		!handler.operatorToolsEnabled() {
 		classification = classification.withError(-32601)
 	}
 	if classification.Method == "notifications/initialized" {
@@ -356,6 +356,11 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	buffer := newResponseBuffer(handler.responseLimit)
 	handler.sdk.ServeHTTP(buffer, sdkRequest)
 	if buffer.exceeded {
+		if classification.Method == "tools/call" && (classification.Name == toolAccountsList || classification.Name == toolMailSyncStatus) &&
+			writeBoundedJSONRPCError(response, -32603, classification.ID, handler.responseLimit) {
+			status = http.StatusOK
+			return
+		}
 		status = http.StatusInternalServerError
 		writeFixed(response, false, status, "internal_error", "", "")
 		return
@@ -471,7 +476,7 @@ func (handler *Handler) newSDKHandler() http.Handler {
 	})
 	destructive := false
 	openWorld := false
-	if handler.configuration.MCP.EnableOperatorTools {
+	if handler.operatorToolsEnabled() {
 		handler.addAccountStatusTools(server, &destructive, &openWorld)
 	}
 	server.AddTool(&mcpsdk.Tool{
@@ -495,6 +500,10 @@ func (handler *Handler) newSDKHandler() http.Handler {
 		MaxRequestBodyBytes:          int64(min(int(handler.configuration.Server.MaxRequestBytes), MaximumRequestBytes)),
 		PropagateRequestCancellation: true,
 	})
+}
+
+func (handler *Handler) operatorToolsEnabled() bool {
+	return handler.configuration.MCP.Enabled && handler.configuration.MCP.EnableOperatorTools
 }
 
 func (handler *Handler) addAccountStatusTools(server *mcpsdk.Server, destructive, openWorld *bool) {
@@ -764,6 +773,25 @@ func writeBuffered(response http.ResponseWriter, status int, body []byte) {
 }
 
 func writeJSONRPCError(response http.ResponseWriter, status, code int, id any) int {
+	body := marshalJSONRPCError(code, id)
+	if len(body) > MaximumResponseBytes {
+		writeFixed(response, false, http.StatusInternalServerError, "internal_error", "", "")
+		return http.StatusInternalServerError
+	}
+	writeBuffered(response, status, body)
+	return status
+}
+
+func writeBoundedJSONRPCError(response http.ResponseWriter, code int, id any, limit int) bool {
+	body := marshalJSONRPCError(code, id)
+	if len(body) > limit || len(body) > MaximumResponseBytes {
+		return false
+	}
+	writeBuffered(response, http.StatusOK, body)
+	return true
+}
+
+func marshalJSONRPCError(code int, id any) []byte {
 	if code == -32700 {
 		id = nil
 	}
@@ -778,12 +806,7 @@ func writeJSONRPCError(response http.ResponseWriter, status, code int, id any) i
 	payload.Error.Code = code
 	payload.Error.Message = jsonRPCMessage(code)
 	body, _ := json.Marshal(payload)
-	if len(body) > MaximumResponseBytes {
-		writeFixed(response, false, http.StatusInternalServerError, "internal_error", "", "")
-		return http.StatusInternalServerError
-	}
-	writeBuffered(response, status, body)
-	return status
+	return body
 }
 
 func writeDiscovery(response http.ResponseWriter, status int, id any, version string) int {

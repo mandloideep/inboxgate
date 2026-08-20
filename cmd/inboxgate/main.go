@@ -461,6 +461,14 @@ func resolvedOptionalAccountSecretEnvironment(name string, maximum int) ([]byte,
 var doctorResult = []byte("{\n  \"output_version\": 1,\n  \"status\": \"ok\",\n  \"checks\": [\n    {\n      \"name\": \"configuration\",\n      \"status\": \"pass\"\n    },\n    {\n      \"name\": \"service_runtime\",\n      \"status\": \"pass\"\n    }\n  ]\n}\n")
 
 var lookupMCPEnvironment = os.LookupEnv
+var lookupOperatorDatabaseEnvironment = os.LookupEnv
+var openOperatorAccountStatusSource = func(ctx context.Context, endpoint storage.Endpoint) (storage.Handle, error) {
+	adapter, err := turso.New(turso.Options{})
+	if err != nil {
+		return nil, err
+	}
+	return adapter.Open(ctx, endpoint)
+}
 
 type accountStatusMCPCloser struct {
 	handler *inboxmcp.Handler
@@ -510,18 +518,16 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 				fmt.Fprintln(stderr, "cannot construct MCP runtime")
 				return 1
 			}
-			databaseURL, urlSet := os.LookupEnv(configuration.Database.URLEnv)
-			databaseToken, tokenSet := os.LookupEnv(configuration.Database.AuthTokenEnv)
+			databaseURL, urlSet := lookupOperatorDatabaseEnvironment(configuration.Database.URLEnv)
+			databaseToken, tokenSet := lookupOperatorDatabaseEnvironment(configuration.Database.AuthTokenEnv)
 			if !urlSet || len(databaseURL) < 1 || len(databaseURL) > 2048 || len(databaseToken) > 4096 || tokenSet ||
 				!accountEnrollmentStorageAllowed(databaseURL, []byte(databaseToken)) {
 				clear(encodedToken)
 				fmt.Fprintln(stderr, "cannot construct MCP runtime")
 				return 1
 			}
-			adapter, adapterErr := turso.New(turso.Options{})
-			if adapterErr == nil {
-				accountSource, adapterErr = adapter.Open(context.Background(), storage.Endpoint{URL: databaseURL})
-			}
+			var adapterErr error
+			accountSource, adapterErr = openOperatorAccountStatusSource(context.Background(), storage.Endpoint{URL: databaseURL})
 			if adapterErr != nil {
 				clear(encodedToken)
 				fmt.Fprintln(stderr, "cannot construct MCP runtime")

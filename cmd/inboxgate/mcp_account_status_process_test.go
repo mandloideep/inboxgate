@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -17,6 +18,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mandloideep/inboxgate/internal/config"
+	inboxmcp "github.com/mandloideep/inboxgate/internal/mcp"
+	"github.com/mandloideep/inboxgate/internal/storage"
 )
 
 const syntheticProcessAccountID = "0000000000000000000000000000000a"
@@ -319,9 +324,11 @@ type shutdownStorageProbe struct {
 	server        *httptest.Server
 	queryStarted  chan struct{}
 	queryDone     chan struct{}
+	releaseQuery  chan struct{}
 	closeStarted  chan struct{}
 	queryOnce     sync.Once
 	queryDoneOnce sync.Once
+	releaseOnce   sync.Once
 	closeOnce     sync.Once
 	queryCount    atomic.Int64
 	closeCount    atomic.Int64
@@ -332,7 +339,7 @@ type shutdownStorageProbe struct {
 
 func newShutdownStorageProbe(t *testing.T) *shutdownStorageProbe {
 	t.Helper()
-	probe := &shutdownStorageProbe{queryStarted: make(chan struct{}), queryDone: make(chan struct{}), closeStarted: make(chan struct{})}
+	probe := &shutdownStorageProbe{queryStarted: make(chan struct{}), queryDone: make(chan struct{}), releaseQuery: make(chan struct{}), closeStarted: make(chan struct{})}
 	probe.server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "" {
 			t.Error("credential-free storage request carried authorization")
@@ -341,9 +348,22 @@ func newShutdownStorageProbe(t *testing.T) *shutdownStorageProbe {
 		case "/v3/cursor":
 			probe.queryCount.Add(1)
 			probe.queryOnce.Do(func() { close(probe.queryStarted) })
+			response.Header().Set("Content-Type", "application/json")
+			encoder := json.NewEncoder(response)
+			_ = encoder.Encode(map[string]any{"baton": "synthetic-shutdown-baton", "base_url": nil})
+			_ = encoder.Encode(map[string]any{"type": "step_begin", "step": 0, "cols": []any{
+				map[string]any{"name": "account_id", "decltype": "TEXT"}, map[string]any{"name": "provider", "decltype": "TEXT"},
+				map[string]any{"name": "state", "decltype": "TEXT"}, map[string]any{"name": "state_version", "decltype": "INTEGER"},
+				map[string]any{"name": "reauthorization_reason", "decltype": "TEXT"}, map[string]any{"name": "revocation_status", "decltype": "TEXT"},
+				map[string]any{"name": "cursor_present", "decltype": "INTEGER"}, map[string]any{"name": "credential_present", "decltype": "INTEGER"},
+			}})
+			if flusher, ok := response.(http.Flusher); ok {
+				flusher.Flush()
+			}
 			<-request.Context().Done()
 			probe.queryOrder.Store(probe.sequence.Add(1))
 			probe.queryDoneOnce.Do(func() { close(probe.queryDone) })
+			<-probe.releaseQuery
 		case "/v3/pipeline":
 			probe.closeCount.Add(1)
 			probe.closeOrder.Store(probe.sequence.Add(1))
@@ -360,7 +380,12 @@ func newShutdownStorageProbe(t *testing.T) *shutdownStorageProbe {
 		}
 	}))
 	t.Cleanup(probe.server.Close)
+	t.Cleanup(probe.release)
 	return probe
+}
+
+func (probe *shutdownStorageProbe) release() {
+	probe.releaseOnce.Do(func() { close(probe.releaseQuery) })
 }
 
 func TestRealProcessShutdownDrainsStalledAccountReadBeforeSourceClose(t *testing.T) {
@@ -436,6 +461,11 @@ func TestRealProcessShutdownDrainsStalledAccountReadBeforeSourceClose(t *testing
 	case <-time.After(3 * time.Second):
 		t.Fatal("stalled request did not drain")
 	}
+	select {
+	case <-probe.queryDone:
+	case <-time.After(time.Second):
+		t.Fatal("stalled cursor request did not observe cancellation")
+	}
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- process.Wait() }()
 	select {
@@ -446,7 +476,8 @@ func TestRealProcessShutdownDrainsStalledAccountReadBeforeSourceClose(t *testing
 	case <-time.After(3 * time.Second):
 		t.Fatal("process shutdown was not bounded")
 	}
-	if elapsed := time.Since(started); elapsed >= 3*time.Second || probe.queryCount.Load() != 1 || probe.closeCount.Load() != 1 || probe.queryOrder.Load() < 1 || probe.closeOrder.Load() <= probe.queryOrder.Load() {
+	probe.release()
+	if elapsed := time.Since(started); elapsed >= 3*time.Second || probe.queryCount.Load() != 1 || probe.closeCount.Load() != 0 || probe.queryOrder.Load() < 1 || probe.closeOrder.Load() != 0 {
 		t.Fatalf("shutdown elapsed=%v query=%d close=%d order=(%d,%d)", elapsed, probe.queryCount.Load(), probe.closeCount.Load(), probe.queryOrder.Load(), probe.closeOrder.Load())
 	}
 	for _, forbidden := range []string{token, syntheticProcessAccountID, probe.server.URL, "shutdown-id"} {
@@ -458,19 +489,14 @@ func TestRealProcessShutdownDrainsStalledAccountReadBeforeSourceClose(t *testing
 
 func TestPostSourceMCPConstructionFailureClosesSourceOnce(t *testing.T) {
 	var closeCount atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v3/pipeline" {
-			http.NotFound(response, request)
-			return
-		}
-		closeCount.Add(1)
-		response.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(response).Encode(map[string]any{"baton": nil, "base_url": nil, "results": []any{map[string]any{"type": "ok", "response": map[string]any{"type": "close"}}}})
-	}))
-	defer server.Close()
+	originalOpen := openOperatorAccountStatusSource
+	openOperatorAccountStatusSource = func(context.Context, storage.Endpoint) (storage.Handle, error) {
+		return &closeCountingStorageHandle{closeCount: &closeCount}, nil
+	}
+	t.Cleanup(func() { openOperatorAccountStatusSource = originalOpen })
 	path := writeOperatorMCPConfig(t, "127.0.0.1:1", true, true)
 	t.Setenv("SYNTHETIC_OPERATOR_MCP_TOKEN", generatedMCPToken(t))
-	t.Setenv("SYNTHETIC_OPERATOR_DATABASE_URL", server.URL)
+	t.Setenv("SYNTHETIC_OPERATOR_DATABASE_URL", "http://127.0.0.1:1")
 	_ = os.Unsetenv("SYNTHETIC_OPERATOR_DATABASE_TOKEN")
 	originalVersion, originalCommit := version, commit
 	version, commit = "v0.1.0", "invalid"
@@ -479,6 +505,80 @@ func TestPostSourceMCPConstructionFailureClosesSourceOnce(t *testing.T) {
 	if exit := run([]string{"--config", path, "serve"}, &stdout, &stderr); exit != 1 || stdout.Len() != 0 || stderr.String() != "cannot construct MCP runtime\n" || closeCount.Load() != 1 {
 		t.Fatalf("construction failure exit=%d close=%d stdout=%q stderr=%q", exit, closeCount.Load(), stdout.String(), stderr.String())
 	}
+}
+
+func TestAccountStatusMCPCloserCallsSourceCloseOnceAndWaitsForCompletion(t *testing.T) {
+	configuration := config.Defaults()
+	configuration.MCP.Enabled = true
+	handler, err := inboxmcp.New(inboxmcp.Options{
+		Configuration: configuration,
+		BinaryVersion: "dev",
+		BearerToken:   []byte(generatedMCPToken(t)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := newBlockingCloseStorageHandle()
+	t.Cleanup(source.release)
+	closer := &accountStatusMCPCloser{handler: handler, source: source}
+	result := make(chan error, 1)
+	go func() { result <- closer.Close() }()
+	select {
+	case <-source.started:
+	case <-time.After(time.Second):
+		t.Fatal("source close did not start")
+	}
+	if source.count.Load() != 1 {
+		t.Fatalf("source close calls = %d, want 1", source.count.Load())
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("composite close returned before source completion: %v", err)
+	default:
+	}
+	source.release()
+	select {
+	case err := <-result:
+		if err != nil || source.count.Load() != 1 {
+			t.Fatalf("composite close error=%v source calls=%d", err, source.count.Load())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("composite close did not return after source completion")
+	}
+}
+
+type closeCountingStorageHandle struct {
+	storage.Handle
+	closeCount *atomic.Int64
+}
+
+type blockingCloseStorageHandle struct {
+	storage.Handle
+	started      chan struct{}
+	releaseClose chan struct{}
+	startOnce    sync.Once
+	releaseOnce  sync.Once
+	count        atomic.Int64
+}
+
+func newBlockingCloseStorageHandle() *blockingCloseStorageHandle {
+	return &blockingCloseStorageHandle{started: make(chan struct{}), releaseClose: make(chan struct{})}
+}
+
+func (handle *blockingCloseStorageHandle) Close() error {
+	handle.count.Add(1)
+	handle.startOnce.Do(func() { close(handle.started) })
+	<-handle.releaseClose
+	return nil
+}
+
+func (handle *blockingCloseStorageHandle) release() {
+	handle.releaseOnce.Do(func() { close(handle.releaseClose) })
+}
+
+func (handle *closeCountingStorageHandle) Close() error {
+	handle.closeCount.Add(1)
+	return nil
 }
 
 func waitForProcessHealth(t *testing.T, address string) {
