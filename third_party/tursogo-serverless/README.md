@@ -69,8 +69,8 @@ db := sql.OpenDB(turso.NewConnector(url, authToken).WithRemoteEncryptionKey(key)
 
 The key can also be given as a `remote_encryption_key` query parameter in
 the connection string. Like any query parameter its value must be
-URL-encoded — base64 keys contain `+`, `/`, and `=`, which query-string
-decoding otherwise mangles — and it shares the connection string's
+URL-encoded - base64 keys contain `+`, `/`, and `=`, which query-string
+decoding otherwise mangles - and it shares the connection string's
 exposure in logs and error messages, so prefer the connector:
 
 ```go

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "module_path": "turso.tech/database/tursogo-serverless",
+  "upstream_version": "v0.0.0-20260817122138-24adc316cdc4",
+  "upstream_commit": "24adc316cdc4ebf93d90b94dbfda727195540497",
+  "upstream_module_sum": "h1:Fnxwfn492a+9kTegF2G7QUT1aF0Vfjz0dMrNO+HmthA=",
+  "upstream_go_mod_sum": "h1:KWrz0BzLKiXUkLmM5HXyr/gWA8ySNZexfW0NV0GGk0A=",
+  "upstream_tree_sha256": "4ce5b8f1db237ec167eb7ca26bf9383e2971bdc6432ecead3441abc1a053e40c",
+  "local_module_path": "./third_party/tursogo-serverless",
+  "modified_files": [
+    "driver.go",
+    "session.go"
+  ],
+  "normalized_files": [
+    "README.md",
+    "encryption_header_test.go"
+  ],
+  "files": [
+    {
+      "path": "LICENSE",
+      "source": "upstream",
+      "upstream_sha256": "b646f9ee8bcaf87e8de75153b9df7a2861c7ac445c87e741768b3c2bccf47bc5",
+      "local_sha256": "b646f9ee8bcaf87e8de75153b9df7a2861c7ac445c87e741768b3c2bccf47bc5"
+    },
+    {
+      "path": "README.md",
+      "source": "upstream",
+      "upstream_sha256": "372c9e177a79aa9df94a4d31a4b6f70dfc644d59ecfe6e2d5012a4c81e276c28",
+      "local_sha256": "9288fad74312e0ea2cb617286b099d249671c75ffdcf87263c6b42ee8d2cdcb6"
+    },
+    {
+      "path": "close_contract_test.go",
+      "source": "local",
+      "upstream_sha256": "",
+      "local_sha256": "5324fa81f5e42a4abde2f0038c1f961122647e17d5afc64a942fb7ecf55111b5"
+    },
+    {
+      "path": "driver.go",
+      "source": "upstream",
+      "upstream_sha256": "0d809bd67b3b3e6c86618be2561073be1e929b5b61f75d6e43ded87c66e1894e",
+      "local_sha256": "f08ac49a622a0a23f9d04aea343b73de2c735055c7949418ae7521b326da3d68"
+    },
+    {
+      "path": "driver_test.go",
+      "source": "upstream",
+      "upstream_sha256": "a8ab2e634d9e3da011f067561545a060f790a8544fe0d167fa254897dd0f43eb",
+      "local_sha256": "a8ab2e634d9e3da011f067561545a060f790a8544fe0d167fa254897dd0f43eb"
+    },
+    {
+      "path": "encryption_header_test.go",
+      "source": "upstream",
+      "upstream_sha256": "8ca1300bb14acea96fbf307315d2a605b5919ad0626b99835094b821df1ef997",
+      "local_sha256": "04e6341e97807c3da3e82378b6df473b781fe6117f2fba5445c7f69bc449f390"
+    },
+    {
+      "path": "example_test.go",
+      "source": "upstream",
+      "upstream_sha256": "19d78d621c7bd5ca589cf369e8f3b62ff13f673a02a1f3638abc6729ce843a3f",
+      "local_sha256": "19d78d621c7bd5ca589cf369e8f3b62ff13f673a02a1f3638abc6729ce843a3f"
+    },
+    {
+      "path": "go.mod",
+      "source": "upstream",
+      "upstream_sha256": "82ecd1f2909a4fd369f9446473902de9b4d9d2153bb63cd118522cd98c36f15f",
+      "local_sha256": "82ecd1f2909a4fd369f9446473902de9b4d9d2153bb63cd118522cd98c36f15f"
+    },
+    {
+      "path": "protocol.go",
+      "source": "upstream",
+      "upstream_sha256": "bb2b1dd96bdf7abcc3698611b2e40ee90dc578525f3915a6fe045a96d072db00",
+      "local_sha256": "bb2b1dd96bdf7abcc3698611b2e40ee90dc578525f3915a6fe045a96d072db00"
+    },
+    {
+      "path": "session.go",
+      "source": "upstream",
+      "upstream_sha256": "e3113a9f5438782c52fd8355aaa3452214a82ff3ae2cc3fba2c61c6f8c4b8029",
+      "local_sha256": "43482efef209837b83fe4ac0ff52eda39aff4cf54fd4996e814bb13b6dc08533"
+    }
+  ]
+}

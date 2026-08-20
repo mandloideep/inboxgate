@@ -202,6 +202,19 @@ func waitForCloseStarts(t *testing.T, harness *closeContractServer, count int) {
 	}
 }
 
+func waitForCloseRequestDone(t *testing.T, harness *closeContractServer, count int) {
+	t.Helper()
+	allowance := time.NewTimer(time.Second)
+	defer allowance.Stop()
+	for range count {
+		select {
+		case <-harness.requestDone:
+		case <-allowance.C:
+			t.Fatalf("observed %d completed close requests, want %d", count-int(harness.activeClose.Load()), count)
+		}
+	}
+}
+
 func awaitBoundedHandleClose(t *testing.T, harness *closeContractServer, result <-chan error) error {
 	t.Helper()
 	select {
@@ -229,11 +242,7 @@ func TestHandleCloseCancelsStalledStreamWithinOwnedDeadlineAndJoinsRequest(t *te
 	if !errors.Is(err, ErrCloseFailed) || err.Error() != ErrCloseFailed.Error() {
 		t.Fatalf("Close() error = %v, want fixed ErrCloseFailed", err)
 	}
-	select {
-	case <-harness.requestDone:
-	default:
-		t.Fatal("Close() returned before the underlying request handler observed cancellation")
-	}
+	waitForCloseRequestDone(t, harness, 1)
 	if got := harness.activeClose.Load(); got != 0 {
 		t.Fatalf("active close requests at return = %d, want 0", got)
 	}
@@ -260,13 +269,7 @@ func TestTwoIdleStreamsCloseConcurrentlyUnderOneSharedDeadline(t *testing.T) {
 	if !errors.Is(err, ErrCloseFailed) || err.Error() != ErrCloseFailed.Error() {
 		t.Fatalf("Close() error = %v, want fixed ErrCloseFailed", err)
 	}
-	for range 2 {
-		select {
-		case <-harness.requestDone:
-		default:
-			t.Fatal("Close() returned before every close request was joined")
-		}
-	}
+	waitForCloseRequestDone(t, harness, 2)
 	if got := harness.activeClose.Load(); got != 0 {
 		t.Fatalf("active close requests at return = %d, want 0", got)
 	}
@@ -452,45 +455,53 @@ func TestConnectorCloseContextPreservesCallerCancellationAndJoins(t *testing.T) 
 		<-result
 		t.Fatal("CloseContext() did not return after caller cancellation")
 	}
-	select {
-	case <-harness.requestDone:
-	default:
-		t.Fatal("CloseContext() returned before joining the canceled request")
-	}
+	waitForCloseRequestDone(t, harness, 1)
 	if got := harness.activeClose.Load(); got != 0 {
 		t.Fatalf("active close requests at return = %d, want 0", got)
 	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("database.Close() error = %v", err)
+	if err := database.Close(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("database.Close() error = %v, want reused terminal cancellation", err)
 	}
 }
 
 func TestPoolEvictionConnCloseUsesConfiguredFallbackDeadline(t *testing.T) {
 	harness := newCloseContractServer(t, closeResponseStall)
-	handle := openCloseContractHandle(t, harness)
-	database := physicalDatabase(t, handle)
-	database.SetMaxIdleConns(0)
-	connections := initializePhysicalConnections(t, database, 1)
+	handleValue := openCloseContractHandle(t, harness)
+	concrete := handleValue.(*handle)
+	database, ok := concrete.database.(*connectorDatabase)
+	if !ok {
+		t.Fatalf("database type = %T, want connector database", concrete.database)
+	}
+	connection, err := database.connector.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("connector.Connect() error = %v", err)
+	}
+	pinger, ok := connection.(driver.Pinger)
+	if !ok {
+		t.Fatalf("driver connection type = %T, want driver.Pinger", connection)
+	}
+	if err := pinger.Ping(context.Background()); err != nil {
+		t.Fatalf("driver Ping() error = %v", err)
+	}
 
 	result := make(chan error, 1)
-	go func() { result <- connections[0].Close() }()
+	go func() { result <- connection.Close() }()
 	waitForCloseStarts(t, harness, 1)
 	select {
-	case <-result:
+	case closeErr := <-result:
+		if !errors.Is(closeErr, context.DeadlineExceeded) {
+			t.Fatalf("pool-eviction driver.Conn.Close() error = %v, want configured deadline", closeErr)
+		}
 	case <-time.After(time.Second):
 		harness.releaseAll()
 		<-result
-		t.Fatal("pool-eviction Conn.Close() exceeded its configured fallback deadline")
+		t.Fatal("pool-eviction driver.Conn.Close() exceeded its configured fallback deadline")
 	}
-	select {
-	case <-harness.requestDone:
-	default:
-		t.Fatal("pool-eviction Conn.Close() returned before joining the close request")
-	}
+	waitForCloseRequestDone(t, harness, 1)
 	if got := harness.activeClose.Load(); got != 0 {
 		t.Fatalf("active close requests at return = %d, want 0", got)
 	}
-	if err := handle.Close(); !errors.Is(err, ErrCloseFailed) {
+	if err := handleValue.Close(); !errors.Is(err, ErrCloseFailed) {
 		t.Fatalf("Handle.Close() after failed eviction = %v, want fixed ErrCloseFailed", err)
 	}
 }

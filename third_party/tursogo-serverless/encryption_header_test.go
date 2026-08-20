@@ -1,8 +1,8 @@
 // Property test for the remote encryption key header, implementing the
 // `encryption_header` entry of serverless/conformance/differential/spec/ops.json:
 // for any key K drawn from the spec's alphabet, a driver configured with K
-// sends `x-turso-encryption-key: K` on every HTTP request — pipeline and
-// cursor endpoints alike — and a driver with no key never sends the header
+// sends `x-turso-encryption-key: K` on every HTTP request - pipeline and
+// cursor endpoints alike - and a driver with no key never sends the header
 // (PROTOCOL.md section 3.1). Runs against a local stub server that records
 // request headers; needs no live database and never skips.
 

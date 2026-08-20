@@ -377,11 +377,26 @@ func nextLine(reader *bufio.Reader) ([]byte, error) {
 	}
 }
 
-// close closes the stream (section 6.8). Errors are ignored: the stream
-// may already have expired.
-func (s *session) close() {
-	if s.baton != nil {
-		_, _ = s.executePipeline(context.Background(), []streamRequest{{Type: "close"}}, false)
+// close closes the stream (section 6.8) under the caller-owned context.
+func (s *session) close(ctx context.Context) error {
+	defer s.resetStream()
+	defer s.client.CloseIdleConnections()
+	if s.baton == nil {
+		return nil
 	}
-	s.resetStream()
+	results, err := s.executePipeline(ctx, []streamRequest{{Type: "close"}}, false)
+	if err != nil {
+		return err
+	}
+	if len(results) != 1 {
+		return fmt.Errorf("turso: close response has %d results, want 1", len(results))
+	}
+	result := results[0]
+	if result.Error != nil {
+		return serverError(result.Error)
+	}
+	if result.Response == nil || result.Response.Type != "close" {
+		return fmt.Errorf("turso: expected close result in pipeline response")
+	}
+	return nil
 }

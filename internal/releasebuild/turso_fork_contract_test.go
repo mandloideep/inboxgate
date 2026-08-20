@@ -32,6 +32,7 @@ type tursoForkManifest struct {
 	UpstreamTreeHash  string                  `json:"upstream_tree_sha256"`
 	LocalModulePath   string                  `json:"local_module_path"`
 	ModifiedFiles     []string                `json:"modified_files"`
+	NormalizedFiles   []string                `json:"normalized_files"`
 	Files             []tursoForkManifestFile `json:"files"`
 }
 
@@ -70,6 +71,10 @@ func TestTursoForkManifestPinsEveryCopiedAndLocalFile(t *testing.T) {
 	if !reflect.DeepEqual(manifest.ModifiedFiles, wantModified) {
 		t.Fatalf("modified files = %q, want %q", manifest.ModifiedFiles, wantModified)
 	}
+	wantNormalized := []string{"README.md", "encryption_header_test.go"}
+	if !reflect.DeepEqual(manifest.NormalizedFiles, wantNormalized) {
+		t.Fatalf("normalized files = %q, want %q", manifest.NormalizedFiles, wantNormalized)
+	}
 
 	wantFiles := []string{
 		"INBOXGATE_PROVENANCE.json",
@@ -104,6 +109,7 @@ func TestTursoForkManifestPinsEveryCopiedAndLocalFile(t *testing.T) {
 	wantManifestFiles = wantManifestFiles[1:]
 	gotManifestFiles := make([]string, 0, len(manifest.Files))
 	modified := map[string]bool{"driver.go": true, "session.go": true}
+	normalized := map[string]bool{"README.md": true, "encryption_header_test.go": true}
 	for _, file := range manifest.Files {
 		gotManifestFiles = append(gotManifestFiles, file.Path)
 		contents, err := os.ReadFile(filepath.Join(forkRoot, file.Path))
@@ -119,8 +125,9 @@ func TestTursoForkManifestPinsEveryCopiedAndLocalFile(t *testing.T) {
 			if len(file.UpstreamSHA256) != 64 || len(file.LocalSHA256) != 64 {
 				t.Fatalf("manifest hashes for upstream file %q are not SHA-256 values", file.Path)
 			}
-			if modified[file.Path] == (file.UpstreamSHA256 == file.LocalSHA256) {
-				t.Fatalf("manifest modification status for %q does not match the two-file allowlist", file.Path)
+			changed := modified[file.Path] || normalized[file.Path]
+			if changed == (file.UpstreamSHA256 == file.LocalSHA256) {
+				t.Fatalf("manifest change status for %q does not match the semantic and normalization allowlists", file.Path)
 			}
 		case "local":
 			if file.Path != "close_contract_test.go" || file.UpstreamSHA256 != "" || len(file.LocalSHA256) != 64 {

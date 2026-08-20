@@ -91,7 +91,7 @@ func validSBOMPackages() []map[string]any {
 		{name: "golang.org/x/sync", version: "v0.20.0"},
 		{name: "golang.org/x/sys", version: "v0.41.0"},
 		{name: "golang.org/x/time", version: "v0.15.0"},
-		{name: "turso.tech/database/tursogo-serverless", version: "v0.0.0-20260817122138-24adc316cdc4"},
+		{name: "turso.tech/database/tursogo-serverless", version: "UNKNOWN"},
 	}
 	locations := []string{
 		"/inboxgate_0.1.0_darwin_amd64/inboxgate",

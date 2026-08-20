@@ -162,6 +162,11 @@ func TestSBOMValidationRequiresCompleteExactLinkedRuntimeInventory(t *testing.T)
 		{name: "wrong stdlib", mutate: func(document map[string]any) {
 			forEachSBOMPackage(document, "stdlib", func(pkg map[string]any) { pkg["versionInfo"] = "go1.26.5" })
 		}},
+		{name: "local replacement masquerades as upstream module", mutate: func(document map[string]any) {
+			forEachSBOMPackage(document, "turso.tech/database/tursogo-serverless", func(pkg map[string]any) {
+				pkg["versionInfo"] = "v0.0.0-20260817122138-24adc316cdc4"
+			})
+		}},
 		{name: "duplicate expected location", mutate: func(document map[string]any) {
 			duplicateFirstSBOMPackage(document, "golang.org/x/sync", nil)
 		}},

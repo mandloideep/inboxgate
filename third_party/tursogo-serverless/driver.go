@@ -26,9 +26,15 @@ import (
 
 // Sentinel errors matching the embedded turso Go driver.
 var (
-	ErrTursoStmtClosed = errors.New("turso: statement closed")
-	ErrTursoConnClosed = errors.New("turso: connection closed")
-	ErrTursoTxDone     = errors.New("turso: transaction done")
+	ErrTursoStmtClosed     = errors.New("turso: statement closed")
+	ErrTursoConnClosed     = errors.New("turso: connection closed")
+	ErrTursoTxDone         = errors.New("turso: transaction done")
+	ErrInvalidCloseTimeout = errors.New("turso: invalid close timeout")
+)
+
+const (
+	defaultCloseTimeout = 2 * time.Second
+	maximumCloseTimeout = 10 * time.Second
 )
 
 func init() {
@@ -62,7 +68,7 @@ func (d *serverlessDriver) Open(dsn string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newConn(u, token, encryptionKey), nil
+	return newConn(u, token, encryptionKey, nil, defaultCloseTimeout), nil
 }
 
 // parseDSN parses "<url>[?auth_token=<token>&remote_encryption_key=<key>]"
@@ -101,12 +107,38 @@ type Connector struct {
 	url                 string
 	authToken           string
 	remoteEncryptionKey string
+	closeTimeout        time.Duration
+
+	mu            sync.Mutex
+	connections   map[*conn]struct{}
+	connectionErr error
+	shutdown      bool
+	closeDone     chan struct{}
+	closeErr      error
 }
 
 // NewConnector creates a connector for the given database URL (turso://,
 // libsql://, https://, or http://) and auth token.
 func NewConnector(url, authToken string) *Connector {
-	return &Connector{url: normalizeURL(url), authToken: authToken}
+	return newConnector(url, authToken, defaultCloseTimeout)
+}
+
+// NewConnectorWithCloseTimeout creates a connector with a bounded fallback
+// duration for driver.Conn.Close calls made by database/sql.
+func NewConnectorWithCloseTimeout(url, authToken string, closeTimeout time.Duration) (*Connector, error) {
+	if closeTimeout <= 0 || closeTimeout > maximumCloseTimeout {
+		return nil, ErrInvalidCloseTimeout
+	}
+	return newConnector(url, authToken, closeTimeout), nil
+}
+
+func newConnector(url, authToken string, closeTimeout time.Duration) *Connector {
+	return &Connector{
+		url:          normalizeURL(url),
+		authToken:    authToken,
+		closeTimeout: closeTimeout,
+		connections:  make(map[*conn]struct{}),
+	}
 }
 
 // WithRemoteEncryptionKey sets the customer-managed encryption key for an
@@ -119,36 +151,162 @@ func (c *Connector) WithRemoteEncryptionKey(key string) *Connector {
 }
 
 func (c *Connector) Connect(context.Context) (driver.Conn, error) {
-	return newConn(c.url, c.authToken, c.remoteEncryptionKey), nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.shutdown {
+		return nil, ErrTursoConnClosed
+	}
+	connection := newConn(c.url, c.authToken, c.remoteEncryptionKey, c, c.closeTimeout)
+	c.connections[connection] = struct{}{}
+	return connection, nil
 }
 
 func (c *Connector) Driver() driver.Driver {
 	return &serverlessDriver{}
 }
 
+// CloseContext stops new connections and closes every registered connection
+// under one caller-owned context with at most two joined workers.
+func (c *Connector) CloseContext(ctx context.Context) error {
+	c.mu.Lock()
+	if c.closeDone != nil {
+		done := c.closeDone
+		c.mu.Unlock()
+		<-done
+		c.mu.Lock()
+		err := c.closeErr
+		c.mu.Unlock()
+		return err
+	}
+	c.shutdown = true
+	c.closeDone = make(chan struct{})
+	done := c.closeDone
+	connections := make([]*conn, 0, len(c.connections))
+	for connection := range c.connections {
+		connections = append(connections, connection)
+	}
+	priorErr := c.connectionErr
+	c.mu.Unlock()
+
+	err := closeConnections(ctx, connections)
+	if err == nil {
+		err = priorErr
+	}
+
+	c.mu.Lock()
+	c.closeErr = err
+	close(done)
+	c.mu.Unlock()
+	return err
+}
+
+func closeConnections(ctx context.Context, connections []*conn) error {
+	if len(connections) == 0 {
+		return nil
+	}
+	workerCount := 2
+	if len(connections) < workerCount {
+		workerCount = len(connections)
+	}
+	jobs := make(chan *conn, len(connections))
+	for _, connection := range connections {
+		jobs <- connection
+	}
+	close(jobs)
+
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	errorsFound := make(chan error, len(connections))
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for connection := range jobs {
+				if err := connection.CloseContext(ctx); err != nil {
+					errorsFound <- err
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		return err
+	}
+	return nil
+}
+
+func (c *Connector) unregister(connection *conn, closeErr error) {
+	c.mu.Lock()
+	delete(c.connections, connection)
+	if c.connectionErr == nil && closeErr != nil {
+		c.connectionErr = closeErr
+	}
+	c.mu.Unlock()
+}
+
 // --- driver.Conn ---
 
 type conn struct {
-	sess   *session
-	mu     sync.Mutex
-	closed bool
+	sess         *session
+	connector    *Connector
+	closeTimeout time.Duration
+	mu           sync.Mutex
+	closed       bool
+
+	closeMu   sync.Mutex
+	closeDone chan struct{}
+	closeErr  error
 }
 
-func newConn(url, authToken, remoteEncryptionKey string) *conn {
-	return &conn{sess: newSession(url, authToken, remoteEncryptionKey)}
+func newConn(url, authToken, remoteEncryptionKey string, connector *Connector, closeTimeout time.Duration) *conn {
+	return &conn{
+		sess:         newSession(url, authToken, remoteEncryptionKey),
+		connector:    connector,
+		closeTimeout: closeTimeout,
+	}
 }
 
 func (c *conn) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return nil
+	ctx, cancel := context.WithTimeout(context.Background(), c.closeTimeout)
+	defer cancel()
+	return c.CloseContext(ctx)
+}
+
+func (c *conn) CloseContext(ctx context.Context) error {
+	c.closeMu.Lock()
+	if c.closeDone != nil {
+		done := c.closeDone
+		c.closeMu.Unlock()
+		<-done
+		c.closeMu.Lock()
+		err := c.closeErr
+		c.closeMu.Unlock()
+		return err
 	}
-	c.closed = true
-	// Closing the stream rolls back any open transaction server-side,
-	// matching the embedded driver: uncommitted changes are lost on close.
-	c.sess.close()
-	return nil
+	c.closeDone = make(chan struct{})
+	done := c.closeDone
+	c.closeMu.Unlock()
+
+	c.mu.Lock()
+	var err error
+	if c.closed {
+		c.mu.Unlock()
+	} else {
+		c.closed = true
+		// Closing the stream rolls back any open transaction server-side,
+		// matching the embedded driver: uncommitted changes are lost on close.
+		err = c.sess.close(ctx)
+		c.mu.Unlock()
+	}
+	if c.connector != nil {
+		c.connector.unregister(c, err)
+	}
+
+	c.closeMu.Lock()
+	c.closeErr = err
+	close(done)
+	c.closeMu.Unlock()
+	return err
 }
 
 func (c *conn) Prepare(query string) (driver.Stmt, error) {

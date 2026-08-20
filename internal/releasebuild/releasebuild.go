@@ -61,6 +61,8 @@ const timeModuleSum = "h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U="
 const tursoModulePath = "turso.tech/database/tursogo-serverless"
 const tursoModuleVersion = "v0.0.0-20260817122138-24adc316cdc4"
 const tursoModuleSum = "h1:Fnxwfn492a+9kTegF2G7QUT1aF0Vfjz0dMrNO+HmthA="
+const tursoReplacementPath = "./third_party/tursogo-serverless"
+const tursoSBOMVersion = "UNKNOWN"
 
 // ArchiveTime is the fixed timestamp stored in every release archive.
 // The ZIP format cannot represent dates before 1980.
@@ -264,26 +266,36 @@ func ValidateBinary(path, goos, goarch string) error {
 	if info.GoVersion != goVersion {
 		return fmt.Errorf("Go version = %q, want %q", info.GoVersion, goVersion)
 	}
-	expectedDependencies := map[string]struct{ version, sum string }{
-		jsonschemaModulePath:        {jsonschemaModuleVersion, jsonschemaModuleSum},
-		mcpModulePath:               {mcpModuleVersion, mcpModuleSum},
-		segmentioASMModulePath:      {segmentioASMModuleVersion, segmentioASMModuleSum},
-		segmentioEncodingModulePath: {segmentioEncodingModuleVersion, segmentioEncodingModuleSum},
-		uriTemplateModulePath:       {uriTemplateModuleVersion, uriTemplateModuleSum},
-		yamlModulePath:              {yamlModuleVersion, yamlModuleSum},
-		oauthModulePath:             {oauthModuleVersion, oauthModuleSum},
-		syncModulePath:              {syncModuleVersion, syncModuleSum},
-		sysModulePath:               {sysModuleVersion, sysModuleSum},
-		timeModulePath:              {timeModuleVersion, timeModuleSum},
-		tursoModulePath:             {tursoModuleVersion, tursoModuleSum},
+	expectedDependencies := map[string]struct{ version, sum, replacement string }{
+		jsonschemaModulePath:        {version: jsonschemaModuleVersion, sum: jsonschemaModuleSum},
+		mcpModulePath:               {version: mcpModuleVersion, sum: mcpModuleSum},
+		segmentioASMModulePath:      {version: segmentioASMModuleVersion, sum: segmentioASMModuleSum},
+		segmentioEncodingModulePath: {version: segmentioEncodingModuleVersion, sum: segmentioEncodingModuleSum},
+		uriTemplateModulePath:       {version: uriTemplateModuleVersion, sum: uriTemplateModuleSum},
+		yamlModulePath:              {version: yamlModuleVersion, sum: yamlModuleSum},
+		oauthModulePath:             {version: oauthModuleVersion, sum: oauthModuleSum},
+		syncModulePath:              {version: syncModuleVersion, sum: syncModuleSum},
+		sysModulePath:               {version: sysModuleVersion, sum: sysModuleSum},
+		timeModulePath:              {version: timeModuleVersion, sum: timeModuleSum},
+		tursoModulePath:             {version: tursoModuleVersion, replacement: tursoReplacementPath},
 	}
 	if len(info.Deps) != len(expectedDependencies) {
 		return fmt.Errorf("release binary has %d module dependencies, want %d", len(info.Deps), len(expectedDependencies))
 	}
 	for _, dependency := range info.Deps {
 		expected, ok := expectedDependencies[dependency.Path]
-		if !ok || dependency.Version != expected.version || dependency.Sum != expected.sum || dependency.Replace != nil {
+		if !ok || dependency.Version != expected.version || dependency.Sum != expected.sum {
 			return fmt.Errorf("release binary dependency does not match the reviewed module graph")
+		}
+		if expected.replacement == "" {
+			if dependency.Replace != nil {
+				return fmt.Errorf("release binary dependency has an unexpected replacement")
+			}
+		} else if dependency.Replace == nil ||
+			dependency.Replace.Path != expected.replacement ||
+			dependency.Replace.Version != "(devel)" ||
+			dependency.Replace.Sum != "" {
+			return fmt.Errorf("release binary dependency does not identify the reviewed local replacement")
 		}
 		delete(expectedDependencies, dependency.Path)
 	}
@@ -682,7 +694,7 @@ func ValidateSBOM(path, version, workspace string) error {
 		syncModulePath:              syncModuleVersion,
 		sysModulePath:               sysModuleVersion,
 		timeModulePath:              timeModuleVersion,
-		tursoModulePath:             tursoModuleVersion,
+		tursoModulePath:             tursoSBOMVersion,
 	}
 	expectedRuntime := make(map[string]string, len(reviewedModules)+2)
 	expectedRuntime[modulePath] = "UNKNOWN"
