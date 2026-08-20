@@ -135,8 +135,30 @@ func TestReviewSchemasAreClosedAndExact(t *testing.T) {
 	handler := reviewInspectionHandler(t, &reviewInspectionStub{}, io.Discard)
 	response := perform(t, handler, validRequest(t, "tools/list", requestBody("tools/list")))
 	schemas := toolSchemasByName(t, response.Body.Bytes())
-	assertReviewListSchema(t, schemas[listReviewCandidatesTool])
-	assertGateReasonSchema(t, schemas[getGateReasonTool])
+	wantList := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"account_ids":               map[string]any{"type": "array", "minItems": float64(1), "maxItems": float64(16), "uniqueItems": true, "items": map[string]any{"type": "string", "pattern": "^[0-9a-f]{32}$"}},
+			"urgency":                   map[string]any{"type": "string", "enum": []any{"all", "standard", "urgent"}},
+			"internal_date_min_unix_ms": map[string]any{"type": "integer", "minimum": float64(0), "maximum": float64(253402300799999)},
+			"internal_date_max_unix_ms": map[string]any{"type": "integer", "minimum": float64(0), "maximum": float64(253402300799999)},
+			"page_size":                 map[string]any{"type": "integer", "minimum": float64(1), "maximum": float64(10)},
+			"cursor":                    map[string]any{"type": "string", "maxLength": float64(414)},
+		},
+	}
+	wantReason := map[string]any{
+		"type": "object", "additionalProperties": false, "required": []any{"account_id", "gmail_message_id"},
+		"properties": map[string]any{
+			"account_id":       map[string]any{"type": "string", "pattern": "^[0-9a-f]{32}$"},
+			"gmail_message_id": map[string]any{"type": "string", "minLength": float64(1), "maxLength": float64(255), "pattern": "^[!-~]+$"},
+		},
+	}
+	if !reflect.DeepEqual(schemas[listReviewCandidatesTool], wantList) {
+		t.Fatalf("list schema = %#v, want %#v", schemas[listReviewCandidatesTool], wantList)
+	}
+	if !reflect.DeepEqual(schemas[getGateReasonTool], wantReason) {
+		t.Fatalf("reason schema = %#v, want %#v", schemas[getGateReasonTool], wantReason)
+	}
 }
 
 func toolSchemasByName(t *testing.T, body []byte) map[string]map[string]any {
@@ -278,10 +300,22 @@ func TestReviewFailuresAreFixedNoPartialNoRetryAndResponseBounded(t *testing.T) 
 	}
 
 	large := &reviewInspectionStub{page: reviewinspect.CandidatePage{Candidates: make([]reviewinspect.Candidate, 10)}}
-	limited := reviewInspectionHandler(t, large, io.Discard, withResponseLimit(128))
-	response := perform(t, limited, reviewToolRequest(t, listReviewCandidatesTool, `{}`))
-	if response.Code != http.StatusInternalServerError || response.Body.String() != "internal_error\n" {
+	limited := reviewInspectionHandler(t, large, io.Discard, withResponseLimit(256))
+	requestWithID := reviewToolRequest(t, listReviewCandidatesTool, `{}`)
+	requestWithID.Body = io.NopCloser(strings.NewReader(strings.Replace(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+listReviewCandidatesTool+`","arguments":{},`+validMeta()+`}}`,
+		`"id":1`, `"id":"original-review-id"`, 1,
+	)))
+	response := perform(t, limited, requestWithID)
+	wantOverflow := `{"jsonrpc":"2.0","id":"original-review-id","error":{"code":-32603,"message":"internal error"}}`
+	if response.Code != http.StatusOK || response.Body.String() != wantOverflow || strings.Contains(response.Body.String(), "structuredContent") || strings.Contains(response.Body.String(), "data") {
 		t.Fatalf("overflow=%d %q", response.Code, response.Body.String())
+	}
+
+	tiny := reviewInspectionHandler(t, &reviewInspectionStub{reason: reviewinspect.GateReason{OutputVersion: 1}}, io.Discard, withResponseLimit(32))
+	tinyResponse := perform(t, tiny, reviewToolRequest(t, getGateReasonTool, `{"account_id":"0000000000000000000000000000000a","gmail_message_id":"message"}`))
+	if tinyResponse.Code != http.StatusInternalServerError || tinyResponse.Body.String() != "internal_error\n" {
+		t.Fatalf("tiny overflow=%d %q", tinyResponse.Code, tinyResponse.Body.String())
 	}
 }
 

@@ -48,4 +48,7 @@ func TestReviewReadShutdownStopsAdmissionBeforeOneSharedSourceClose(t *testing.T
 	if handlerClose < 0 || sourceClose < 0 || handlerClose > sourceClose || strings.Count(closer[:sourceClose+len("source.Close()")], "source.Close()") != 1 {
 		t.Fatalf("shared close ordering is not handler then one source close")
 	}
+	if strings.Contains(text, "defer mcpCloser.Close()") {
+		t.Fatal("runServe retains a second shared MCP close owner")
+	}
 }

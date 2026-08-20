@@ -5,7 +5,17 @@ import (
 	"testing"
 )
 
+const expectedReviewCandidateSelectSQL = "SELECT messages.account_id, messages.gmail_message_id, messages.gmail_thread_id, messages.metadata_version, messages.metadata_json, messages.metadata_hash, decisions.gate_version, decisions.source_metadata_hash, decisions.input_hash, decisions.outcome, decisions.reason_codes, decisions.evaluated_at_unix_ms FROM inboxgate_accounts AS accounts JOIN inboxgate_account_lifecycle AS lifecycle ON lifecycle.account_id = accounts.account_id AND lifecycle.state = 'active' JOIN inboxgate_messages AS messages ON messages.account_id = accounts.account_id JOIN inboxgate_gate_decisions AS decisions ON decisions.record_id = messages.record_id AND decisions.source_metadata_hash = messages.metadata_hash WHERE (? = 0 OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ? OR messages.account_id = ?) AND decisions.outcome IN ('review_candidate', 'urgent_review_candidate') AND (? = 'all' OR (? = 'standard' AND decisions.outcome = 'review_candidate') OR (? = 'urgent' AND decisions.outcome = 'urgent_review_candidate')) AND (? = 0 OR (messages.account_id COLLATE BINARY, messages.gmail_thread_id COLLATE BINARY, messages.gmail_message_id COLLATE BINARY) > (?, ?, ?)) ORDER BY messages.account_id COLLATE BINARY, messages.gmail_thread_id COLLATE BINARY, messages.gmail_message_id COLLATE BINARY LIMIT ?"
+
+const expectedCurrentGateInspectionSelectSQL = "SELECT messages.account_id, messages.gmail_message_id, messages.gmail_thread_id, messages.metadata_version, messages.metadata_json, messages.metadata_hash, decisions.gate_version, decisions.source_metadata_hash, decisions.input_hash, decisions.outcome, decisions.reason_codes, decisions.evaluated_at_unix_ms FROM inboxgate_accounts AS accounts JOIN inboxgate_account_lifecycle AS lifecycle ON lifecycle.account_id = accounts.account_id AND lifecycle.state = 'active' JOIN inboxgate_messages AS messages ON messages.account_id = accounts.account_id AND messages.gmail_message_id = ? JOIN inboxgate_gate_decisions AS decisions ON decisions.record_id = messages.record_id AND decisions.source_metadata_hash = messages.metadata_hash WHERE accounts.account_id = ? LIMIT 2"
+
 func TestReviewInspectionSQLIsFixedParameterizedAndNarrow(t *testing.T) {
+	if reviewCandidateSelectSQL != expectedReviewCandidateSelectSQL {
+		t.Fatal("candidate SQL differs from independent fixed literal")
+	}
+	if currentGateInspectionSelectSQL != expectedCurrentGateInspectionSelectSQL {
+		t.Fatal("reason SQL differs from independent fixed literal")
+	}
 	for name, statement := range map[string]string{
 		"candidates": reviewCandidateSelectSQL,
 		"reason":     currentGateInspectionSelectSQL,
