@@ -32,7 +32,7 @@
       "path": "close_contract_test.go",
       "source": "local",
       "upstream_sha256": "",
-      "local_sha256": "5324fa81f5e42a4abde2f0038c1f961122647e17d5afc64a942fb7ecf55111b5"
+      "local_sha256": "41937c32064898b45cd2fafe02777af89119166c9e2d784d9872720b3cfec949"
     },
     {
       "path": "driver.go",
@@ -74,7 +74,7 @@
       "path": "session.go",
       "source": "upstream",
       "upstream_sha256": "e3113a9f5438782c52fd8355aaa3452214a82ff3ae2cc3fba2c61c6f8c4b8029",
-      "local_sha256": "43482efef209837b83fe4ac0ff52eda39aff4cf54fd4996e814bb13b6dc08533"
+      "local_sha256": "6d95b86dac86fe2a8377962174990cd2cf8d5099c5b890be9321895ba66d52e6"
     }
   ]
 }

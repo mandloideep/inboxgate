@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +18,16 @@ import (
 )
 
 const ambientCredentialText = "turso fork tests refuse ambient live configuration"
+
+func TestMain(m *testing.M) {
+	_, databaseURLSet := os.LookupEnv("TURSO_DATABASE_URL")
+	_, authTokenSet := os.LookupEnv("TURSO_AUTH_TOKEN")
+	if databaseURLSet || authTokenSet {
+		_, _ = fmt.Fprintln(os.Stderr, ambientCredentialText)
+		os.Exit(2)
+	}
+	os.Exit(m.Run())
+}
 
 type stalledCloseHarness struct {
 	server        *httptest.Server

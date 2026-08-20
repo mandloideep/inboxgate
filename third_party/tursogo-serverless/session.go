@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // EncryptionKeyHeader is the HTTP header that carries the customer-managed
@@ -60,11 +62,27 @@ type session struct {
 
 func newSession(url, authToken, remoteEncryptionKey string) *session {
 	return &session{
-		client:              &http.Client{},
+		client:              &http.Client{Transport: newSessionTransport()},
 		authToken:           authToken,
 		remoteEncryptionKey: remoteEncryptionKey,
 		baseURL:             normalizeURL(url),
 		autocommit:          true,
+	}
+}
+
+func newSessionTransport() *http.Transport {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
 	}
 }
 

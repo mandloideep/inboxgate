@@ -48,6 +48,19 @@ The manifest `normalized_files` allowlist will contain exactly those two paths.
 The semantic `modified_files` allowlist remains exactly `driver.go` and `session.go`.
 No executable token, assertion, fixture value, protocol behavior, or test behavior changes through this normalization.
 
+### Accepted independent-review evidence amendment
+
+Independent correctness, security, and test review required additional evidence without changing the accepted dependency, capability boundary, or two-file semantic allowlist.
+The review-red commit is `f38eb7d77a78f9cf02a381a7a1459439e53cb2b1`.
+It requires the nested fork fixture to bound and validate the exact close body before blocking, register cleanup-only release paths before server shutdown, positively observe request-context cancellation, preserve the exact terminal error through later database close, and prove no replay.
+It also requires 32 synchronized connector close callers plus a sequential repeat to converge on one terminal result, exact acceptance of the ten-second maximum, strict independently pinned provenance evidence, and mandatory nested-module tidy, verify, vet, test, and race gates.
+Nested fork tests must fail closed before running if either `TURSO_DATABASE_URL` or `TURSO_AUTH_TOKEN` is present, and every repository-owned invocation must explicitly remove both variables.
+
+Review also found that calling `CloseIdleConnections` on a client with a nil transport can mutate the process-global default transport.
+Within the accepted `session.go` semantic scope, every session will instead construct and retain its own standard-library transport using the same proxy, dial, HTTP/2, idle, TLS-handshake, and expect-continue defaults previously inherited from `http.DefaultTransport`.
+Stream close will close idle connections only on that owned transport.
+This does not add transport injection, redirect control, proxy selection, a new endpoint, or arbitrary network authority, and it does not close `TURSO-004`.
+
 ### Driver close ownership
 
 `driver.go` will add an explicit connector constructor that accepts a positive bounded fallback close duration.
@@ -68,7 +81,8 @@ The existing `driver.Conn.Close` method will create one context using the config
 Repeated or concurrent closes will wait for or reuse the first terminal result and will not send another request.
 This bounds `database/sql` pool eviction even though `driver.Conn.Close` cannot accept a caller context.
 
-`session.go` will change only `close()` to `close(context.Context) error`.
+`session.go` will change only session transport ownership and `close()` to `close(context.Context) error`.
+Each session will use an owned standard-library transport with the same policy defaults previously inherited from the process-global default transport.
 It will pass that context to the existing single fixed close pipeline, validate the one expected close result, return transport, status, decoding, or protocol failure, reset the stream exactly once, and close idle transport connections before returning.
 It will never replay a failed or uncertain close.
 It will send no request when the session has no baton.
@@ -208,7 +222,7 @@ The fixed two-worker limit prevents unbounded shutdown fanout.
 Explicit transaction commit and rollback still create background-context requests and remain open.
 `TURSO-001` remains open for protocol-controlled authority changes.
 `TURSO-002` remains open for driver diagnostics outside adapter sanitization.
-`TURSO-004` remains open for redirect, transport, and general client policy because this issue changes only close lifecycle.
+`TURSO-004` remains open for redirect and general client policy because owned transport lifetime does not provide policy injection or fail-closed redirect behavior.
 `TURSO-005` remains open for successful-response allocation bounds.
 No persistence feature may describe those remaining risks as remediated.
 
@@ -244,11 +258,15 @@ After acceptance, validation must prove:
 - Never-connected and no-baton connections send no close request.
 - Non-success status, malformed response, protocol error, dropped body, deadline, and cancellation remain bounded, fixed, non-sensitive, and unreplayed.
 - Repeated and concurrent handle and connector closes are idempotent and race-free.
+- Thirty-two synchronized direct connector close callers and one sequential repeat share one exact terminal result and one request.
 - Connector shutdown rejects new connections.
 - `sql.DB.Close` after connector shutdown is local and sends no second request.
 - Pool-eviction `driver.Conn.Close` uses the configured bounded fallback.
+- The exact ten-second constructor maximum is accepted and ten seconds plus one nanosecond is rejected.
+- Each session owns its standard-library transport, close never mutates a substituted process-global transport, and no owned idle connection remains after close.
 - Authorization is absent from every credential-free fixture.
-- Copied source, semantic-diff allowlist, file hashes, MIT notice, module graph, binary replacement metadata, SBOM representation, and all six CGO-disabled builds are exact.
+- Nested fork tests fail closed before execution when either live Turso environment variable is present, and all required nested commands explicitly remove both variables.
+- Copied source, semantic-diff allowlist, independently pinned upstream tree and per-file hashes, strictly decoded bounded provenance, MIT notice, module graph, binary replacement metadata, SBOM representation, and all six CGO-disabled builds are exact.
 - Existing storage, migration, lifecycle, discovery, gate, candidate-content, MCP, and release contracts remain unchanged.
 
 Required commands include 100 focused repetitions, 20 race repetitions, local fork normal and race tests, all storage tests, all repository tests, module tidy and verification, exact module and build-information inspection, vulnerability scanning, `make check`, six release builds, diff checks, protected-file checks, secret and identifier scans, forbidden-authority scans, em dash scans, coauthor scans, and deletion audits.
