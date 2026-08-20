@@ -3,15 +3,16 @@
 InboxGate is a small Go service that keeps high-volume email behind a deterministic review gate before an AI agent sees it.
 The first release will connect multiple Gmail and Google Workspace accounts with read-only access and expose a bounded MCP surface to Hermes.
 
-The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, bounded process-health serving, and one authenticated stateless MCP capability endpoint.
-Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, local service preflight, and authenticated `system_capabilities` inspection are implemented.
+The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, bounded process-health serving, and one authenticated stateless MCP endpoint.
+Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, local service preflight, authenticated `system_capabilities` inspection, and gated account-status inspection are implemented.
 A replaceable Turso adapter with a provenance-pinned maintained fork for bounded stream close, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, versioned authenticated encryption, a one-shot Gmail OAuth enrollment command, an inert bounded Gmail current-discovery use case, an inert deterministic persisted gate, and inert bounded candidate-content extraction are present with remaining driver behavior tracked in the [known-risk register](docs/known-risks.md).
 Credential persistence stores only validated ciphertext envelopes and is covered by the same credential-free literal-loopback restriction as migrations and account-cursor persistence.
 Versioned account lifecycle state supports bounded listing, pause, resume, typed reauthorization markers, enrollment activation, and staged provider revocation with exact local credential deletion.
 The `account add` command resolves its selected Google, encryption, and database environment values and reaches OAuth, cryptobox, and credential-free literal-loopback Turso persistence.
 The `account list`, `account pause`, and `account resume` commands resolve only selected database environment values, while `account revoke` resolves the selected encryption key only after winning a durable revoked-attempting claim and makes at most one bounded fixed-authority provider request.
 The doctor, configuration inspection, capability inspection, and MCP-disabled health service remain inert and do not resolve those values.
-Enabled `serve` resolves only the environment variable selected by `mcp.bearer_token_env`, validates one canonical 32-byte bearer token encoding before bind, and exposes only MCP `2026-07-28` discovery, tools/list, and `system_capabilities` on the exact configured private path.
+Enabled `serve` validates the environment variable selected by `mcp.bearer_token_env` before bind and always exposes MCP `2026-07-28` discovery, tools/list, and `system_capabilities` on the exact configured private path.
+When `mcp.enable_operator_tools` is also true, `serve` additionally requires credential-free literal-loopback storage and exposes only the bounded read-only `accounts_list` and `mail_sync_status` tools.
 The current-discovery use case reconciles storage before provider work, refreshes one access token once, reads at most ten fixed Gmail history pages, fetches body-excluding projected metadata for at most 5,000 unique messages, and advances the exact cursor only with canonical message promotion.
 It treats stale history separately from authorization failure, omits vanished messages, applies four-attempt bounded retry rules only to documented transient failures, and never fetches message bodies or attachment bytes.
 It remains credential-free and disconnected from commands, service startup, health, capabilities, scheduling, MCP, remote Turso, and every executable runtime path.
@@ -46,7 +47,8 @@ The capabilities command prints compile-time implementation, validated configura
 Environment-variable names in capability output may be sensitive even though their values are never read.
 The doctor command validates local service construction without opening a listener.
 The serve command always exposes fixed liveness and process-readiness probes.
-When `mcp.enabled` is true, it additionally requires the selected MCP token before bind and registers only the exact authenticated `system_capabilities` route.
+When `mcp.enabled` is true, it additionally requires the selected MCP token before bind and registers the exact authenticated MCP route with `system_capabilities`.
+When `mcp.enable_operator_tools` is also true, the same route adds tenant-wide `accounts_list` and `mail_sync_status` for the one owner-approved Hermes principal after credential-free literal-loopback storage validation.
 The service must bind only to an approved private interface or private reverse-proxy path and this implementation is not deployment authorization.
 See the [configuration guide](docs/configuration.md) and [complete example](config.example.yaml).
 
