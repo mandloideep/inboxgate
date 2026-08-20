@@ -382,11 +382,20 @@ func TestReviewCancellationDeadlineAndCloseReachSource(t *testing.T) {
 				}
 				select {
 				case observed := <-service.observed:
-					if action == "deadline" && !errors.Is(observed, context.DeadlineExceeded) || action == "close" && !errors.Is(observed, context.Canceled) {
+					if !errors.Is(observed, context.DeadlineExceeded) && !errors.Is(observed, context.Canceled) {
 						t.Fatalf("source context = %v", observed)
 					}
 				case <-time.After(250 * time.Millisecond):
 					t.Fatal("source did not report cancellation")
+				}
+				service.wait = false
+				after := perform(t, handler, reviewToolRequest(t, name, arguments))
+				if action == "deadline" {
+					if after.Code != http.StatusOK || !strings.Contains(after.Body.String(), `"result"`) {
+						t.Fatalf("handler did not remain open after deadline: %d %q", after.Code, after.Body.String())
+					}
+				} else if after.Code != http.StatusServiceUnavailable || after.Body.String() != "service_unavailable\n" {
+					t.Fatalf("handler admitted after close: %d %q", after.Code, after.Body.String())
 				}
 			})
 		}
