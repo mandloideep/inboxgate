@@ -311,7 +311,6 @@ func TestGateReasonReturnsAllCurrentOutcomesAndClosedSortedReasons(t *testing.T)
 	policies = append(policies, excluded)
 	bulk := config.Defaults().Gate
 	bulk.DirectRecipientIsCandidate = false
-	bulk.SuppressGmailCategories = []string{"INBOX"}
 	policies = append(policies, bulk)
 	urgent := config.Defaults().Gate
 	urgent.SenderAllowDomains = []string{"example.test"}
@@ -321,11 +320,22 @@ func TestGateReasonReturnsAllCurrentOutcomesAndClosedSortedReasons(t *testing.T)
 	for _, policy := range policies {
 		message := reviewMessage(t, reviewAccountA, "thread", "message", "Sender", "Subject", 42, 0)
 		decision := reviewDecision(t, message, policy, 1000)
-		service := reviewService(t, &reviewSourceStub{reason: storage.CurrentGateInspection{Message: message, Decision: decision}})
+		service := reviewService(t, &reviewSourceStub{reason: storage.CurrentGateInspection{Message: message, Decision: decision}}, func(configuration *config.Config) {
+			configuration.Gate = policy
+		})
 		result, err := service.GateReason(context.Background(), GateReasonRequest{AccountID: reviewAccountA, GmailMessageID: "message"})
 		if err != nil || !result.SourceCurrent || !result.PolicyCurrent || result.Outcome != decision.Outcome().String() || !reflect.DeepEqual(result.ReasonCodes, stringsToReasons(decision.ReasonCodes())) {
 			t.Fatalf("policy outcome %q result=%#v error=%v", decision.Outcome(), result, err)
 		}
+	}
+
+	message := reviewMessage(t, reviewAccountA, "thread", "message", "Sender", "Subject", 42, 0)
+	stalePolicy := config.Defaults().Gate
+	stalePolicy.DirectRecipientIsCandidate = false
+	source := &reviewSourceStub{reason: storage.CurrentGateInspection{Message: message, Decision: reviewDecision(t, message, stalePolicy, 1000)}}
+	result, err := reviewService(t, source).GateReason(context.Background(), GateReasonRequest{AccountID: reviewAccountA, GmailMessageID: "message"})
+	if !errors.Is(err, ErrUnavailable) || result != (GateReason{}) || source.reasonCalls.Load() != 1 {
+		t.Fatalf("stale policy result=%#v error=%v calls=%d", result, err, source.reasonCalls.Load())
 	}
 }
 
