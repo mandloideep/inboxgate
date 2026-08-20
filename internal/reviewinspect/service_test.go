@@ -334,7 +334,7 @@ func TestGateReasonReturnsAllCurrentOutcomesAndClosedSortedReasons(t *testing.T)
 	stalePolicy.DirectRecipientIsCandidate = false
 	source := &reviewSourceStub{reason: storage.CurrentGateInspection{Message: message, Decision: reviewDecision(t, message, stalePolicy, 1000)}}
 	result, err := reviewService(t, source).GateReason(context.Background(), GateReasonRequest{AccountID: reviewAccountA, GmailMessageID: "message"})
-	if !errors.Is(err, ErrUnavailable) || result != (GateReason{}) || source.reasonCalls.Load() != 1 {
+	if !errors.Is(err, ErrUnavailable) || !reflect.DeepEqual(result, GateReason{}) || source.reasonCalls.Load() != 1 {
 		t.Fatalf("stale policy result=%#v error=%v calls=%d", result, err, source.reasonCalls.Load())
 	}
 }
