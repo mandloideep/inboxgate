@@ -51,6 +51,7 @@ func TestCapabilityRegistryDefaultContract(t *testing.T) {
 		CapabilityGmailRead,
 		CapabilityMailReviewRead,
 		CapabilityMailReviewWrite,
+		CapabilitySystemAccountStatus,
 		CapabilitySystemCapabilities,
 		CapabilityVikunjaWrite,
 		CapabilityZohoRead,
@@ -68,11 +69,14 @@ func TestCapabilityRegistryDefaultContract(t *testing.T) {
 		if capability.RequiredSecretNames == nil {
 			t.Errorf("capability %q has nil required secret names", capability.Name)
 		}
-		if capability.RequiredDatabaseMigration != nil {
+		if capability.Name != CapabilitySystemAccountStatus && capability.RequiredDatabaseMigration != nil {
 			t.Errorf("capability %q migration = %q, want nil", capability.Name, *capability.RequiredDatabaseMigration)
 		}
+		if capability.Name == CapabilitySystemAccountStatus && (capability.RequiredDatabaseMigration == nil || *capability.RequiredDatabaseMigration != "0004_account_lifecycle.sql") {
+			t.Errorf("account status migration = %#v", capability.RequiredDatabaseMigration)
+		}
 	}
-	system := registry[6]
+	system := registry[7]
 	if system.ImplementationStatus != ImplementationStatusImplemented || system.ConfigurationStatus != ConfigurationStatusNotConfigurable || !system.Enabled || system.SecurityClassification != SecurityOperationalMetadata {
 		t.Errorf("system capability = %#v", system)
 	}
@@ -227,6 +231,7 @@ encryption: {master_key_env: CUSTOM_MASTER_KEY}
 
 	gmailSecrets := []string{"CUSTOM_CLIENT_ID", "CUSTOM_CLIENT_SECRET", "CUSTOM_DATABASE_TOKEN", "CUSTOM_DATABASE_URL", "CUSTOM_MASTER_KEY", "CUSTOM_REDIRECT_URL"}
 	reviewSecrets := []string{"CUSTOM_DATABASE_TOKEN", "CUSTOM_DATABASE_URL"}
+	accountStatusSecrets := []string{"CUSTOM_DATABASE_TOKEN", "CUSTOM_DATABASE_URL", "INBOXGATE_MCP_TOKEN"}
 	registry := CapabilityRegistry(configuration)
 	for _, capability := range registry {
 		var want []string
@@ -235,6 +240,8 @@ encryption: {master_key_env: CUSTOM_MASTER_KEY}
 			want = gmailSecrets
 		case CapabilityMailReviewRead, CapabilityMailReviewWrite:
 			want = reviewSecrets
+		case CapabilitySystemAccountStatus:
+			want = accountStatusSecrets
 		default:
 			want = []string{}
 		}

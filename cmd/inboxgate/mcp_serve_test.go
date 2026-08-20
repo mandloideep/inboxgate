@@ -236,7 +236,7 @@ func TestRealProcessSyntheticLoopbackMCPAndHealth(t *testing.T) {
 			} `json:"structuredContent"`
 		} `json:"result"`
 	}
-	if err := json.Unmarshal(responseBody, &envelope); err != nil || envelope.Result.StructuredContent.ProtocolVersion != "2026-07-28" || len(envelope.Result.StructuredContent.Capabilities) != 9 {
+	if err := json.Unmarshal(responseBody, &envelope); err != nil || envelope.Result.StructuredContent.ProtocolVersion != "2026-07-28" || len(envelope.Result.StructuredContent.Capabilities) != 10 {
 		t.Fatalf("synthetic MCP response contract failed")
 	}
 	if err := process.Process.Signal(os.Interrupt); err != nil {

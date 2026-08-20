@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mandloideep/inboxgate/internal/accountstatusview"
 	"github.com/mandloideep/inboxgate/internal/buildmeta"
 	"github.com/mandloideep/inboxgate/internal/config"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,6 +34,8 @@ const (
 	MaximumResponseBytes      = 65_536
 	MaximumConcurrentRequests = 16
 	applicationTimeout        = 5 * time.Second
+	toolAccountsList          = "accounts_list"
+	toolMailSyncStatus        = "mail_sync_status"
 	systemCapabilitiesTool    = "system_capabilities"
 )
 
@@ -44,6 +47,11 @@ type Options struct {
 	BinaryCommit  string
 	BearerToken   []byte
 	AuditOutput   io.Writer
+	AccountStatus accountStatusService
+}
+
+type accountStatusService interface {
+	Snapshot(context.Context) (accountstatusview.Snapshot, error)
 }
 
 type Option func(*Handler)
@@ -66,6 +74,7 @@ type Handler struct {
 	binaryCommit       string
 	token              []byte
 	audit              *slog.Logger
+	accountStatus      accountStatusService
 	sdk                http.Handler
 	rootContext        context.Context
 	rootCancel         context.CancelFunc
@@ -103,12 +112,18 @@ func New(options Options, modifiers ...Option) (*Handler, error) {
 		binaryVersion:      options.BinaryVersion,
 		binaryCommit:       options.BinaryCommit,
 		token:              decoded,
+		accountStatus:      options.AccountStatus,
 		rootContext:        rootContext,
 		rootCancel:         rootCancel,
 		applicationTimeout: applicationTimeout,
 		responseLimit:      MaximumResponseBytes,
 		admission:          make(chan struct{}, MaximumConcurrentRequests),
 		requests:           make(map[*activeRequest]struct{}),
+	}
+	if options.Configuration.MCP.Enabled && options.Configuration.MCP.EnableOperatorTools && options.AccountStatus == nil {
+		handler.rootCancel()
+		clear(handler.token)
+		return nil, errors.New("missing account status service")
 	}
 	for _, modifier := range modifiers {
 		modifier(handler)
@@ -285,6 +300,11 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	classification := classifyEnvelope(body)
+	if classification.Code == 0 && classification.Method == "tools/call" &&
+		(classification.Name == toolAccountsList || classification.Name == toolMailSyncStatus) &&
+		!handler.configuration.MCP.EnableOperatorTools {
+		classification = classification.withError(-32601)
+	}
 	if classification.Method == "notifications/initialized" {
 		status = http.StatusBadRequest
 		writeFixed(response, false, status, "invalid_mcp_request", "", "")
@@ -338,6 +358,12 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	if buffer.exceeded {
 		status = http.StatusInternalServerError
 		writeFixed(response, false, status, "internal_error", "", "")
+		return
+	}
+	if buffer.body.Len() == 0 && classification.Method == "tools/call" &&
+		(classification.Name == toolAccountsList || classification.Name == toolMailSyncStatus) {
+		status = http.StatusOK
+		status = writeJSONRPCError(response, status, -32603, classification.ID)
 		return
 	}
 	if classification.Code == -32700 {
@@ -445,6 +471,9 @@ func (handler *Handler) newSDKHandler() http.Handler {
 	})
 	destructive := false
 	openWorld := false
+	if handler.configuration.MCP.EnableOperatorTools {
+		handler.addAccountStatusTools(server, &destructive, &openWorld)
+	}
 	server.AddTool(&mcpsdk.Tool{
 		Name:        systemCapabilitiesTool,
 		Description: "Return the current binary and configured capability registry.",
@@ -466,6 +495,113 @@ func (handler *Handler) newSDKHandler() http.Handler {
 		MaxRequestBodyBytes:          int64(min(int(handler.configuration.Server.MaxRequestBytes), MaximumRequestBytes)),
 		PropagateRequestCancellation: true,
 	})
+}
+
+func (handler *Handler) addAccountStatusTools(server *mcpsdk.Server, destructive, openWorld *bool) {
+	annotations := &mcpsdk.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: destructive, IdempotentHint: true, OpenWorldHint: openWorld}
+	schema := map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
+	server.AddTool(&mcpsdk.Tool{
+		Name: toolAccountsList, Description: "List bounded enrolled-account lifecycle summaries.", InputSchema: schema, Annotations: annotations,
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		snapshot, err := handler.accountStatus.Snapshot(ctx)
+		if err != nil {
+			return nil, errors.New("application failure")
+		}
+		data, err := renderAccountsList(snapshot)
+		if err != nil {
+			return nil, errors.New("application failure")
+		}
+		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{}, StructuredContent: json.RawMessage(data)}, nil
+	})
+	server.AddTool(&mcpsdk.Tool{
+		Name: toolMailSyncStatus, Description: "Return bounded synchronization availability for enrolled accounts.", InputSchema: schema, Annotations: annotations,
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		snapshot, err := handler.accountStatus.Snapshot(ctx)
+		if err != nil {
+			return nil, errors.New("application failure")
+		}
+		data, err := renderMailSyncStatus(snapshot)
+		if err != nil {
+			return nil, errors.New("application failure")
+		}
+		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{}, StructuredContent: json.RawMessage(data)}, nil
+	})
+}
+
+type accountsListOutput struct {
+	OutputVersion uint64               `json:"output_version"`
+	Accounts      []accountListSummary `json:"accounts"`
+}
+
+type accountListSummary struct {
+	AccountID             string  `json:"account_id"`
+	Provider              string  `json:"provider"`
+	State                 string  `json:"state"`
+	StateVersion          int64   `json:"state_version"`
+	ReauthorizationReason *string `json:"reauthorization_reason"`
+	RevocationStatus      string  `json:"revocation_status"`
+}
+
+func renderAccountsList(snapshot accountstatusview.Snapshot) ([]byte, error) {
+	output := accountsListOutput{OutputVersion: accountstatusview.OutputVersion, Accounts: make([]accountListSummary, 0, len(snapshot.Accounts))}
+	for _, account := range snapshot.Accounts {
+		output.Accounts = append(output.Accounts, accountListSummary{
+			AccountID: account.AccountID, Provider: account.Provider, State: account.State, StateVersion: account.StateVersion,
+			ReauthorizationReason: account.ReauthorizationReason, RevocationStatus: account.RevocationStatus,
+		})
+	}
+	return json.Marshal(output)
+}
+
+type mailSyncStatusOutput struct {
+	OutputVersion uint64                    `json:"output_version"`
+	Accounts      []accountSyncStatusOutput `json:"accounts"`
+}
+
+type accountSyncStatusOutput struct {
+	AccountID   string                  `json:"account_id"`
+	CurrentSync currentSyncStatusOutput `json:"current_sync"`
+	Backfill    backfillStatusOutput    `json:"backfill"`
+}
+
+type currentSyncStatusOutput struct {
+	ImplementationStatus config.ImplementationStatus    `json:"implementation_status"`
+	ConfigurationStatus  config.ConfigurationStatus     `json:"configuration_status"`
+	Enabled              bool                           `json:"enabled"`
+	ExecutionStatus      accountstatusview.Availability `json:"execution_status"`
+	CursorStatus         accountstatusview.CursorStatus `json:"cursor_status"`
+	StaleStatus          accountstatusview.Persistence  `json:"stale_status"`
+	LastSuccessAt        *string                        `json:"last_success_at"`
+	LastErrorCategory    *string                        `json:"last_error_category"`
+}
+
+type backfillStatusOutput struct {
+	ImplementationStatus config.ImplementationStatus    `json:"implementation_status"`
+	ConfigurationStatus  config.ConfigurationStatus     `json:"configuration_status"`
+	Enabled              bool                           `json:"enabled"`
+	ExecutionStatus      accountstatusview.Availability `json:"execution_status"`
+	CheckpointStatus     accountstatusview.Persistence  `json:"checkpoint_status"`
+	Progress             *uint64                        `json:"progress"`
+}
+
+func renderMailSyncStatus(snapshot accountstatusview.Snapshot) ([]byte, error) {
+	output := mailSyncStatusOutput{OutputVersion: accountstatusview.OutputVersion, Accounts: make([]accountSyncStatusOutput, 0, len(snapshot.Accounts))}
+	for _, account := range snapshot.Accounts {
+		output.Accounts = append(output.Accounts, accountSyncStatusOutput{
+			AccountID: account.AccountID,
+			CurrentSync: currentSyncStatusOutput{
+				ImplementationStatus: snapshot.CurrentSync.ImplementationStatus, ConfigurationStatus: snapshot.CurrentSync.ConfigurationStatus,
+				Enabled: snapshot.CurrentSync.Enabled, ExecutionStatus: account.CurrentExecutionStatus, CursorStatus: account.CursorStatus,
+				StaleStatus: account.CurrentStaleStatus, LastSuccessAt: account.LastSuccessAt, LastErrorCategory: account.LastErrorCategory,
+			},
+			Backfill: backfillStatusOutput{
+				ImplementationStatus: snapshot.Backfill.ImplementationStatus, ConfigurationStatus: snapshot.Backfill.ConfigurationStatus,
+				Enabled: snapshot.Backfill.Enabled, ExecutionStatus: account.BackfillExecutionStatus,
+				CheckpointStatus: account.BackfillCheckpointStatus, Progress: account.BackfillProgress,
+			},
+		})
+	}
+	return json.Marshal(output)
 }
 
 type renderedCapability struct {
@@ -575,8 +711,15 @@ func operationForHeaders(header http.Header) string {
 			return "mcp.tools_list"
 		}
 	case "tools/call":
-		if methodOK && nameOK && name == systemCapabilitiesTool {
-			return "mcp.system_capabilities"
+		if methodOK && nameOK {
+			switch name {
+			case toolAccountsList:
+				return "mcp.accounts_list"
+			case toolMailSyncStatus:
+				return "mcp.mail_sync_status"
+			case systemCapabilitiesTool:
+				return "mcp.system_capabilities"
+			}
 		}
 	}
 	return "mcp.other"

@@ -110,6 +110,22 @@
       "security_classification": "sensitive_write"
     },
     {
+      "name": "system.account_status",
+      "implementation_status": "implemented",
+      "configuration_status": "disabled",
+      "enabled": false,
+      "missing_prerequisites": [
+        "disabled_by_configuration"
+      ],
+      "required_secret_names": [
+        "INBOXGATE_MCP_TOKEN",
+        "SYNTHETIC_DATABASE_TOKEN",
+        "SYNTHETIC_DATABASE_URL"
+      ],
+      "required_database_migration": "0004_account_lifecycle.sql",
+      "security_classification": "sensitive_read"
+    },
+    {
       "name": "system.capabilities",
       "implementation_status": "implemented",
       "configuration_status": "not_configurable",
