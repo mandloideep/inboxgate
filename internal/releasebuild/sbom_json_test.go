@@ -1,6 +1,10 @@
 package releasebuild
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +123,21 @@ func TestValidateSBOMJSONTokenBoundaryUsesFullDocumentCount(t *testing.T) {
 	}
 	if err := validateRawSBOM(t, over); err == nil || err.Error() != "SBOM JSON structure is invalid" {
 		t.Fatalf("ValidateSBOM over-bound error = %v, want fixed structural rejection", err)
+	}
+}
+
+func independentSBOMJSONTokenCount(data []byte) (int, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	count := 0
+	for {
+		_, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return count, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		count++
 	}
 }
 
