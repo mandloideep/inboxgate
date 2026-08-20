@@ -92,6 +92,36 @@ func TestValidateSBOMJSONPreflightHasLiteralSizeDepthAndTokenBounds(t *testing.T
 	}
 }
 
+func TestValidateSBOMJSONTokenBoundaryUsesFullDocumentCount(t *testing.T) {
+	valid := string(validSBOMJSON(t))
+	baseTokens, err := independentSBOMJSONTokenCount([]byte(valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const literalMaximumTokens = 131_072
+	paddingScalars := literalMaximumTokens - baseTokens - 3
+	if paddingScalars < 1 {
+		t.Fatalf("valid SBOM token count = %d, no room for independent padding", baseTokens)
+	}
+	withPadding := func(scalars int) string {
+		return `{"padding":[` + strings.TrimSuffix(strings.Repeat("0,", scalars), ",") + `],` + valid[1:]
+	}
+	exact := withPadding(paddingScalars)
+	if tokens, countErr := independentSBOMJSONTokenCount([]byte(exact)); countErr != nil || tokens != literalMaximumTokens {
+		t.Fatalf("exact-bound token count = %d, error = %v, want %d", tokens, countErr, literalMaximumTokens)
+	}
+	if err := validateRawSBOM(t, exact); err != nil {
+		t.Fatalf("ValidateSBOM rejected exact literal token limit: %v", err)
+	}
+	over := withPadding(paddingScalars + 1)
+	if tokens, countErr := independentSBOMJSONTokenCount([]byte(over)); countErr != nil || tokens != literalMaximumTokens+1 {
+		t.Fatalf("over-bound token count = %d, error = %v, want %d", tokens, countErr, literalMaximumTokens+1)
+	}
+	if err := validateRawSBOM(t, over); err == nil || err.Error() != "SBOM JSON structure is invalid" {
+		t.Fatalf("ValidateSBOM over-bound error = %v, want fixed structural rejection", err)
+	}
+}
+
 func validateRawSBOM(t *testing.T, raw string) error {
 	t.Helper()
 	directory := t.TempDir()
