@@ -3,6 +3,8 @@ package accountstatus
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -35,18 +37,103 @@ func (source *sourceStub) ListAccounts(ctx context.Context) ([]storage.AccountSu
 }
 
 func summary(t *testing.T, rawID string, state storage.AccountState, cursor bool) storage.AccountSummary {
+	return lifecycleSummary(t, rawID, state, 2, nil, storage.RevocationStatusNone, cursor)
+}
+
+func lifecycleSummary(t *testing.T, rawID string, state storage.AccountState, versionValue int64, reason *storage.ReauthorizationReason, revocation storage.RevocationStatus, cursor bool) storage.AccountSummary {
 	t.Helper()
 	id, err := storage.ParseAccountID(rawID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err := storage.ParseLifecycleVersion(2)
+	version, err := storage.ParseLifecycleVersion(versionValue)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return storage.AccountSummary{
 		AccountID: id, Provider: storage.ProviderGmail, State: state, StateVersion: version,
-		RevocationStatus: storage.RevocationStatusNone, CursorPresent: cursor,
+		ReauthorizationReason: reason, RevocationStatus: revocation, CursorPresent: cursor,
+	}
+}
+
+func TestSnapshotCoversEveryLifecycleShapeAndVersionBoundary(t *testing.T) {
+	reasons := []storage.ReauthorizationReason{
+		storage.ReauthorizationReasonRefreshInvalidGrant,
+		storage.ReauthorizationReasonRefreshAdminPolicyEnforced,
+		storage.ReauthorizationReasonGmailUnauthorizedAfterRefresh,
+		storage.ReauthorizationReasonGmailDomainPolicy,
+	}
+	revocations := []storage.RevocationStatus{
+		storage.RevocationStatusPending,
+		storage.RevocationStatusAttempting,
+		storage.RevocationStatusConfirmed,
+		storage.RevocationStatusManualActionRequired,
+	}
+	accounts := []storage.AccountSummary{
+		lifecycleSummary(t, fmt.Sprintf("%032x", 1), storage.AccountStatePending, 1, nil, storage.RevocationStatusNone, false),
+		lifecycleSummary(t, fmt.Sprintf("%032x", 2), storage.AccountStateActive, 2, nil, storage.RevocationStatusNone, true),
+		lifecycleSummary(t, fmt.Sprintf("%032x", 3), storage.AccountStatePaused, 2, nil, storage.RevocationStatusNone, false),
+	}
+	for index := range reasons {
+		reason := reasons[index]
+		accounts = append(accounts, lifecycleSummary(t, fmt.Sprintf("%032x", len(accounts)+1), storage.AccountStateReauthorizationRequired, 2, &reason, storage.RevocationStatusNone, index%2 == 0))
+	}
+	for index, revocation := range revocations {
+		version := int64(2)
+		if index == len(revocations)-1 {
+			version = math.MaxInt64
+		}
+		accounts = append(accounts, lifecycleSummary(t, fmt.Sprintf("%032x", len(accounts)+1), storage.AccountStateRevoked, version, nil, revocation, index%2 == 0))
+	}
+	service, err := New(&sourceStub{accounts: accounts}, config.CapabilityRegistry(operatorConfiguration()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := service.Snapshot(context.Background())
+	if err != nil || len(snapshot.Accounts) != len(accounts) {
+		t.Fatalf("Snapshot() = (%#v, %v)", snapshot, err)
+	}
+	for index, got := range snapshot.Accounts {
+		want := accounts[index]
+		if got.AccountID != want.AccountID.String() || got.State != want.State.String() || got.StateVersion != want.StateVersion.Int64() || got.RevocationStatus != want.RevocationStatus.String() {
+			t.Fatalf("account[%d] = %#v, source = %#v", index, got, want)
+		}
+		if want.ReauthorizationReason == nil && got.ReauthorizationReason != nil || want.ReauthorizationReason != nil && (got.ReauthorizationReason == nil || *got.ReauthorizationReason != want.ReauthorizationReason.String()) {
+			t.Fatalf("account[%d] reason = %#v", index, got.ReauthorizationReason)
+		}
+	}
+}
+
+func TestSnapshotRejectsEveryLifecycleCrossFieldMismatch(t *testing.T) {
+	reason := storage.ReauthorizationReasonRefreshInvalidGrant
+	invalid := []struct {
+		name       string
+		state      storage.AccountState
+		reason     *storage.ReauthorizationReason
+		revocation storage.RevocationStatus
+	}{
+		{name: "pending reason", state: storage.AccountStatePending, reason: &reason, revocation: storage.RevocationStatusNone},
+		{name: "pending revocation", state: storage.AccountStatePending, revocation: storage.RevocationStatusPending},
+		{name: "active reason", state: storage.AccountStateActive, reason: &reason, revocation: storage.RevocationStatusNone},
+		{name: "active revocation", state: storage.AccountStateActive, revocation: storage.RevocationStatusPending},
+		{name: "paused reason", state: storage.AccountStatePaused, reason: &reason, revocation: storage.RevocationStatusNone},
+		{name: "paused revocation", state: storage.AccountStatePaused, revocation: storage.RevocationStatusPending},
+		{name: "reauthorization missing reason", state: storage.AccountStateReauthorizationRequired, revocation: storage.RevocationStatusNone},
+		{name: "reauthorization revocation", state: storage.AccountStateReauthorizationRequired, reason: &reason, revocation: storage.RevocationStatusPending},
+		{name: "revoked missing status", state: storage.AccountStateRevoked, revocation: storage.RevocationStatusNone},
+		{name: "revoked reason", state: storage.AccountStateRevoked, reason: &reason, revocation: storage.RevocationStatusPending},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			row := lifecycleSummary(t, accountIDA, test.state, 2, test.reason, test.revocation, false)
+			service, err := New(&sourceStub{accounts: []storage.AccountSummary{row}}, config.CapabilityRegistry(operatorConfiguration()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.Snapshot(context.Background()); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("Snapshot() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -189,7 +276,12 @@ func TestRegistryCompositionFailsClosedOnMissingDuplicateMalformedOrEnabledEntri
 		{name: "missing backfill", mutate: func(values []config.Capability) []config.Capability {
 			return removeCapability(values, config.CapabilityGmailBackfill)
 		}},
-		{name: "duplicate", mutate: func(values []config.Capability) []config.Capability { return append(values, values[0]) }},
+		{name: "duplicate current", mutate: func(values []config.Capability) []config.Capability {
+			return duplicateCapability(values, config.CapabilityGmailCurrentSync)
+		}},
+		{name: "duplicate backfill", mutate: func(values []config.Capability) []config.Capability {
+			return duplicateCapability(values, config.CapabilityGmailBackfill)
+		}},
 		{name: "unexpected current enabled", mutate: func(values []config.Capability) []config.Capability {
 			for index := range values {
 				if values[index].Name == config.CapabilityGmailCurrentSync {
@@ -206,13 +298,22 @@ func TestRegistryCompositionFailsClosedOnMissingDuplicateMalformedOrEnabledEntri
 			}
 			return values
 		}},
-		{name: "malformed status", mutate: func(values []config.Capability) []config.Capability {
+		{name: "malformed current implementation", mutate: func(values []config.Capability) []config.Capability {
 			for index := range values {
 				if values[index].Name == config.CapabilityGmailCurrentSync {
 					values[index].ImplementationStatus = "other"
 				}
 			}
 			return values
+		}},
+		{name: "malformed current configuration", mutate: func(values []config.Capability) []config.Capability {
+			return mutateCapability(values, config.CapabilityGmailCurrentSync, func(value *config.Capability) { value.ConfigurationStatus = "other" })
+		}},
+		{name: "malformed backfill implementation", mutate: func(values []config.Capability) []config.Capability {
+			return mutateCapability(values, config.CapabilityGmailBackfill, func(value *config.Capability) { value.ImplementationStatus = "other" })
+		}},
+		{name: "malformed backfill configuration", mutate: func(values []config.Capability) []config.Capability {
+			return mutateCapability(values, config.CapabilityGmailBackfill, func(value *config.Capability) { value.ConfigurationStatus = "other" })
 		}},
 	}
 	for _, test := range tests {
@@ -223,6 +324,24 @@ func TestRegistryCompositionFailsClosedOnMissingDuplicateMalformedOrEnabledEntri
 			}
 		})
 	}
+}
+
+func duplicateCapability(values []config.Capability, name config.CapabilityName) []config.Capability {
+	for _, value := range values {
+		if value.Name == name {
+			return append(values, value)
+		}
+	}
+	return values
+}
+
+func mutateCapability(values []config.Capability, name config.CapabilityName, mutate func(*config.Capability)) []config.Capability {
+	for index := range values {
+		if values[index].Name == name {
+			mutate(&values[index])
+		}
+	}
+	return values
 }
 
 func removeCapability(values []config.Capability, name config.CapabilityName) []config.Capability {
