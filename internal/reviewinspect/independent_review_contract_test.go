@@ -394,3 +394,42 @@ func TestReviewServiceConstructionFailsClosedOnEntropyFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewServiceClonesCompleteGatePolicyAtConstruction(t *testing.T) {
+	policy := config.Defaults().Gate
+	policy.ExcludedLabels = []string{"SPAM", "TRASH"}
+	policy.SuppressGmailCategories = []string{"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"}
+	policy.SenderAllowDomains = []string{"allowed.example.test"}
+	policy.SenderBlockDomains = []string{"blocked.example.test"}
+	policy.SubjectCandidateTerms = []string{"candidate"}
+	policy.SubjectUrgentTerms = []string{"urgent"}
+	want := policy
+	want.ExcludedLabels = slices.Clone(policy.ExcludedLabels)
+	want.SuppressGmailCategories = slices.Clone(policy.SuppressGmailCategories)
+	want.SenderAllowDomains = slices.Clone(policy.SenderAllowDomains)
+	want.SenderBlockDomains = slices.Clone(policy.SenderBlockDomains)
+	want.SubjectCandidateTerms = slices.Clone(policy.SubjectCandidateTerms)
+	want.SubjectUrgentTerms = slices.Clone(policy.SubjectUrgentTerms)
+
+	service, err := newWithCursorKey(&reviewSourceStub{}, policy, config.Defaults().Review, [32]byte{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := service.requestBinding(ListRequest{}, storage.ReviewUrgencyAll, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.ExcludedLabels[0] = "INBOX"
+	policy.SuppressGmailCategories[0] = "CATEGORY_UPDATES"
+	policy.SenderAllowDomains[0] = "changed-allow.example.test"
+	policy.SenderBlockDomains[0] = "changed-block.example.test"
+	policy.SubjectCandidateTerms[0] = "changed-candidate"
+	policy.SubjectUrgentTerms[0] = "changed-urgent"
+	after, err := service.requestBinding(ListRequest{}, storage.ReviewUrgencyAll, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(service.policy, want) || !slices.Equal(before, after) {
+		t.Fatalf("service policy changed after caller mutation: %#v", service.policy)
+	}
+}

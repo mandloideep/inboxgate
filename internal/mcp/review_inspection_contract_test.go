@@ -18,7 +18,10 @@ import (
 	"time"
 
 	"github.com/mandloideep/inboxgate/internal/config"
+	"github.com/mandloideep/inboxgate/internal/gate"
+	"github.com/mandloideep/inboxgate/internal/mail"
 	"github.com/mandloideep/inboxgate/internal/reviewinspect"
+	"github.com/mandloideep/inboxgate/internal/storage"
 )
 
 const (
@@ -86,7 +89,7 @@ func reviewInspectionConfiguration() config.Config {
 	return configuration
 }
 
-func reviewInspectionHandler(t *testing.T, service *reviewInspectionStub, audit io.Writer, modifiers ...Option) *Handler {
+func reviewInspectionHandler(t *testing.T, service reviewInspectionService, audit io.Writer, modifiers ...Option) *Handler {
 	t.Helper()
 	handler, err := New(Options{
 		Configuration: reviewInspectionConfiguration(), BinaryVersion: "dev", BearerToken: []byte(canonicalToken()),
@@ -97,6 +100,53 @@ func reviewInspectionHandler(t *testing.T, service *reviewInspectionStub, audit 
 	}
 	t.Cleanup(func() { _ = handler.Close() })
 	return handler
+}
+
+type reviewCursorSource struct {
+	rows  []storage.ReviewCandidateRow
+	calls atomic.Int64
+}
+
+func (source *reviewCursorSource) ListReviewCandidates(context.Context, storage.ReviewCandidateQuery) ([]storage.ReviewCandidateRow, error) {
+	source.calls.Add(1)
+	return slices.Clone(source.rows), nil
+}
+
+func (source *reviewCursorSource) GetCurrentGateInspection(context.Context, storage.AccountID, string) (storage.CurrentGateInspection, error) {
+	return storage.CurrentGateInspection{}, storage.ErrReviewInspectionNotFound
+}
+
+func reviewCursorRow(t *testing.T) storage.ReviewCandidateRow {
+	t.Helper()
+	message, err := mail.Normalize("0000000000000000000000000000000a", mail.MessageInput{
+		GmailMessageID: "message", GmailThreadID: "thread", InternalDateMS: 42,
+		SenderAddress: "sender@example.test", To: []string{"owner@example.test"}, Subject: "Subject", Labels: []string{"INBOX"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	classification, err := gate.Classify(message, config.Defaults().Gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := storage.NewGateDecision(classification, 43)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := storage.NewReviewCandidateRow(message, decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func issueReviewCursor(t *testing.T, service *reviewinspect.Service) string {
+	t.Helper()
+	page, err := service.List(context.Background(), reviewinspect.ListRequest{PageSize: 1})
+	if err != nil || page.NextCursor == nil {
+		t.Fatalf("List() = %#v, %v", page, err)
+	}
+	return *page.NextCursor
 }
 
 func reviewToolRequest(t *testing.T, name, arguments string) *http.Request {
@@ -257,6 +307,122 @@ func TestReviewAuthenticationAndInvalidInputsFinishBeforeSource(t *testing.T) {
 	}
 	if service.listCalls.Load() != 0 || service.reasonCalls.Load() != 0 {
 		t.Fatalf("invalid calls = list %d reason %d", service.listCalls.Load(), service.reasonCalls.Load())
+	}
+}
+
+func TestReviewListRejectsExplicitNullsAndNoncanonicalNumbersBeforeSource(t *testing.T) {
+	tests := []string{
+		`{"account_ids":null}`,
+		`{"urgency":null}`,
+		`{"internal_date_min_unix_ms":null}`,
+		`{"internal_date_max_unix_ms":null}`,
+		`{"page_size":null}`,
+		`{"cursor":null}`,
+		`{"internal_date_min_unix_ms":-0}`,
+		`{"internal_date_max_unix_ms":-0}`,
+		`{"page_size":-0}`,
+	}
+	for _, arguments := range tests {
+		t.Run(arguments, func(t *testing.T) {
+			service := &reviewInspectionStub{}
+			handler := reviewInspectionHandler(t, service, io.Discard)
+			response := perform(t, handler, reviewToolRequest(t, listReviewCandidatesTool, arguments))
+			want := `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}`
+			if response.Code != http.StatusOK || response.Body.String() != want || service.listCalls.Load() != 0 || service.reasonCalls.Load() != 0 {
+				t.Fatalf("response = %d %q, calls = (%d,%d)", response.Code, response.Body.String(), service.listCalls.Load(), service.reasonCalls.Load())
+			}
+		})
+	}
+}
+
+func TestReviewCursorFailuresMapToInvalidParamsBeforeSource(t *testing.T) {
+	configuration := config.Defaults()
+	row := reviewCursorRow(t)
+
+	t.Run("malformed", func(t *testing.T) {
+		source := &reviewCursorSource{}
+		service, err := reviewinspect.New(source, configuration.Gate, configuration.Review)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := reviewInspectionHandler(t, service, io.Discard)
+		response := perform(t, handler, reviewToolRequest(t, listReviewCandidatesTool, `{"page_size":1,"cursor":"igrc2.AA"}`))
+		want := `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}`
+		if response.Code != http.StatusOK || response.Body.String() != want || source.calls.Load() != 0 {
+			t.Fatalf("response = %d %q, source calls = %d", response.Code, response.Body.String(), source.calls.Load())
+		}
+	})
+
+	t.Run("wrong binding", func(t *testing.T) {
+		source := &reviewCursorSource{rows: []storage.ReviewCandidateRow{row}}
+		service, err := reviewinspect.New(source, configuration.Gate, configuration.Review)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor := issueReviewCursor(t, service)
+		source.calls.Store(0)
+		handler := reviewInspectionHandler(t, service, io.Discard)
+		response := perform(t, handler, reviewToolRequest(t, listReviewCandidatesTool, `{"page_size":2,"cursor":"`+cursor+`"}`))
+		want := `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}`
+		if response.Code != http.StatusOK || response.Body.String() != want || source.calls.Load() != 0 {
+			t.Fatalf("response = %d %q, source calls = %d", response.Code, response.Body.String(), source.calls.Load())
+		}
+	})
+
+	t.Run("restart invalidated", func(t *testing.T) {
+		firstSource := &reviewCursorSource{rows: []storage.ReviewCandidateRow{row}}
+		first, err := reviewinspect.New(firstSource, configuration.Gate, configuration.Review)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor := issueReviewCursor(t, first)
+		secondSource := &reviewCursorSource{}
+		second, err := reviewinspect.New(secondSource, configuration.Gate, configuration.Review)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := reviewInspectionHandler(t, second, io.Discard)
+		response := perform(t, handler, reviewToolRequest(t, listReviewCandidatesTool, `{"page_size":1,"cursor":"`+cursor+`"}`))
+		want := `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}`
+		if response.Code != http.StatusOK || response.Body.String() != want || secondSource.calls.Load() != 0 {
+			t.Fatalf("response = %d %q, source calls = %d", response.Code, response.Body.String(), secondSource.calls.Load())
+		}
+	})
+}
+
+func TestReviewListSchemaAndAdmissionUseConfiguredPageMaximum(t *testing.T) {
+	configuration := reviewInspectionConfiguration()
+	configuration.Review.DefaultPageSize = 2
+	configuration.Review.MaximumPageSize = 3
+	service := &reviewInspectionStub{page: reviewinspect.CandidatePage{OutputVersion: 1, Candidates: []reviewinspect.Candidate{}}}
+	handler, err := New(Options{
+		Configuration: configuration, BinaryVersion: "dev", BearerToken: []byte(canonicalToken()),
+		AuditOutput: io.Discard, ReviewInspection: service,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = handler.Close() })
+
+	list := perform(t, handler, validRequest(t, "tools/list", requestBody("tools/list")))
+	schema := toolSchemasByName(t, list.Body.Bytes())[listReviewCandidatesTool]
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema properties = %#v", schema["properties"])
+	}
+	pageSize, ok := properties["page_size"].(map[string]any)
+	if !ok || pageSize["maximum"] != float64(3) {
+		t.Fatalf("page-size schema = %#v", properties["page_size"])
+	}
+
+	rejected := perform(t, handler, reviewToolRequest(t, listReviewCandidatesTool, `{"page_size":4}`))
+	want := `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}`
+	if rejected.Code != http.StatusOK || rejected.Body.String() != want || service.listCalls.Load() != 0 {
+		t.Fatalf("rejected = %d %q, source calls = %d", rejected.Code, rejected.Body.String(), service.listCalls.Load())
+	}
+	accepted := perform(t, handler, reviewToolRequest(t, listReviewCandidatesTool, `{"page_size":3}`))
+	if accepted.Code != http.StatusOK || !strings.Contains(accepted.Body.String(), `"result"`) || service.listCalls.Load() != 1 {
+		t.Fatalf("accepted = %d %q, source calls = %d", accepted.Code, accepted.Body.String(), service.listCalls.Load())
 	}
 }
 
