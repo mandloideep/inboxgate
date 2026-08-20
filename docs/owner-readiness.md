@@ -361,5 +361,7 @@ In the approved private deployment secret manager, generate and store the MCP be
 In the approved deployment environment, place the literal-loopback Turso URL under the YAML-selected name whose default is `TURSO_DATABASE_URL`, and leave the YAML-selected `TURSO_AUTH_TOKEN` environment variable unset for this credential-free path.
 Enable both `mcp.enabled` and `capabilities.mail.review_read` only after confirming migration `0006_gate_decisions.sql`, private TLS and network routing, exact MCP protocol revision `2026-07-28`, and the expected three-tool inventory.
 Validate that invalid tokens, account selectors, cursors, stale policies, and missing rows reveal no private detail, and validate that results stay below 65,536 bytes.
+Review pagination cursors are authenticated with a process-local random key and become invalid after every service restart, so clients must restart listing from the first page.
+There is no cursor-key OWNER ACTION, secret-manager entry, environment variable, durable key, rotation procedure, or recovery value.
 Review and accept the broadened `TURSO-005` exposure before activation.
 Never paste the bearer token, database token, OAuth material, email data, account identifiers, cursors, provider URLs, or source errors into issues, pull requests, logs, or chat.

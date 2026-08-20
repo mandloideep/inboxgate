@@ -293,12 +293,22 @@ func TestCursorIsCanonicalExclusiveAndBoundToEveryRequestAndPolicyField(t *testi
 		}
 	}
 
-	policySource := &reviewSourceStub{}
-	changedPolicyService := reviewService(t, policySource, func(configuration *config.Config) {
-		configuration.Gate.SubjectCandidateTerms = []string{"changed"}
-	})
-	if _, err := changedPolicyService.List(context.Background(), ListRequest{AccountIDs: []string{reviewAccountA}, Urgency: UrgencyStandard, PageSize: 1, Cursor: *page.NextCursor}); !errors.Is(err, ErrInvalidRequest) || policySource.listCalls.Load() != 0 {
-		t.Fatalf("changed policy cursor = %v calls=%d", err, policySource.listCalls.Load())
+	policyChanges := []func(*config.Gate){
+		func(policy *config.Gate) { policy.ExcludedLabels = []string{"INBOX"} },
+		func(policy *config.Gate) { policy.SuppressGmailCategories = []string{"CATEGORY_UPDATES"} },
+		func(policy *config.Gate) { policy.DirectRecipientIsCandidate = false },
+		func(policy *config.Gate) { policy.MailingListIsBulkSignal = false },
+		func(policy *config.Gate) { policy.SenderAllowDomains = []string{"example.test"} },
+		func(policy *config.Gate) { policy.SenderBlockDomains = []string{"example.test"} },
+		func(policy *config.Gate) { policy.SubjectCandidateTerms = []string{"changed"} },
+		func(policy *config.Gate) { policy.SubjectUrgentTerms = []string{"urgent"} },
+	}
+	for index, change := range policyChanges {
+		policySource := &reviewSourceStub{}
+		changedPolicyService := reviewService(t, policySource, func(configuration *config.Config) { change(&configuration.Gate) })
+		if _, err := changedPolicyService.List(context.Background(), ListRequest{AccountIDs: []string{reviewAccountA}, Urgency: UrgencyStandard, PageSize: 1, Cursor: *page.NextCursor}); !errors.Is(err, ErrInvalidRequest) || policySource.listCalls.Load() != 0 {
+			t.Errorf("changed policy %d cursor = %v calls=%d", index, err, policySource.listCalls.Load())
+		}
 	}
 }
 
@@ -432,7 +442,14 @@ func FuzzPreviewTruncationNeverSplitsUTF8OrExceedsLimit(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if !utf8.ValidString(preview) || len(preview) > 256 || truncated != (len(value) > 256) {
+		wantEnd := len(value)
+		if wantEnd > 256 {
+			wantEnd = 256
+			for wantEnd > 0 && !utf8.RuneStart(value[wantEnd]) {
+				wantEnd--
+			}
+		}
+		if !utf8.ValidString(preview) || preview != value[:wantEnd] || len(preview) > 256 || truncated != (len(value) > 256) {
 			t.Fatalf("preview bytes=%d valid=%t truncated=%t input=%d", len(preview), utf8.ValidString(preview), truncated, len(value))
 		}
 	})

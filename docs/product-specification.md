@@ -1375,7 +1375,8 @@ The first local model will justify a job lease protocol only after a measured re
 
 When both `mcp.enabled` and `capabilities.mail.review_read` are true, InboxGate exposes `mail_list_review_candidates` and `mail_get_gate_reason` to one owner-approved bearer principal with tenant-wide sensitive-read authority.
 An optional account selector narrows results and never grants account authority.
-The list returns at most ten current candidates after scanning at most one hundred rows from one fixed source query, with a canonical policy-bound continuation cursor.
+The list returns at most ten current candidates after scanning at most one hundred rows from one fixed source query, with an authenticated canonical version 2 continuation cursor bound to the complete normalized request, current gate policy, and continuation key.
+The cursor uses a process-local random key, carries no separate policy-derived digest, grants no authority, and becomes invalid after service restart.
 The reason tool returns only a source-current and policy-current gate result from one fixed source query.
 Every email-derived preview is `untrusted_email` data and cannot authorize another tool, URL fetch, secret disclosure, policy change, Gmail mutation, database mutation, review mutation, or external write.
 Candidate excerpts are explicitly excluded from both tools.

@@ -502,5 +502,10 @@ Account filters only narrow results and cannot authorize an account or another o
 Email-derived previews are labeled `untrusted_email`, remain untrusted data, and cannot authorize another tool call, URL fetch, secret disclosure, policy change, Gmail mutation, database mutation, review mutation, or external write.
 Candidate excerpts are explicitly excluded from both tools.
 The application receives only two typed fixed-read methods and has no Gmail, OAuth, mutation, generic SQL, shell, URL-fetching, or provider authority.
-Canonical policy-bound cursors, a one-hundred-row scan limit, a ten-candidate output limit, a 65,536-byte response limit, and fixed unavailable errors limit observation and enumeration.
+Authenticated version 2 cursors use a random 32-byte process-local HMAC-SHA-256 key and bind the complete normalized request, current gate policy, and continuation key.
+The cursor exposes no separate policy-derived digest, rejects modification with a constant-time MAC comparison before storage access, and is never authorization.
+Service construction fails closed before MCP binding if operating-system entropy cannot provide the complete key.
+The key is not configured, persisted, logged, audited, or returned, and every process restart invalidates earlier cursors.
+Go cannot guarantee removal of all stack or heap copies, so process termination is the reliable end of the key lifetime and the implementation makes no complete-zeroization claim.
+Authenticated cursors, a one-hundred-row scan limit, a ten-candidate output limit, a 65,536-byte response limit, and fixed unavailable errors limit observation and enumeration.
 The selected driver can still buffer an oversized successful response before repository checks, so `TURSO-005` remains open for this path.

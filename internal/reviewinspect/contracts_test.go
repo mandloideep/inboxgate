@@ -47,7 +47,7 @@ func TestReviewInspectionCIWiresEveryBoundedFuzzTarget(t *testing.T) {
 	for _, target := range []string{
 		"FuzzListRequestAndCursorDecodingRemainClosedAndBounded",
 		"FuzzPreviewTruncationNeverSplitsUTF8OrExceedsLimit",
-		"FuzzReviewStorageRowDecoding",
+		"FuzzReviewInspectionTursoDecoder",
 		"FuzzReviewToolEnvelopesRemainBoundedAndClosed",
 	} {
 		if !strings.Contains(text, target) {

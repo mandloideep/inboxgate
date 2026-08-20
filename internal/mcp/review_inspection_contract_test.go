@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -33,6 +34,7 @@ type reviewInspectionStub struct {
 	reasonCalls atomic.Int64
 	wait        bool
 	started     chan struct{}
+	observed    chan error
 	once        sync.Once
 }
 
@@ -45,6 +47,9 @@ func (service *reviewInspectionStub) List(ctx context.Context, request reviewins
 			}
 		})
 		<-ctx.Done()
+		if service.observed != nil {
+			service.observed <- ctx.Err()
+		}
 		return reviewinspect.CandidatePage{}, ctx.Err()
 	}
 	return service.page.Clone(), service.err
@@ -59,6 +64,9 @@ func (service *reviewInspectionStub) GateReason(ctx context.Context, request rev
 			}
 		})
 		<-ctx.Done()
+		if service.observed != nil {
+			service.observed <- ctx.Err()
+		}
 		return reviewinspect.GateReason{}, ctx.Err()
 	}
 	return service.reason.Clone(), service.err
@@ -225,8 +233,20 @@ func TestReviewAuthenticationAndInvalidInputsFinishBeforeSource(t *testing.T) {
 	unauthorized := reviewToolRequest(t, listReviewCandidatesTool, `{}`)
 	unauthorized.Header.Set("Authorization", "Bearer QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE")
 	requests = append(requests, unauthorized)
-	for _, request := range requests {
-		perform(t, handler, request)
+	for index, request := range requests {
+		response := perform(t, handler, request)
+		wantStatus := http.StatusOK
+		wantBody := `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}`
+		if index == 6 {
+			wantBody = `{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}`
+		}
+		if index == 7 {
+			wantStatus = http.StatusUnauthorized
+			wantBody = "unauthorized\n"
+		}
+		if response.Code != wantStatus || response.Body.String() != wantBody {
+			t.Errorf("invalid request %d = %d %q", index, response.Code, response.Body.String())
+		}
 	}
 	if service.listCalls.Load() != 0 || service.reasonCalls.Load() != 0 {
 		t.Fatalf("invalid calls = list %d reason %d", service.listCalls.Load(), service.reasonCalls.Load())
@@ -251,6 +271,10 @@ func TestCandidateGoldenIsBoundedUntrustedAndContentFree(t *testing.T) {
 		t.Fatalf("response=%d bytes=%d calls=%d body=%q", response.Code, response.Body.Len(), service.listCalls.Load(), response.Body.String())
 	}
 	content := string(structuredResult(t, response.Body.Bytes()))
+	want := `{"output_version":1,"candidates":[{"account_id":"0000000000000000000000000000000a","gmail_thread_id":"thread","gmail_message_id":"message","internal_date_unix_ms":42,"urgency":"standard","outcome":"review_candidate","sender_display_preview":"Sender","sender_display_truncated":false,"sender_address":"sender@example.test","subject_preview":"Subject","subject_truncated":false,"has_attachments":true,"content_trust":"untrusted_email"}],"next_cursor":"igrc2.AA"}`
+	if content != want {
+		t.Fatalf("candidate output = %s, want %s", content, want)
+	}
 	for _, required := range []string{"untrusted_email", "sender@example.test", "review_candidate", "igrc2."} {
 		if !strings.Contains(content, required) {
 			t.Errorf("result misses %q: %s", required, content)
@@ -272,6 +296,10 @@ func TestGateReasonGoldenIsCurrentClosedAndContentFree(t *testing.T) {
 	handler := reviewInspectionHandler(t, service, io.Discard)
 	response := perform(t, handler, reviewToolRequest(t, getGateReasonTool, `{"account_id":"0000000000000000000000000000000a","gmail_message_id":"message"}`))
 	content := string(structuredResult(t, response.Body.Bytes()))
+	want := `{"output_version":1,"account_id":"0000000000000000000000000000000a","gmail_thread_id":"thread","gmail_message_id":"message","gate_version":1,"outcome":"ignore","reason_codes":["excluded_label"],"evaluated_at_unix_ms":42,"source_current":true,"policy_current":true}`
+	if content != want {
+		t.Fatalf("gate output = %s, want %s", content, want)
+	}
 	if service.reasonCalls.Load() != 1 || !strings.Contains(content, `"source_current":true`) || !strings.Contains(content, `"policy_current":true`) || !strings.Contains(content, `"excluded_label"`) {
 		t.Fatalf("reason calls=%d content=%s", service.reasonCalls.Load(), content)
 	}
@@ -320,23 +348,76 @@ func TestReviewFailuresAreFixedNoPartialNoRetryAndResponseBounded(t *testing.T) 
 }
 
 func TestReviewCancellationDeadlineAndCloseReachSource(t *testing.T) {
-	for _, action := range []string{"deadline", "close"} {
-		service := &reviewInspectionStub{wait: true, started: make(chan struct{})}
-		handler := reviewInspectionHandler(t, service, io.Discard, withApplicationTimeout(20*time.Millisecond))
-		done := make(chan struct{})
-		go func() {
-			perform(t, handler, reviewToolRequest(t, listReviewCandidatesTool, `{}`))
-			close(done)
-		}()
-		<-service.started
-		if action == "close" {
-			_ = handler.Close()
+	for _, name := range []string{listReviewCandidatesTool, getGateReasonTool} {
+		for _, action := range []string{"deadline", "close"} {
+			t.Run(name+"/"+action, func(t *testing.T) {
+				service := &reviewInspectionStub{wait: true, started: make(chan struct{}), observed: make(chan error, 1)}
+				timeout := 20 * time.Millisecond
+				if action == "close" {
+					timeout = time.Second
+				}
+				handler := reviewInspectionHandler(t, service, io.Discard, withApplicationTimeout(timeout))
+				arguments := `{}`
+				if name == getGateReasonTool {
+					arguments = `{"account_id":"0000000000000000000000000000000a","gmail_message_id":"message"}`
+				}
+				done := make(chan *httptest.ResponseRecorder, 1)
+				go func() { done <- perform(t, handler, reviewToolRequest(t, name, arguments)) }()
+				select {
+				case <-service.started:
+				case <-time.After(250 * time.Millisecond):
+					t.Fatal("source did not start within bound")
+				}
+				if action == "close" {
+					_ = handler.Close()
+				}
+				select {
+				case response := <-done:
+					want := `{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"internal error"}}`
+					if response.Code != http.StatusOK || response.Body.String() != want {
+						t.Fatalf("response = %d %q", response.Code, response.Body.String())
+					}
+				case <-time.After(time.Second):
+					t.Fatalf("%s did not stop source", action)
+				}
+				select {
+				case observed := <-service.observed:
+					if action == "deadline" && !errors.Is(observed, context.DeadlineExceeded) || action == "close" && !errors.Is(observed, context.Canceled) {
+						t.Fatalf("source context = %v", observed)
+					}
+				case <-time.After(250 * time.Millisecond):
+					t.Fatal("source did not report cancellation")
+				}
+			})
 		}
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatalf("%s did not stop source", action)
-		}
+	}
+}
+
+func TestReviewToolsShareOneConcurrentHandler(t *testing.T) {
+	service := &reviewInspectionStub{
+		page:   reviewinspect.CandidatePage{OutputVersion: 1, Candidates: []reviewinspect.Candidate{}},
+		reason: reviewinspect.GateReason{OutputVersion: 1, ReasonCodes: []string{}},
+	}
+	handler := reviewInspectionHandler(t, service, io.Discard)
+	var wait sync.WaitGroup
+	for index := 0; index < 16; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			name, arguments := listReviewCandidatesTool, `{}`
+			if index%2 == 1 {
+				name = getGateReasonTool
+				arguments = `{"account_id":"0000000000000000000000000000000a","gmail_message_id":"message"}`
+			}
+			response := perform(t, handler, reviewToolRequest(t, name, arguments))
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"result"`) {
+				t.Errorf("response = %d %q", response.Code, response.Body.String())
+			}
+		}(index)
+	}
+	wait.Wait()
+	if service.listCalls.Load() != 8 || service.reasonCalls.Load() != 8 {
+		t.Fatalf("calls = list %d reason %d", service.listCalls.Load(), service.reasonCalls.Load())
 	}
 }
 

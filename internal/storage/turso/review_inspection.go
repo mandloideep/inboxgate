@@ -3,6 +3,7 @@ package turso
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/mandloideep/inboxgate/internal/mail"
 	"github.com/mandloideep/inboxgate/internal/storage"
@@ -51,12 +52,19 @@ func (h *handle) ListReviewCandidates(ctx context.Context, query storage.ReviewC
 	}
 	defer rows.Close()
 	result := make([]storage.ReviewCandidateRow, 0, query.Limit())
+	accounts = query.AccountIDs()
+	after = query.After()
 	for rows.Next() {
 		if len(result) == query.Limit() {
 			return nil, storage.ErrResultTooLarge
 		}
 		message, decision, decodeErr := decodeReviewInspectionRow(rows)
 		if decodeErr != nil {
+			return nil, storage.ErrPersistenceInspect
+		}
+		rowAccount, parseErr := storage.ParseAccountID(message.AccountID())
+		rowKey, keyErr := storage.NewReviewCursorKey(rowAccount, message.GmailThreadID(), message.GmailMessageID())
+		if parseErr != nil || keyErr != nil || !reviewQuerySelectsAccount(accounts, rowAccount) || after.Present && compareReviewCursorKeys(after, rowKey) >= 0 {
 			return nil, storage.ErrPersistenceInspect
 		}
 		row, decodeErr := storage.NewReviewCandidateRow(message, decision)
@@ -99,6 +107,9 @@ func (h *handle) GetCurrentGateInspection(ctx context.Context, accountID storage
 		}
 		message, decision, decodeErr := decodeReviewInspectionRow(rows)
 		if decodeErr != nil {
+			return storage.CurrentGateInspection{}, storage.ErrPersistenceInspect
+		}
+		if message.AccountID() != accountID.String() || message.GmailMessageID() != gmailMessageID {
 			return storage.CurrentGateInspection{}, storage.ErrPersistenceInspect
 		}
 		result, decodeErr = storage.NewCurrentGateInspection(message, decision)
@@ -152,3 +163,25 @@ func decodeReviewInspectionRow(row reviewRowScanner) (mail.Message, storage.Gate
 }
 
 var _ reviewRowScanner = (*sql.Rows)(nil)
+
+func reviewQuerySelectsAccount(accounts []storage.AccountID, account storage.AccountID) bool {
+	if len(accounts) == 0 {
+		return true
+	}
+	for _, selected := range accounts {
+		if selected == account {
+			return true
+		}
+	}
+	return false
+}
+
+func compareReviewCursorKeys(left, right storage.ReviewCursorKey) int {
+	if value := strings.Compare(left.AccountID().String(), right.AccountID().String()); value != 0 {
+		return value
+	}
+	if value := strings.Compare(left.ThreadID(), right.ThreadID()); value != 0 {
+		return value
+	}
+	return strings.Compare(left.MessageID(), right.MessageID())
+}

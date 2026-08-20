@@ -63,8 +63,8 @@ test-fuzz:
 		printf '%s\n' "Running bounded $$target"; \
 		$(GO) test -run='^$$' -fuzz="^$$target$$" -fuzztime=2s -parallel=1 ./internal/reviewinspect; \
 	done; \
-	printf '%s\n' 'Running bounded FuzzReviewStorageRowDecoding'; \
-	$(GO) test -run='^$$' -fuzz='^FuzzReviewStorageRowDecoding$$' -fuzztime=2s -parallel=1 ./internal/storage; \
+	printf '%s\n' 'Running bounded FuzzReviewInspectionTursoDecoder'; \
+	$(GO) test -run='^$$' -fuzz='^FuzzReviewInspectionTursoDecoder$$' -fuzztime=2s -parallel=1 ./internal/storage/turso; \
 	printf '%s\n' 'Running bounded FuzzReviewToolEnvelopesRemainBoundedAndClosed'; \
 	$(GO) test -run='^$$' -fuzz='^FuzzReviewToolEnvelopesRemainBoundedAndClosed$$' -fuzztime=2s -parallel=1 ./internal/mcp
 

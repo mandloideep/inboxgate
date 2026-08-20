@@ -356,6 +356,13 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		status = writeJSONRPCError(response, status, classification.Code, classification.ID)
 		return
 	}
+	if classification.Method == "tools/call" && handler.reviewReadEnabled() &&
+		(classification.Name == toolMailListReviewCandidates || classification.Name == toolMailGetGateReason) &&
+		!validReviewClassification(classification) {
+		status = http.StatusOK
+		status = writeJSONRPCError(response, status, -32602, classification.ID)
+		return
+	}
 
 	if classification.Method == "tools/call" && handler.dispatchHook != nil {
 		if err := handler.dispatchHook(requestContext); err != nil {
@@ -372,7 +379,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	buffer := newResponseBuffer(handler.responseLimit)
 	handler.sdk.ServeHTTP(buffer, sdkRequest)
 	if buffer.exceeded {
-		if classification.Method == "tools/call" && (classification.Name == toolAccountsList || classification.Name == toolMailSyncStatus) &&
+		if classification.Method == "tools/call" && (classification.Name == toolAccountsList || classification.Name == toolMailSyncStatus || classification.Name == toolMailListReviewCandidates || classification.Name == toolMailGetGateReason) &&
 			writeBoundedJSONRPCError(response, -32603, classification.ID, handler.responseLimit) {
 			status = http.StatusOK
 			return
@@ -382,7 +389,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	if buffer.body.Len() == 0 && classification.Method == "tools/call" &&
-		(classification.Name == toolAccountsList || classification.Name == toolMailSyncStatus) {
+		(classification.Name == toolAccountsList || classification.Name == toolMailSyncStatus || classification.Name == toolMailListReviewCandidates || classification.Name == toolMailGetGateReason) {
 		status = http.StatusOK
 		status = writeJSONRPCError(response, status, -32603, classification.ID)
 		return
@@ -596,7 +603,7 @@ func validReviewListInput(input reviewinspectview.ListRequest) bool {
 			return false
 		}
 	}
-	return input.Cursor == "" || len(input.Cursor) <= reviewinspectview.MaximumCursorBytes && strings.HasPrefix(input.Cursor, "igrc1.") && !strings.Contains(input.Cursor, "=") && len(input.Cursor) > len("igrc1.")
+	return input.Cursor == "" || len(input.Cursor) <= reviewinspectview.MaximumCursorBytes && strings.HasPrefix(input.Cursor, "igrc2.") && !strings.Contains(input.Cursor, "=") && len(input.Cursor) > len("igrc2.")
 }
 
 func validGateReasonInput(input reviewinspectview.GateReasonRequest) bool {
@@ -609,6 +616,19 @@ func validGateReasonInput(input reviewinspectview.GateReasonRequest) bool {
 		}
 	}
 	return true
+}
+
+func validReviewClassification(classification envelopeClassification) bool {
+	encoded, err := json.Marshal(classification.Arguments)
+	if err != nil {
+		return false
+	}
+	if classification.Name == toolMailListReviewCandidates {
+		var input reviewinspectview.ListRequest
+		return decodeClosedArguments(encoded, &input) == nil && validReviewListInput(input)
+	}
+	var input reviewinspectview.GateReasonRequest
+	return decodeClosedArguments(encoded, &input) == nil && validGateReasonInput(input)
 }
 
 func validReviewAccountID(value string) bool {

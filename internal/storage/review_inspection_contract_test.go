@@ -10,17 +10,6 @@ import (
 	"github.com/mandloideep/inboxgate/internal/mail"
 )
 
-func FuzzReviewStorageRowDecoding(f *testing.F) {
-	f.Add("0000000000000000000000000000000a", "thread", "message", int64(1), "review_candidate")
-	f.Add("bad", "", "", int64(-1), "other")
-	f.Fuzz(func(t *testing.T, accountID, threadID, messageID string, date int64, outcome string) {
-		if len(accountID) > 64 || len(threadID) > 300 || len(messageID) > 300 || len(outcome) > 64 {
-			return
-		}
-		_, _ = DecodeReviewCandidateRow(accountID, threadID, messageID, date, []byte(outcome), nil)
-	})
-}
-
 func TestReviewCandidateQueryIsClosedBoundedAndDefensive(t *testing.T) {
 	account, err := ParseAccountID("0000000000000000000000000000000a")
 	if err != nil {

@@ -2,13 +2,18 @@ package reviewinspect
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mandloideep/inboxgate/internal/config"
+	"github.com/mandloideep/inboxgate/internal/mail"
 	"github.com/mandloideep/inboxgate/internal/storage"
 )
 
@@ -189,6 +194,74 @@ func TestPreviewLiteralBoundaries(t *testing.T) {
 	}
 }
 
+func TestGateReasonLiteralOutcomesAndCompleteReasonVocabulary(t *testing.T) {
+	type scenario struct {
+		name        string
+		mutateInput func(*mail.MessageInput)
+		mutateGate  func(*config.Gate)
+		wantOutcome string
+		wantReasons []string
+	}
+	tests := []scenario{
+		{name: "excluded", mutateGate: func(policy *config.Gate) { policy.ExcludedLabels = []string{"INBOX"} }, wantOutcome: "ignore", wantReasons: []string{"direct_recipient", "excluded_label"}},
+		{name: "blocked", mutateGate: func(policy *config.Gate) { policy.SenderBlockDomains = []string{"example.test"} }, wantOutcome: "ignore", wantReasons: []string{"direct_recipient", "sender_block_domain"}},
+		{name: "allowed", mutateGate: func(policy *config.Gate) { policy.SenderAllowDomains = []string{"example.test"} }, wantOutcome: "review_candidate", wantReasons: []string{"direct_recipient", "sender_allow_domain"}},
+		{name: "bulk", mutateInput: func(input *mail.MessageInput) { input.Labels = []string{"CATEGORY_PROMOTIONS"} }, wantOutcome: "metadata_only", wantReasons: []string{"bulk_category", "direct_recipient"}},
+		{name: "mailing list", mutateInput: func(input *mail.MessageInput) { input.ListID = "list.example.test" }, wantOutcome: "metadata_only", wantReasons: []string{"direct_recipient", "mailing_list"}},
+		{name: "automated", mutateInput: func(input *mail.MessageInput) { input.AutoSubmitted = "auto-generated" }, wantOutcome: "metadata_only", wantReasons: []string{"automated_message", "direct_recipient"}},
+		{name: "candidate term", mutateGate: func(policy *config.Gate) { policy.SubjectCandidateTerms = []string{"subject"} }, wantOutcome: "review_candidate", wantReasons: []string{"direct_recipient", "owner_candidate_term"}},
+		{name: "urgent term", mutateGate: func(policy *config.Gate) {
+			policy.SenderAllowDomains = []string{"example.test"}
+			policy.SubjectUrgentTerms = []string{"subject"}
+		}, wantOutcome: "urgent_review_candidate", wantReasons: []string{"direct_recipient", "owner_urgent_term", "sender_allow_domain"}},
+		{name: "direct", wantOutcome: "review_candidate", wantReasons: []string{"direct_recipient"}},
+		{name: "no signal", mutateGate: func(policy *config.Gate) { policy.DirectRecipientIsCandidate = false }, wantOutcome: "metadata_only", wantReasons: []string{"no_candidate_signal"}},
+	}
+	observed := map[string]struct{}{}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := mail.MessageInput{
+				GmailMessageID: "message", GmailThreadID: "thread", InternalDateMS: 42,
+				SenderAddress: "sender@example.test", To: []string{"owner@example.test"}, Subject: "Subject", Labels: []string{"INBOX"},
+			}
+			if test.mutateInput != nil {
+				test.mutateInput(&input)
+			}
+			message, err := mail.Normalize(reviewAccountA, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := config.Defaults().Gate
+			if test.mutateGate != nil {
+				test.mutateGate(&policy)
+			}
+			decision := reviewDecision(t, message, policy, 1000)
+			service := reviewService(t, &reviewSourceStub{reason: storage.CurrentGateInspection{Message: message, Decision: decision}}, func(configuration *config.Config) {
+				configuration.Gate = policy
+			})
+			result, err := service.GateReason(context.Background(), GateReasonRequest{AccountID: reviewAccountA, GmailMessageID: "message"})
+			if err != nil || result.Outcome != test.wantOutcome || !reflect.DeepEqual(result.ReasonCodes, test.wantReasons) {
+				t.Fatalf("GateReason() = %#v, %v", result, err)
+			}
+			for _, reason := range result.ReasonCodes {
+				observed[reason] = struct{}{}
+			}
+		})
+	}
+	wantVocabulary := []string{
+		"automated_message", "bulk_category", "direct_recipient", "excluded_label", "mailing_list",
+		"no_candidate_signal", "owner_candidate_term", "owner_urgent_term", "sender_allow_domain", "sender_block_domain",
+	}
+	gotVocabulary := make([]string, 0, len(observed))
+	for reason := range observed {
+		gotVocabulary = append(gotVocabulary, reason)
+	}
+	slices.Sort(gotVocabulary)
+	if !reflect.DeepEqual(gotVocabulary, wantVocabulary) {
+		t.Fatalf("reason vocabulary = %q, want %q", gotVocabulary, wantVocabulary)
+	}
+}
+
 func TestCursorIsBoundToServiceInstance(t *testing.T) {
 	row := reviewRow(t, reviewAccountA, "thread", "message", 42)
 	configuration := config.Defaults()
@@ -220,6 +293,68 @@ func TestCursorIsBoundToServiceInstance(t *testing.T) {
 	page, err := continuedService.List(context.Background(), ListRequest{PageSize: 1, Cursor: *first.NextCursor})
 	if !errors.Is(err, ErrInvalidRequest) || !reflect.DeepEqual(page, CandidatePage{}) || continuedSource.listCalls.Load() != 0 {
 		t.Fatalf("foreign cursor List() = %#v, %v, calls %d", page, err, continuedSource.listCalls.Load())
+	}
+}
+
+func TestCursorRejectsEveryPayloadMutationAndWrongKeyBeforeSource(t *testing.T) {
+	row := reviewRow(t, reviewAccountA, "thread", "message", 42)
+	service := reviewService(t, &reviewSourceStub{rows: []storage.ReviewCandidateRow{row}})
+	page, err := service.List(context.Background(), ListRequest{PageSize: 1})
+	if err != nil || page.NextCursor == nil || !strings.HasPrefix(*page.NextCursor, "igrc2.") {
+		t.Fatalf("List() = %#v, %v", page, err)
+	}
+	raw := strings.TrimPrefix(*page.NextCursor, "igrc2.")
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range payload {
+		mutated := append([]byte(nil), payload...)
+		mutated[index] ^= 1
+		cursor := "igrc2." + base64.RawURLEncoding.EncodeToString(mutated)
+		source := &reviewSourceStub{}
+		mutatedService := reviewService(t, source)
+		result, listErr := mutatedService.List(context.Background(), ListRequest{PageSize: 1, Cursor: cursor})
+		if !errors.Is(listErr, ErrInvalidRequest) || !reflect.DeepEqual(result, CandidatePage{}) || source.listCalls.Load() != 0 {
+			t.Fatalf("mutation %d = %#v, %v, calls %d", index, result, listErr, source.listCalls.Load())
+		}
+	}
+
+	configuration := config.Defaults()
+	wrongKey := [32]byte{99}
+	foreignSource := &reviewSourceStub{}
+	foreign, err := newWithCursorKey(foreignSource, configuration.Gate, configuration.Review, wrongKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := foreign.List(context.Background(), ListRequest{PageSize: 1, Cursor: *page.NextCursor})
+	if !errors.Is(err, ErrInvalidRequest) || !reflect.DeepEqual(result, CandidatePage{}) || foreignSource.listCalls.Load() != 0 {
+		t.Fatalf("wrong-key cursor = %#v, %v, calls %d", result, err, foreignSource.listCalls.Load())
+	}
+}
+
+func TestCursorVersionTwoBytesMatchIndependentLiteralVector(t *testing.T) {
+	row := reviewRow(t, reviewAccountA, "thread", "message", 42)
+	page, err := reviewService(t, &reviewSourceStub{rows: []storage.ReviewCandidateRow{row}}).List(context.Background(), ListRequest{PageSize: 1})
+	if err != nil || page.NextCursor == nil {
+		t.Fatalf("List() = %#v, %v", page, err)
+	}
+	prefix := []byte{2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 6}
+	prefix = append(prefix, "thread"...)
+	prefix = append(prefix, 7)
+	prefix = append(prefix, "message"...)
+	binding := `{"domain":"inboxgate/review-cursor/v2","version":2,"account_ids":null,"all_accounts":true,"urgency":"all","minimum":null,"maximum":null,"page_size":1,"policy":{"Version":1,"ExcludedLabels":["SPAM","TRASH"],"SuppressGmailCategories":["CATEGORY_PROMOTIONS","CATEGORY_SOCIAL"],"DirectRecipientIsCandidate":true,"MailingListIsBulkSignal":true,"SenderAllowDomains":[],"SenderBlockDomains":[],"SubjectCandidateTerms":[],"SubjectUrgentTerms":[]}}`
+	key := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte("inboxgate/review-cursor/v2"))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write([]byte(binding))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write(prefix)
+	wantPayload := append(append([]byte(nil), prefix...), mac.Sum(nil)...)
+	want := "igrc2." + base64.RawURLEncoding.EncodeToString(wantPayload)
+	if *page.NextCursor != want {
+		t.Fatalf("cursor = %q, want independent literal %q", *page.NextCursor, want)
 	}
 }
 

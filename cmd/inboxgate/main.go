@@ -475,6 +475,30 @@ func openMCPReadSource(ctx context.Context, endpoint storage.Endpoint) (storage.
 	return openOperatorAccountStatusSource(ctx, endpoint)
 }
 
+func openMCPReadServices(ctx context.Context, configuration config.Config, endpoint storage.Endpoint) (storage.Handle, *accountstatus.Service, *reviewinspect.Service, error) {
+	sharedMCPSource, err := openMCPReadSource(ctx, endpoint)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var accountStatus *accountstatus.Service
+	var reviewInspection *reviewinspect.Service
+	if configuration.MCP.EnableOperatorTools {
+		accountStatus, err = accountstatus.New(sharedMCPSource, config.CapabilityRegistry(configuration))
+		if err != nil {
+			_ = sharedMCPSource.Close()
+			return nil, nil, nil, err
+		}
+	}
+	if configuration.Capabilities.MailReviewRead {
+		reviewInspection, err = reviewinspect.New(sharedMCPSource, configuration.Gate, configuration.Review)
+		if err != nil {
+			_ = sharedMCPSource.Close()
+			return nil, nil, nil, err
+		}
+	}
+	return sharedMCPSource, accountStatus, reviewInspection, nil
+}
+
 type mcpReadCloser struct {
 	handler *inboxmcp.Handler
 	source  storage.Handle
@@ -535,29 +559,11 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 				return 1
 			}
 			var adapterErr error
-			sharedMCPSource, adapterErr = openMCPReadSource(context.Background(), storage.Endpoint{URL: databaseURL})
+			sharedMCPSource, accountStatus, reviewInspection, adapterErr = openMCPReadServices(context.Background(), configuration, storage.Endpoint{URL: databaseURL})
 			if adapterErr != nil {
 				clear(encodedToken)
 				fmt.Fprintln(stderr, "cannot construct MCP runtime")
 				return 1
-			}
-			if configuration.MCP.EnableOperatorTools {
-				accountStatus, adapterErr = accountstatus.New(sharedMCPSource, config.CapabilityRegistry(configuration))
-				if adapterErr != nil {
-					_ = sharedMCPSource.Close()
-					clear(encodedToken)
-					fmt.Fprintln(stderr, "cannot construct MCP runtime")
-					return 1
-				}
-			}
-			if configuration.Capabilities.MailReviewRead {
-				reviewInspection, adapterErr = reviewinspect.New(sharedMCPSource, configuration.Gate, configuration.Review)
-				if adapterErr != nil {
-					_ = sharedMCPSource.Close()
-					clear(encodedToken)
-					fmt.Fprintln(stderr, "cannot construct MCP runtime")
-					return 1
-				}
 			}
 		}
 		var err error
@@ -591,9 +597,6 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 		}
 		fmt.Fprintln(stderr, "cannot construct service runtime")
 		return 1
-	}
-	if mcpCloser != nil {
-		defer mcpCloser.Close()
 	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)

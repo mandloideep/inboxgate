@@ -213,3 +213,75 @@ func compileReviewInspectionExactDriverContract(t *testing.T) {
 		t.Fatalf("exact-driver cursor calls = %d", cursorCalls.Load())
 	}
 }
+
+func TestReviewInspectionReadsFailClosedWithoutRetryOnProtocolFailures(t *testing.T) {
+	accountID, err := storage.ParseAccountID("0000000000000000000000000000000a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := storage.NewReviewCandidateQuery([]storage.AccountID{accountID}, storage.ReviewUrgencyAll, 10, storage.ReviewCursorKey{}, storage.MaximumReviewSourceRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, read := range []string{"list", "reason"} {
+		for _, failure := range []string{"status", "drop", "malformed"} {
+			t.Run(read+"/"+failure, func(t *testing.T) {
+				var cursorCalls atomic.Int64
+				server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+					if request.Header.Get("Authorization") != "" {
+						t.Error("credential-free review read carried authorization")
+					}
+					switch request.URL.Path {
+					case "/v3/cursor":
+						cursorCalls.Add(1)
+						switch failure {
+						case "status":
+							http.Error(response, "synthetic upstream detail", http.StatusServiceUnavailable)
+						case "drop":
+							connection, _, hijackErr := response.(http.Hijacker).Hijack()
+							if hijackErr != nil {
+								t.Errorf("hijack: %v", hijackErr)
+								return
+							}
+							_ = connection.Close()
+						case "malformed":
+							response.Header().Set("Content-Type", "application/json")
+							_, _ = response.Write([]byte("{malformed"))
+						}
+					case "/v3/pipeline":
+						response.Header().Set("Content-Type", "application/json")
+						_ = json.NewEncoder(response).Encode(map[string]any{"baton": nil, "base_url": nil, "results": []any{map[string]any{"type": "ok", "response": map[string]any{"type": "close"}}}})
+					default:
+						http.NotFound(response, request)
+					}
+				}))
+				adapter, adapterErr := New(Options{PersistenceTimeout: time.Second})
+				if adapterErr != nil {
+					server.Close()
+					t.Fatal(adapterErr)
+				}
+				handle, openErr := adapter.Open(context.Background(), storage.Endpoint{URL: server.URL})
+				if openErr != nil {
+					server.Close()
+					t.Fatal(openErr)
+				}
+				if read == "list" {
+					rows, readErr := handle.ListReviewCandidates(context.Background(), query)
+					if !errors.Is(readErr, storage.ErrPersistenceInspect) || rows != nil {
+						t.Errorf("ListReviewCandidates() = %#v, %v", rows, readErr)
+					}
+				} else {
+					inspection, readErr := handle.GetCurrentGateInspection(context.Background(), accountID, "message")
+					if !errors.Is(readErr, storage.ErrPersistenceInspect) || !reflect.DeepEqual(inspection, storage.CurrentGateInspection{}) {
+						t.Errorf("GetCurrentGateInspection() = %#v, %v", inspection, readErr)
+					}
+				}
+				if cursorCalls.Load() != 1 {
+					t.Errorf("cursor calls = %d, want one", cursorCalls.Load())
+				}
+				_ = handle.Close()
+				server.Close()
+			})
+		}
+	}
+}
