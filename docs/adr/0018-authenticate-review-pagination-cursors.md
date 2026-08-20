@@ -1,6 +1,6 @@
 # ADR 0018: Authenticate review pagination cursors
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-20
 - Issue: #44
 - Owners: @mandloideep
