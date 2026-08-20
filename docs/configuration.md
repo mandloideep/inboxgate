@@ -111,12 +111,12 @@ inboxgate --config /path/to/config.yaml doctor
 ```
 
 The command strictly validates the selected file and constructs the configured logger, readiness state, bounded health handler, and HTTP server without binding a socket.
-It does not perform a bind feasibility check, read any YAML-named environment variable, contact a provider or database, or start Gmail, OAuth, MCP, scheduler, review, or backfill behavior.
+It does not perform a bind feasibility check, read any YAML-named environment variable, construct the MCP handler, contact a provider or database, or start Gmail, OAuth, scheduler, review, or backfill behavior.
 Success exits 0, leaves stderr empty, and prints a deterministic versioned JSON result with passing `configuration` and `service_runtime` checks.
 Invalid configuration exits 1 with the same value-safe diagnostics as `config validate` and no partial JSON.
 Command misuse exits 2 with focused usage.
 
-## Run process-health serving
+## Run the health and optional MCP service
 
 Start the bounded process-health service with:
 
@@ -125,27 +125,47 @@ inboxgate --config /path/to/config.yaml serve
 ```
 
 The command validates configuration before making one attempt to bind `server.listen`.
+When `mcp.enabled` is false, it performs no lookup of `mcp.bearer_token_env` and keeps the configured MCP path unregistered.
+When `mcp.enabled` is true, it resolves exactly the environment variable named by `mcp.bearer_token_env` before bind.
+The value must be exactly 43 unpadded base64url characters that canonically encode 32 bytes, otherwise startup exits with the fixed `cannot construct MCP runtime` diagnostic and does not bind.
 It writes no normal output to stdout.
 Lifecycle and request records go to stderr through the configured `log/slog` JSON or text handler at the configured minimum level.
 Logs use bounded event, operation, method, outcome, status, and duration fields and omit paths, queries, listener addresses, configuration paths, headers, bodies, remote addresses, host values, secret names and values, account data, and provider data.
 
-The service exposes only `GET` and `HEAD` on `/health/live` and `/health/ready`.
+The service always exposes only `GET` and `HEAD` on `/health/live` and `/health/ready` for health.
+The configured `mcp.path` cannot equal either reserved health path, whether MCP is enabled or disabled.
 Only those literal escaped paths are accepted, so percent-encoded alternate spellings receive the fixed `404` response.
 Liveness reports fixed process health.
 Readiness is true only while the configured logger and server are constructed, the TCP listener exists, the serving lifecycle is active, and shutdown has not begun.
-Readiness does not claim database, migration, scheduler, account, Gmail, OAuth, provider, or MCP availability.
+Readiness does not claim database, migration, scheduler, account, Gmail, OAuth, or provider availability.
+When MCP is enabled, readiness can become true only after the selected token is resolved and the bounded MCP handler is constructed.
 Every response is fixed and bounded, disables caching and content-type sniffing, and uses JSON representation headers.
 Other methods receive `405`, unknown paths receive `404`, declared oversized health bodies receive `413`, and every other declared or transfer-encoded health body receives `400` without being read.
 
 The configured `server` timeouts and request limit apply to this runtime.
 HTTP headers have a compiled 16 KiB limit.
 The listener admits at most a compiled 128 accepted connections concurrently, and it does not accept another connection into application work until an existing accepted connection closes.
-The first `SIGINT` or `SIGTERM` makes readiness false and gives active requests up to a compiled 10 seconds to drain.
+The first `SIGINT` or `SIGTERM` makes readiness false and starts one compiled 10-second deadline before MCP draining or HTTP shutdown begins.
+MCP cancellation, active request-body closure, token clearing, admission shutdown, and HTTP draining share that one deadline.
 A second signal does not restart or extend that deadline.
+
+When enabled, the exact configured `mcp.path` accepts authenticated POST requests for stateless MCP protocol revision `2026-07-28` only.
+The endpoint supports `server/discover`, `tools/list`, and `tools/call` for exactly `system_capabilities`.
+It creates no sessions, SSE stream, resumability, subscription, server-initiated request, prompt, resource, sampling, elicitation, task, logging, or general JSON-RPC capability.
+It accepts exactly one `Authorization: Bearer <token>` header, exact `Content-Type: application/json`, an `Accept` value permitting JSON, the exact protocol and routing headers, one exact JSON-RPC object, and no browser Origin or fetch metadata.
+InboxGate independently bounds the body at the smaller of `server.max_request_bytes` and 65,536 bytes, JSON container depth at 16, decoded nodes at 2,048, concurrent requests at 16, application time at five seconds, and complete responses at 65,536 bytes.
+The application deadline also bounds request-body reads by closing the active body on deadline, client cancellation, or shutdown cancellation.
+Every InboxGate-owned JSON-RPC success or error is size-checked before HTTP commitment, including responses that repeat a valid request ID.
+The tool returns only typed capability registry data, including validated secret environment-variable names but never secret values or presence.
+All MCP responses disable caching, sniffing, framing, referrer transmission, and active content, and the endpoint emits no CORS response headers.
+Every admitted or rejected MCP request emits exactly one audit event at every valid configured logging level, independently of whether that level suppresses general informational logs.
+MCP audit events contain only a fixed operation, method class, status, bounded duration, and outcome, and JSON-RPC semantic errors are failures even when their transport status is `200`.
+They omit Authorization, token state, bodies, headers, paths, queries, hosts, addresses, client data, environment names, responses, and SDK errors.
 
 The default `0.0.0.0:8080` listener covers every host interface and is not authorization for public exposure.
 Bind only to an approved private interface, protect the listener with an appropriate firewall, or publish the probes through an approved private reverse-proxy path.
-This repository does not yet provide TLS termination, deployment configuration, authenticated diagnostics, MCP transport, or any public REST API.
+This repository does not provide TLS termination, deployment configuration, authenticated operational diagnostics, or any public REST API.
+The implemented MCP route is a private capability-inspection boundary only and is not approved for deployment or public exposure.
 
 ## Enroll one Gmail account
 
@@ -191,9 +211,9 @@ Durations use Go duration syntax and must also satisfy the documented field boun
 - Gate labels, Gmail categories, sender domains, and literal subject terms have fixed list and item limits.
 - Sender allow and block domains must be disjoint.
 - Review page sizes and retention periods have bounded cross-field relationships.
-- The MCP path is a clean absolute ASCII HTTP path using unescaped RFC 3986 `pchar` characters and `/` separators, without whitespace, controls, backslashes, percent escapes, queries, fragments, repeated slashes, or dot segments.
+- The MCP path is a clean absolute ASCII HTTP path using unescaped RFC 3986 `pchar` characters and `/` separators, without whitespace, controls, backslashes, percent escapes, queries, fragments, repeated slashes, dot segments, or either reserved health path.
 - Logging level and format use fixed enumerations.
-- Policy booleans are parsed only as policy in this slice and do not activate MCP, Gmail, database, review, or task behavior.
+- Except for `mcp.enabled` on `serve`, policy booleans in this slice do not activate Gmail, database, review, or task behavior.
 - The `capabilities` mapping accepts only the five false-by-default gates documented above.
 
 The inert candidate-content extractor accepts the existing validated `gmail.body_excerpt_bytes` value only as its final UTF-8 excerpt byte limit.

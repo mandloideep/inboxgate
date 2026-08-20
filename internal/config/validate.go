@@ -239,6 +239,9 @@ func validateMCP(mcp MCP, problems *[]Problem) {
 	if len(value) < 2 || len(value) > 128 || value == "/" || !strings.HasPrefix(value, "/") || strings.Contains(value, "//") || pathpkg.Clean(value) != value || !safeHTTPPath(value) {
 		problem(problems, "mcp.path", "must be a clean absolute ASCII HTTP path of 2 to 128 bytes")
 	}
+	if value == "/health/live" || value == "/health/ready" {
+		problem(problems, "mcp.path", "must not overlap a reserved health path")
+	}
 	validateEnvironmentName("mcp.bearer_token_env", mcp.BearerTokenEnv, problems)
 }
 

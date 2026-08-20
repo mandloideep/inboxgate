@@ -767,7 +767,7 @@ func TestServeAndDoctorCommandProcesses(t *testing.T) {
 	t.Cleanup(func() { _ = reservation.Close() })
 	address := reservation.Addr().String()
 	configPath := filepath.Join(directory, "synthetic-process-config.yaml")
-	document := "version: 1\nserver: {listen: '" + address + "'}\nlogging: {level: info, format: json}\n"
+	document := "version: 1\nserver: {listen: '" + address + "'}\nmcp: {enabled: false}\nlogging: {level: info, format: json}\n"
 	if err := os.WriteFile(configPath, []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}

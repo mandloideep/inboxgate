@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"debug/buildinfo"
@@ -27,12 +28,36 @@ import (
 
 const modulePath = "github.com/mandloideep/inboxgate"
 const goVersion = "go1.26.6"
+const jsonschemaModulePath = "github.com/google/jsonschema-go"
+const jsonschemaModuleVersion = "v0.4.3"
+const jsonschemaModuleSum = "h1:/DBOLZTfDow7pe2GmaJNhltueGTtDKICi8V8p+DQPd0="
+const mcpModulePath = "github.com/modelcontextprotocol/go-sdk"
+const mcpModuleVersion = "v1.7.0"
+const mcpModuleSum = "h1:yqjY2dsbKAC0LSuWZVBMrHgiG8ukXv6NRo0JiALay44="
+const segmentioASMModulePath = "github.com/segmentio/asm"
+const segmentioASMModuleVersion = "v1.1.3"
+const segmentioASMModuleSum = "h1:WM03sfUOENvvKexOLp+pCqgb/WDjsi7EK8gIsICtzhc="
+const segmentioEncodingModulePath = "github.com/segmentio/encoding"
+const segmentioEncodingModuleVersion = "v0.5.4"
+const segmentioEncodingModuleSum = "h1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfvNt0="
+const uriTemplateModulePath = "github.com/yosida95/uritemplate/v3"
+const uriTemplateModuleVersion = "v3.0.2"
+const uriTemplateModuleSum = "h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4="
 const yamlModulePath = "go.yaml.in/yaml/v3"
 const yamlModuleVersion = "v3.0.5"
 const yamlModuleSum = "h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw="
 const oauthModulePath = "golang.org/x/oauth2"
 const oauthModuleVersion = "v0.36.0"
 const oauthModuleSum = "h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs="
+const syncModulePath = "golang.org/x/sync"
+const syncModuleVersion = "v0.20.0"
+const syncModuleSum = "h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4="
+const sysModulePath = "golang.org/x/sys"
+const sysModuleVersion = "v0.41.0"
+const sysModuleSum = "h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k="
+const timeModulePath = "golang.org/x/time"
+const timeModuleVersion = "v0.15.0"
+const timeModuleSum = "h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U="
 const tursoModulePath = "turso.tech/database/tursogo-serverless"
 const tursoModuleVersion = "v0.0.0-20260817122138-24adc316cdc4"
 const tursoModuleSum = "h1:Fnxwfn492a+9kTegF2G7QUT1aF0Vfjz0dMrNO+HmthA="
@@ -240,9 +265,17 @@ func ValidateBinary(path, goos, goarch string) error {
 		return fmt.Errorf("Go version = %q, want %q", info.GoVersion, goVersion)
 	}
 	expectedDependencies := map[string]struct{ version, sum string }{
-		yamlModulePath:  {yamlModuleVersion, yamlModuleSum},
-		oauthModulePath: {oauthModuleVersion, oauthModuleSum},
-		tursoModulePath: {tursoModuleVersion, tursoModuleSum},
+		jsonschemaModulePath:        {jsonschemaModuleVersion, jsonschemaModuleSum},
+		mcpModulePath:               {mcpModuleVersion, mcpModuleSum},
+		segmentioASMModulePath:      {segmentioASMModuleVersion, segmentioASMModuleSum},
+		segmentioEncodingModulePath: {segmentioEncodingModuleVersion, segmentioEncodingModuleSum},
+		uriTemplateModulePath:       {uriTemplateModuleVersion, uriTemplateModuleSum},
+		yamlModulePath:              {yamlModuleVersion, yamlModuleSum},
+		oauthModulePath:             {oauthModuleVersion, oauthModuleSum},
+		syncModulePath:              {syncModuleVersion, syncModuleSum},
+		sysModulePath:               {sysModuleVersion, sysModuleSum},
+		timeModulePath:              {timeModuleVersion, timeModuleSum},
+		tursoModulePath:             {tursoModuleVersion, tursoModuleSum},
 	}
 	if len(info.Deps) != len(expectedDependencies) {
 		return fmt.Errorf("release binary has %d module dependencies, want %d", len(info.Deps), len(expectedDependencies))
@@ -565,6 +598,7 @@ type spdxPackage struct {
 	Name             string `json:"name"`
 	SPDXID           string `json:"SPDXID"`
 	VersionInfo      string `json:"versionInfo"`
+	SourceInfo       string `json:"sourceInfo"`
 	DownloadLocation string `json:"downloadLocation"`
 	LicenseConcluded string `json:"licenseConcluded"`
 	LicenseDeclared  string `json:"licenseDeclared"`
@@ -576,17 +610,29 @@ type spdxFile struct {
 	FileName string `json:"fileName"`
 }
 
+const (
+	maximumSBOMBytes      = 4 << 20
+	maximumSBOMJSONDepth  = 64
+	maximumSBOMJSONTokens = 131_072
+)
+
+var recognizedSBOMJSONKeys = [...]string{
+	"spdxVersion", "dataLicense", "SPDXID", "name", "documentNamespace", "creationInfo", "packages", "files",
+	"created", "creators", "versionInfo", "sourceInfo", "downloadLocation", "licenseConcluded", "licenseDeclared",
+	"copyrightText", "filesAnalyzed", "fileName",
+}
+
 // ValidateSBOM checks required SPDX fields, product identity, version, and sensitive local paths.
 func ValidateSBOM(path, version, workspace string) error {
 	if err := ValidateMetadata(version, strings.Repeat("0", 40)); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readBoundedSBOM(path)
 	if err != nil {
 		return err
 	}
-	if !json.Valid(data) {
-		return errors.New("SBOM is not valid JSON")
+	if err := preflightSBOMJSON(data); err != nil {
+		return errors.New("SBOM JSON structure is invalid")
 	}
 	absoluteWorkspace, err := filepath.Abs(workspace)
 	if err != nil {
@@ -625,26 +671,115 @@ func ValidateSBOM(path, version, workspace string) error {
 	if len(document.Packages) == 0 {
 		return errors.New("SBOM contains no packages")
 	}
-	foundProduct := false
-	for _, pkg := range document.Packages {
-		if pkg.Name == "" || pkg.SPDXID == "" || pkg.DownloadLocation == "" || pkg.LicenseConcluded == "" || pkg.LicenseDeclared == "" || pkg.CopyrightText == "" || pkg.FilesAnalyzed == nil {
-			return fmt.Errorf("SBOM package %q is missing required SPDX fields", pkg.Name)
-		}
-		if strings.EqualFold(pkg.Name, "InboxGate") && pkg.VersionInfo == version {
-			foundProduct = true
-		}
+	reviewedModules := map[string]string{
+		jsonschemaModulePath:        jsonschemaModuleVersion,
+		mcpModulePath:               mcpModuleVersion,
+		segmentioASMModulePath:      segmentioASMModuleVersion,
+		segmentioEncodingModulePath: segmentioEncodingModuleVersion,
+		uriTemplateModulePath:       uriTemplateModuleVersion,
+		yamlModulePath:              yamlModuleVersion,
+		oauthModulePath:             oauthModuleVersion,
+		syncModulePath:              syncModuleVersion,
+		sysModulePath:               sysModuleVersion,
+		timeModulePath:              timeModuleVersion,
+		tursoModulePath:             tursoModuleVersion,
 	}
-	if !foundProduct {
-		return fmt.Errorf("SBOM does not identify InboxGate version %s", version)
+	expectedRuntime := make(map[string]string, len(reviewedModules)+2)
+	expectedRuntime[modulePath] = "UNKNOWN"
+	expectedRuntime["stdlib"] = goVersion
+	for name, moduleVersion := range reviewedModules {
+		expectedRuntime[name] = moduleVersion
 	}
 	versionNumber := strings.TrimPrefix(version, "v")
-	wantFiles := map[string]struct{}{}
+	expectedLocations := make(map[string]struct{}, len(Targets))
+	expectedBinaryClassifiers := make(map[string]struct{}, 2)
+	wantFiles := make(map[string]struct{}, len(Targets))
 	for _, target := range Targets {
 		binaryName := "inboxgate"
 		if target.GOOS == "windows" {
 			binaryName += ".exe"
 		}
-		wantFiles[fmt.Sprintf("inboxgate_%s_%s_%s/%s", versionNumber, target.GOOS, target.GOARCH, binaryName)] = struct{}{}
+		fileName := fmt.Sprintf("inboxgate_%s_%s_%s/%s", versionNumber, target.GOOS, target.GOARCH, binaryName)
+		location := "/" + fileName
+		expectedLocations[location] = struct{}{}
+		wantFiles[fileName] = struct{}{}
+		if target.GOOS == "windows" {
+			expectedBinaryClassifiers[location] = struct{}{}
+		}
+	}
+	const goSourcePrefix = "acquired package info from go module information: "
+	const binarySourcePrefix = "acquired package info from the following paths: "
+	locationInventory := make(map[string]map[string]int, len(expectedLocations))
+	for location := range expectedLocations {
+		locationInventory[location] = make(map[string]int, len(expectedRuntime))
+	}
+	seenSPDXIDs := make(map[string]struct{}, len(document.Packages))
+	rootCount := 0
+	binaryClassifiers := make(map[string]int, len(expectedBinaryClassifiers))
+	for _, pkg := range document.Packages {
+		if pkg.Name == "" || pkg.SPDXID == "" || pkg.DownloadLocation == "" || pkg.LicenseConcluded == "" || pkg.LicenseDeclared == "" || pkg.CopyrightText == "" || pkg.FilesAnalyzed == nil {
+			return fmt.Errorf("SBOM package %q is missing required SPDX fields", pkg.Name)
+		}
+		if _, duplicate := seenSPDXIDs[pkg.SPDXID]; duplicate {
+			return fmt.Errorf("SBOM contains duplicate package SPDX identifier %q", pkg.SPDXID)
+		}
+		seenSPDXIDs[pkg.SPDXID] = struct{}{}
+		if pkg.Name == "InboxGate" {
+			if pkg.VersionInfo != version || pkg.SourceInfo != "" {
+				return fmt.Errorf("SBOM document-root package does not match InboxGate version %s", version)
+			}
+			rootCount++
+			continue
+		}
+		if pkg.Name == "inboxgate" {
+			location, found := strings.CutPrefix(pkg.SourceInfo, binarySourcePrefix)
+			if !found || pkg.SourceInfo != binarySourcePrefix+location || pkg.VersionInfo != "UNKNOWN" {
+				return errors.New("SBOM binary classifier does not match the pinned Syft shape")
+			}
+			if _, expected := expectedBinaryClassifiers[location]; !expected {
+				return fmt.Errorf("SBOM binary classifier has unexpected location %q", location)
+			}
+			binaryClassifiers[location]++
+			continue
+		}
+		expectedVersion, reviewed := expectedRuntime[pkg.Name]
+		if !reviewed {
+			return fmt.Errorf("SBOM contains unexpected linked runtime package %q", pkg.Name)
+		}
+		if pkg.VersionInfo != expectedVersion {
+			return fmt.Errorf("SBOM package %q version = %q, want %q", pkg.Name, pkg.VersionInfo, expectedVersion)
+		}
+		location, found := strings.CutPrefix(pkg.SourceInfo, goSourcePrefix)
+		if !found || pkg.SourceInfo != goSourcePrefix+location {
+			return fmt.Errorf("SBOM package %q is missing its exact pinned-Syft location", pkg.Name)
+		}
+		inventory, expected := locationInventory[location]
+		if !expected {
+			return fmt.Errorf("SBOM package %q has unexpected location %q", pkg.Name, location)
+		}
+		inventory[pkg.Name]++
+	}
+	if rootCount != 1 {
+		return fmt.Errorf("SBOM document-root package count = %d, want 1", rootCount)
+	}
+	for location, inventory := range locationInventory {
+		if len(inventory) != len(expectedRuntime) {
+			return fmt.Errorf("SBOM location %q has %d distinct runtime packages, want %d", location, len(inventory), len(expectedRuntime))
+		}
+		for name := range expectedRuntime {
+			if inventory[name] != 1 {
+				return fmt.Errorf("SBOM location %q package %q count = %d, want 1", location, name, inventory[name])
+			}
+		}
+	}
+	for location := range expectedBinaryClassifiers {
+		if binaryClassifiers[location] != 1 {
+			return fmt.Errorf("SBOM binary classifier count at %q = %d, want 1", location, binaryClassifiers[location])
+		}
+	}
+	expectedPackageRows := 1 + len(expectedLocations)*len(expectedRuntime) + len(expectedBinaryClassifiers)
+	if len(document.Packages) != expectedPackageRows {
+		return fmt.Errorf("SBOM package count = %d, want %d exact pinned-Syft rows", len(document.Packages), expectedPackageRows)
 	}
 	if len(document.Files) != len(wantFiles) {
 		return fmt.Errorf("SBOM file count = %d, want %d release binaries", len(document.Files), len(wantFiles))
@@ -659,4 +794,114 @@ func ValidateSBOM(path, version, workspace string) error {
 		return fmt.Errorf("SBOM is missing %d release binaries", len(wantFiles))
 	}
 	return nil
+}
+
+func readBoundedSBOM(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maximumSBOMBytes+1))
+	if err != nil {
+		return nil, errors.New("read SBOM")
+	}
+	if len(data) > maximumSBOMBytes {
+		return nil, errors.New("SBOM exceeds the maximum supported size")
+	}
+	return data, nil
+}
+
+type sbomJSONState struct {
+	tokens int
+}
+
+func preflightSBOMJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	state := sbomJSONState{}
+	if err := scanSBOMJSONValue(decoder, &state, 0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("trailing JSON value")
+	}
+	return nil
+}
+
+func scanSBOMJSONValue(decoder *json.Decoder, state *sbomJSONState, depth int) error {
+	token, err := nextSBOMJSONToken(decoder, state)
+	if err != nil {
+		return err
+	}
+	delimiter, container := token.(json.Delim)
+	if !container {
+		return nil
+	}
+	depth++
+	if depth > maximumSBOMJSONDepth {
+		return errors.New("JSON depth exceeds limit")
+	}
+	switch delimiter {
+	case '{':
+		keys := map[string]struct{}{}
+		for decoder.More() {
+			keyToken, err := nextSBOMJSONToken(decoder, state)
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("JSON object key is not a string")
+			}
+			if _, duplicate := keys[key]; duplicate {
+				return errors.New("duplicate JSON object key")
+			}
+			keys[key] = struct{}{}
+			if nonExactRecognizedSBOMJSONKey(key) {
+				return errors.New("non-exact recognized JSON key")
+			}
+			if err := scanSBOMJSONValue(decoder, state, depth); err != nil {
+				return err
+			}
+		}
+		closing, err := nextSBOMJSONToken(decoder, state)
+		if err != nil || closing != json.Delim('}') {
+			return errors.New("invalid JSON object closing token")
+		}
+	case '[':
+		for decoder.More() {
+			if err := scanSBOMJSONValue(decoder, state, depth); err != nil {
+				return err
+			}
+		}
+		closing, err := nextSBOMJSONToken(decoder, state)
+		if err != nil || closing != json.Delim(']') {
+			return errors.New("invalid JSON array closing token")
+		}
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
+	return nil
+}
+
+func nextSBOMJSONToken(decoder *json.Decoder, state *sbomJSONState) (json.Token, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	state.tokens++
+	if state.tokens > maximumSBOMJSONTokens {
+		return nil, errors.New("JSON token count exceeds limit")
+	}
+	return token, nil
+}
+
+func nonExactRecognizedSBOMJSONKey(key string) bool {
+	for _, recognized := range recognizedSBOMJSONKeys {
+		if key != recognized && strings.EqualFold(key, recognized) {
+			return true
+		}
+	}
+	return false
 }

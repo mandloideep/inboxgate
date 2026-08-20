@@ -16,9 +16,10 @@ No owner credential or provider setup is required to implement, review, merge, o
 [ADR 0011](adr/0011-bounded-gmail-current-discovery.md) adds one bounded internal Gmail current-discovery invocation against synthetic OAuth and Gmail providers and fake or credential-free literal-loopback storage.
 [ADR 0012](adr/0012-deterministic-persisted-gate.md) adds one pure deterministic classifier, a strict append-only gate-decision table, typed fake and Turso persistence, and an inert evaluator under the same credential-free restriction.
 [ADR 0013](adr/0013-bounded-candidate-content.md) adds one bounded read-only Gmail content projection, fail-closed MIME, charset, and HTML processing, strict append-only candidate-content persistence, and an inert extractor under the same credential-free restriction.
+[ADR 0014](adr/0014-authenticated-stateless-mcp.md) adds authenticated stateless MCP `2026-07-28` capability inspection with one exact `system_capabilities` tool and synthetic loopback validation.
 The adapter is connected only to one-shot account enrollment and lifecycle commands after a credential-free literal-loopback endpoint check.
 The current-discovery use case, gate evaluator, and candidate-content extractor remain inert and have no command, scheduler, service, health, capability, HTTP, or MCP caller.
-It remains disconnected from service startup, health, configuration inspection, capabilities, doctor, executable synchronization, MCP, remote database endpoints, and production credentials.
+They remain disconnected from service startup, health, configuration inspection, capabilities, doctor, executable synchronization, the implemented capability-only MCP route, remote database endpoints, and production credentials.
 
 The owner accepts five unresolved driver risks for the exact selected version.
 
@@ -38,6 +39,8 @@ The deterministic gate slice uses synthetic canonical messages, compiled policy 
 The candidate-content slice uses synthetic message bodies and HTML, fake provider transports, fake storage, and credential-free literal-loopback exact-driver storage and requires no owner action.
 It does not access live Gmail, fetch attachments, activate remote Turso, expose content through MCP, or enforce `retention.excerpt_days` deletion.
 No owner should create, inject, reveal, or test a Google, Gmail, Turso, encryption, private-endpoint, or production value for these slices.
+The authenticated MCP implementation uses only generated synthetic in-memory tokens and literal loopback tests, so it also requires no owner secret for implementation, review, merge, or validation.
+Its reserved health paths, body-read cancellation, one-deadline shutdown, complete response cap, audit semantics, exact SBOM inventory, and required bounded fuzz gate add no new owner input.
 The model does not execute a Turso Database engine and does not prove the 514-parameter statement, strict tables, trigger rollback, writer serialization, or concurrent finalization.
 A supplementary credential-free local SQLite execution proves commitment mismatch rollback with an unchanged cursor, no canonical insert, and retained sealed recovery state, but it does not replace Turso Database engine evidence.
 The implemented one-shot enrollment flow remains restricted to fake OAuth, OpenID Connect, Gmail, and credential-free loopback storage until explicit owner approval and database runtime activation.
@@ -72,7 +75,7 @@ Use these status meanings throughout this runbook.
 | Turso Cloud setup | `Not yet actionable` | Do not create or provide InboxGate credentials | An approved production-readiness issue with explicit owner authorization |
 | Google OAuth and Gmail | `Future owner action` | Decide which Google organization and test accounts will own consent, without sharing identifiers | Explicit owner approval and approved live storage activation |
 | Encryption key | `Future owner action` | Do not generate or provide a key yet | Runtime secret resolution, an approved credential rotation workflow, and explicit owner approval |
-| MCP and Hermes | `Future owner action` | Reserve a private connectivity design, without creating a token | Authenticated MCP transport and an approved integration issue |
+| MCP and Hermes | `Implemented but not approved for deployment` | OWNER ACTION: select the private network, TLS boundary, secret-manager product, and exact generator UI without creating or sharing a token | Merge, explicit deployment approval, and a separately approved Hermes integration action |
 | Private deployment | `Future owner action` | Identify the intended private host, firewall owner, TLS boundary, and recovery owner | Hardened deployment guidance and explicit deployment approval |
 | GitHub release | `Optional release operation` | Use the repository UI only for an approved release | Current `main`, passing `ci-required`, immutable releases, and approved version inputs |
 
@@ -125,7 +128,8 @@ InboxGate YAML contains environment-variable names only, never their values.
 `inboxgate account list`, `account pause`, and `account resume` resolve only the selected Turso URL and optional token names.
 `inboxgate account revoke` resolves the selected encryption key only after it has won and separately observed a durable revoked-attempting claim and a fresh read proves an encrypted credential is present.
 Live remote Turso endpoints and bearer tokens remain rejected, so these command paths are for credential-free literal-loopback validation only until a later activation decision and explicit owner approval.
-Configuration validation and effective output, capabilities, doctor, and the health-only service do not resolve those values, and no command resolves the selected MCP token name.
+Configuration validation and effective output, capabilities, and doctor do not resolve those values.
+MCP-disabled `serve` also performs no lookup, while MCP-enabled `serve` resolves only the selected MCP token name before bind and emits no value or presence detail.
 It reads only `INBOXGATE_CONFIG` for configuration-path selection when that variable is explicitly set.
 
 The `_env` names below are compiled defaults, not fixed schema names.
@@ -141,7 +145,7 @@ The owner must inject each runtime value under the exact name in the validated Y
 | `GOOGLE_OAUTH_CLIENT_ID` | Compiled `_env` default | Runtime secret store | No |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Compiled `_env` default | Runtime secret store | No |
 | `GOOGLE_OAUTH_REDIRECT_URL` | Compiled `_env` default | Runtime configuration store | No |
-| `INBOXGATE_MCP_TOKEN` | Compiled `_env` default | InboxGate and the approved Hermes secret store | No |
+| `INBOXGATE_MCP_TOKEN` | Compiled `_env` default | InboxGate and the approved Hermes secret store | OWNER ACTION before deployment only |
 | `INBOXGATE_MASTER_KEY` | Compiled `_env` default | Runtime secret store with an independent backup | No |
 
 The compiled defaults and any names selected in YAML are public configuration policy, but their values and presence remain sensitive runtime state.
@@ -228,19 +232,29 @@ Exposure of this key could compromise every stored provider credential encrypted
 
 ## Step-by-step MCP and Hermes preparation
 
-Do not connect Hermes until the authenticated streamable HTTP MCP transport and its bounded tool contracts are merged and pass protocol tests.
+The authenticated streamable HTTP transport and its sole `system_capabilities` contract are implemented, but this is not approval to create a live token, connect Hermes, expose a route, or deploy.
 
-1. Select a private network path between the Hermes host and InboxGate.
-2. Keep the MCP endpoint off the public internet and use the exact route configured by `mcp.path`.
-3. Generate an independent high-entropy bearer token through the approved secret manager after the MCP implementation defines its minimum format.
-4. Store the server copy in the InboxGate runtime secret store under the validated configuration name (default: `INBOXGATE_MCP_TOKEN`).
-5. Store the client copy only in the approved Hermes runtime secret store without sending it to an agent.
-6. Do not reuse a Google token, Turso token, encryption key, network enrollment key, or Vikunja credential.
-7. Inject the non-secret private endpoint through the approved Hermes runtime configuration store.
-8. Configure Hermes with the bounded MCP tool set documented by the merged implementation.
-9. Confirm that Hermes can call `system_capabilities` and only the explicitly enabled mail tools.
-10. Confirm that arbitrary Gmail requests, raw SQL, shell execution, URL fetching, OAuth enrollment, and direct Vikunja operations are unavailable.
-11. Run the synthetic end-to-end review flow before any live email is exposed.
+1. OWNER ACTION: select an approved secret-manager product that can generate cryptographically random bytes and inject one secret into both the InboxGate and Hermes runtime secret stores without displaying it.
+2. OWNER ACTION: record the product name and exact cryptographic-generator navigation path in the private deployment runbook because no provider UI can be named safely until the owner chooses that product.
+3. Stop if the chosen UI cannot generate exactly 32 random bytes and retain or transform them into canonical unpadded RFC 4648 base64url without exposing the value to a terminal, clipboard, screenshot, log, chat, issue, or agent.
+4. After merge and explicit deployment approval only, use that recorded generator UI to create an independent token whose stored representation is exactly 43 ASCII base64url characters encoding exactly 32 bytes.
+5. Store the server copy under the exact validated YAML-selected environment-variable name, whose compiled default is `INBOXGATE_MCP_TOKEN`.
+6. Store the client copy only in the approved Hermes runtime secret store and never send it through a model prompt or agent-visible configuration.
+7. Do not reuse a Google token, Turso token, encryption key, network enrollment key, session cookie, or Vikunja credential.
+8. OWNER ACTION: select a private network path between Hermes and InboxGate, an approved private hostname, a TLS termination owner, a certificate source, a firewall owner, and a proxy policy.
+9. Keep the endpoint off the public internet and configure the exact HTTPS endpoint using the validated `mcp.path` through the approved Hermes non-secret runtime configuration store.
+10. Configure Hermes for MCP protocol revision `2026-07-28`, JSON responses, POST, and only `system_capabilities`.
+11. Validate from the approved Hermes runtime that discovery advertises only tools, tools/list contains exactly `system_capabilities`, and the call returns the expected non-secret binary and configuration schema versions.
+12. Record only pass or fail, the non-secret binary version, the full public source commit, protocol revision, and the fact that exactly one tool was present.
+13. Confirm that sessions, SSE, older revisions, arbitrary Gmail requests, raw SQL, shell execution, URL fetching, OAuth enrollment, storage access, review operations, and direct Vikunja operations are unavailable.
+14. Never record the token, Authorization header, secret presence, environment dump, private hostname, private URL, client identity, or returned environment-variable names in public evidence.
+15. Define a bounded maintenance window and incident owner for rotation before activation.
+16. Rotate by generating a new independent value through the same approved UI, replacing both secret-store copies, restarting InboxGate, revalidating the sanitized capability check, and revoking the old copies without an overlap claim.
+17. A later approved issue must define overlap or zero-downtime rotation if operations require it.
+
+The exact required server environment-variable name is the value of `mcp.bearer_token_env` in the privately validated YAML, not necessarily the compiled default.
+Tracked configuration contains only that name and the exact route policy, never the token or private endpoint.
+The MCP result includes environment-variable names as operational metadata, so even a successful response must not be pasted publicly without review.
 
 Email returned through MCP is untrusted data and cannot authorize a tool call, credential disclosure, policy change, or mailbox mutation.
 
@@ -259,8 +273,8 @@ Deployment remains owner-approved work and is not included in the current reposi
 9. Restore the service on a fresh host using only the repository, approved runtime secrets, and the accepted remote database recovery procedure.
 10. Complete synthetic smoke tests before authorizing live provider access.
 
-The current `serve` command exposes only bounded process liveness and readiness.
-It does not prove database, migration, scheduler, Gmail, OAuth, MCP, or account readiness.
+The current `serve` command always exposes bounded process liveness and readiness and can additionally expose only authenticated `system_capabilities` when enabled.
+It does not prove database, migration, scheduler, Gmail, OAuth, mail-tool, account, private-network, TLS, secret-store, or deployment readiness.
 
 ## Step-by-step manual GitHub release
 

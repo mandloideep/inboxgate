@@ -36,6 +36,10 @@ type ListenFunc func(network, address string) (net.Listener, error)
 
 type Option func(*Runtime)
 
+type mcpCloser interface {
+	Close() error
+}
+
 func WithListen(listen ListenFunc) Option {
 	return func(runtime *Runtime) {
 		runtime.listen = listen
@@ -48,12 +52,23 @@ func WithShutdownTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithMCP(handler http.Handler, closer mcpCloser) Option {
+	return func(runtime *Runtime) {
+		runtime.mcpHandler = handler
+		runtime.mcpCloser = closer
+	}
+}
+
 type Runtime struct {
 	readiness       atomic.Bool
 	logger          *slog.Logger
 	httpServer      *http.Server
 	listen          ListenFunc
 	shutdownTimeout time.Duration
+	mcpHandler      http.Handler
+	mcpCloser       mcpCloser
+	mcpOwned        bool
+	mcpClosed       atomic.Bool
 }
 
 func New(configuration config.Config, logOutput io.Writer, options ...Option) (*Runtime, error) {
@@ -66,20 +81,23 @@ func New(configuration config.Config, logOutput io.Writer, options ...Option) (*
 		listen:          net.Listen,
 		shutdownTimeout: ShutdownTimeout,
 	}
+	for _, option := range options {
+		option(runtime)
+	}
+	if runtime.listen == nil || runtime.shutdownTimeout <= 0 || (runtime.mcpHandler == nil) != (runtime.mcpCloser == nil) || reservedHealthPath(configuration.MCP.Path) {
+		return nil, errors.New("invalid service runtime construction")
+	}
+	if configuration.MCP.Enabled && runtime.mcpHandler != nil {
+		runtime.mcpOwned = true
+	}
 	runtime.httpServer = &http.Server{
-		Handler:           runtime.healthHandler(configuration.Server.MaxRequestBytes),
+		Handler:           runtime.routeHandler(configuration),
 		ReadHeaderTimeout: configuration.Server.ReadHeaderTimeout,
 		ReadTimeout:       configuration.Server.ReadTimeout,
 		WriteTimeout:      configuration.Server.WriteTimeout,
 		IdleTimeout:       configuration.Server.IdleTimeout,
 		MaxHeaderBytes:    MaxHeaderBytes,
 		ErrorLog:          log.New(io.Discard, "", 0),
-	}
-	for _, option := range options {
-		option(runtime)
-	}
-	if runtime.listen == nil || runtime.shutdownTimeout <= 0 {
-		return nil, errors.New("invalid service runtime construction")
 	}
 	return runtime, nil
 }
@@ -122,10 +140,16 @@ func (runtime *Runtime) Ready() bool {
 func (runtime *Runtime) ListenAndServe(address string, signals <-chan os.Signal) int {
 	listener, err := runtime.listen("tcp", address)
 	if err != nil {
+		_ = runtime.closeMCP()
 		runtime.logFailure("listen_failed")
 		return 1
 	}
 	listener = newBoundedListener(listener, MaxConnections)
+	serveContext, cancelServe := context.WithCancel(context.Background())
+	defer cancelServe()
+	runtime.httpServer.BaseContext = func(net.Listener) context.Context {
+		return serveContext
+	}
 
 	started := make(chan struct{})
 	serveResult := make(chan error, 1)
@@ -139,6 +163,7 @@ func (runtime *Runtime) ListenAndServe(address string, signals <-chan os.Signal)
 	select {
 	case err := <-serveResult:
 		runtime.readiness.Store(false)
+		_ = runtime.closeMCP()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			runtime.logFailure("serve_failed")
 			return 1
@@ -149,15 +174,29 @@ func (runtime *Runtime) ListenAndServe(address string, signals <-chan os.Signal)
 		runtime.readiness.Store(false)
 		runtime.logLifecycle("shutdown_started")
 		shutdownContext, cancel := runtime.shutdownContext(context.Background())
-		err := runtime.httpServer.Shutdown(shutdownContext)
-		cancel()
-		if err != nil {
+		defer cancel()
+		mcpResult := make(chan error, 1)
+		go func() {
+			mcpResult <- runtime.closeMCP()
+		}()
+		shutdownErr := runtime.httpServer.Shutdown(shutdownContext)
+		if shutdownErr != nil {
+			cancelServe()
 			_ = runtime.httpServer.Close()
-			if errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(shutdownErr, context.DeadlineExceeded) {
 				runtime.logFailure("shutdown_timeout")
 			} else {
 				runtime.logFailure("shutdown_failed")
 			}
+			return 1
+		}
+		var mcpErr error
+		select {
+		case mcpErr = <-mcpResult:
+		case <-shutdownContext.Done():
+			cancelServe()
+			_ = runtime.httpServer.Close()
+			runtime.logFailure("shutdown_timeout")
 			return 1
 		}
 		serveErr := <-serveResult
@@ -165,9 +204,24 @@ func (runtime *Runtime) ListenAndServe(address string, signals <-chan os.Signal)
 			runtime.logFailure("serve_failed")
 			return 1
 		}
+		if mcpErr != nil {
+			runtime.logFailure("shutdown_failed")
+			return 1
+		}
 		runtime.logLifecycle("shutdown_completed")
 		return 0
 	}
+}
+
+func reservedHealthPath(path string) bool {
+	return path == "/health/live" || path == "/health/ready"
+}
+
+func (runtime *Runtime) closeMCP() error {
+	if !runtime.mcpOwned || !runtime.mcpClosed.CompareAndSwap(false, true) {
+		return nil
+	}
+	return runtime.mcpCloser.Close()
 }
 
 type lifecycleListener struct {
@@ -216,6 +270,21 @@ func (runtime *Runtime) healthHandler(maxRequestBytes uint64) http.Handler {
 			"outcome", outcome,
 		)
 	})
+}
+
+func (runtime *Runtime) routeHandler(configuration config.Config) http.Handler {
+	health := runtime.healthHandler(configuration.Server.MaxRequestBytes)
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if runtime.mcpOwned && exactMCPPath(request, configuration.MCP.Path) {
+			runtime.mcpHandler.ServeHTTP(response, request)
+			return
+		}
+		health.ServeHTTP(response, request)
+	})
+}
+
+func exactMCPPath(request *http.Request, path string) bool {
+	return request.URL != nil && request.URL.Path == path && request.URL.RawPath == "" && request.URL.RawQuery == "" && request.URL.Fragment == "" && request.URL.EscapedPath() == path
 }
 
 func (runtime *Runtime) routeHealth(request *http.Request, routePath string, maxRequestBytes uint64) (int, string, string, string) {
