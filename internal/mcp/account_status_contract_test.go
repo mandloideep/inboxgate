@@ -78,6 +78,36 @@ func operatorSummary(t *testing.T, rawID string, cursor bool) storage.AccountSum
 	return storage.AccountSummary{AccountID: id, Provider: storage.ProviderGmail, State: storage.AccountStateActive, StateVersion: version, RevocationStatus: storage.RevocationStatusNone, CursorPresent: cursor}
 }
 
+func operatorSummaries(t *testing.T, count int) ([]storage.AccountSummary, []string) {
+	t.Helper()
+	accounts := make([]storage.AccountSummary, 0, count)
+	identifiers := make([]string, 0, count)
+	version, err := storage.ParseLifecycleVersion(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < count; index++ {
+		suffix := strconv.FormatInt(int64(index+1), 16)
+		rawID := strings.Repeat("0", 32-len(suffix)) + suffix
+		accountID, parseErr := storage.ParseAccountID(rawID)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		state := storage.AccountStateActive
+		cursor := false
+		if index%2 == 1 {
+			state = storage.AccountStatePaused
+			cursor = true
+		}
+		accounts = append(accounts, storage.AccountSummary{
+			AccountID: accountID, Provider: storage.ProviderGmail, State: state, StateVersion: version,
+			RevocationStatus: storage.RevocationStatusNone, CursorPresent: cursor,
+		})
+		identifiers = append(identifiers, rawID)
+	}
+	return accounts, identifiers
+}
+
 func operatorHandler(t *testing.T, source *operatorSource, modifiers ...Option) *Handler {
 	t.Helper()
 	configuration := config.Defaults()
@@ -362,6 +392,84 @@ func TestMailSyncStatusExactlyRendersBothCursorLiteralsAndNullUnavailableFacts(t
 			want := `{"output_version":1,"accounts":[{"account_id":"` + operatorAccountID + `","current_sync":{"implementation_status":"not_implemented","configuration_status":"disabled","enabled":false,"execution_status":"not_available","cursor_status":"` + test.cursor + `","stale_status":"not_persisted","last_success_at":null,"last_error_category":null},"backfill":{"implementation_status":"not_implemented","configuration_status":"disabled","enabled":false,"execution_status":"not_available","checkpoint_status":"not_persisted","progress":null}}]}`
 			if string(got) != want || strings.Contains(string(got), "history_id") || source.calls.Load() != 1 {
 				t.Fatalf("status = %s, want %s, calls=%d", got, want, source.calls.Load())
+			}
+		})
+	}
+}
+
+func TestOperatorToolsEnforceExactAccountCardinalityAndSharedOrdering(t *testing.T) {
+	for _, count := range []int{0, 2, 100, 101} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			accounts, wantIDs := operatorSummaries(t, count)
+			orderings := make(map[string][]string, 2)
+			for _, name := range []string{accountsListTool, mailSyncStatusTool} {
+				t.Run(name, func(t *testing.T) {
+					source := &operatorSource{accounts: accounts}
+					response := perform(t, operatorHandler(t, source), operatorRequest(t, name, `{}`))
+					if source.calls.Load() != 1 {
+						t.Fatalf("%s source calls = %d, want 1", name, source.calls.Load())
+					}
+					if count == 101 {
+						want := `{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"internal error"}}`
+						if response.Code != http.StatusOK || response.Body.String() != want || strings.Contains(response.Body.String(), "data") || strings.Contains(response.Body.String(), "structuredContent") {
+							t.Fatalf("%s overflow = %d %q", name, response.Code, response.Body.String())
+						}
+						for _, identifier := range wantIDs {
+							if strings.Contains(response.Body.String(), identifier) {
+								t.Fatalf("%s overflow disclosed partial account %q", name, identifier)
+							}
+						}
+						return
+					}
+					if response.Code != http.StatusOK {
+						t.Fatalf("%s status = %d body=%q", name, response.Code, response.Body.String())
+					}
+					structured := structuredResult(t, response.Body.Bytes())
+					if count == 0 && string(structured) != `{"output_version":1,"accounts":[]}` {
+						t.Fatalf("%s zero result = %s", name, structured)
+					}
+					var output struct {
+						OutputVersion int `json:"output_version"`
+						Accounts      []struct {
+							AccountID string `json:"account_id"`
+						} `json:"accounts"`
+					}
+					if err := json.Unmarshal(structured, &output); err != nil {
+						t.Fatal(err)
+					}
+					gotIDs := make([]string, 0, len(output.Accounts))
+					for _, account := range output.Accounts {
+						gotIDs = append(gotIDs, account.AccountID)
+					}
+					if output.OutputVersion != 1 || !reflect.DeepEqual(gotIDs, wantIDs) {
+						t.Fatalf("%s IDs = %#v, want %#v", name, gotIDs, wantIDs)
+					}
+					for _, identifier := range wantIDs {
+						if strings.Count(response.Body.String(), identifier) != 1 {
+							t.Fatalf("%s account %q occurrence count != 1", name, identifier)
+						}
+					}
+					if count == 2 {
+						required := []string{`"state":"active"`, `"state":"paused"`}
+						if name == mailSyncStatusTool {
+							required = []string{`"cursor_status":"uninitialized"`, `"cursor_status":"initialized"`}
+						}
+						for _, fragment := range required {
+							if !strings.Contains(string(structured), fragment) {
+								t.Fatalf("%s two-account result missing %s: %s", name, fragment, structured)
+							}
+						}
+					}
+					if count == 100 && response.Body.Len() > MaximumResponseBytes {
+						t.Fatalf("%s response bytes = %d, maximum %d", name, response.Body.Len(), MaximumResponseBytes)
+					}
+					orderings[name] = gotIDs
+				})
+			}
+			if count == 2 || count == 100 {
+				if !reflect.DeepEqual(orderings[accountsListTool], orderings[mailSyncStatusTool]) {
+					t.Fatalf("tool ordering differs: accounts=%#v sync=%#v", orderings[accountsListTool], orderings[mailSyncStatusTool])
+				}
 			}
 		})
 	}
