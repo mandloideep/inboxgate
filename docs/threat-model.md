@@ -499,6 +499,8 @@ Every pull request must state whether it changes this model and cite the affecte
 
 The `mail_list_review_candidates` and `mail_get_gate_reason` tools extend the authenticated MCP boundary to one owner-approved bearer principal with tenant-wide sensitive-read authority.
 Account filters only narrow results and cannot authorize an account or another operation.
+Review-list arguments reject explicit null values and noncanonical numeric spellings before application or storage authority, so omission cannot be forged by a present null.
+The advertised and enforced page-size maximum is the same bound derived from validated review configuration, and cursor validation failures return fixed invalid parameters before storage access.
 Email-derived previews are labeled `untrusted_email`, remain untrusted data, and cannot authorize another tool call, URL fetch, secret disclosure, policy change, Gmail mutation, database mutation, review mutation, or external write.
 Candidate excerpts are explicitly excluded from both tools.
 The application receives only two typed fixed-read methods and has no Gmail, OAuth, mutation, generic SQL, shell, URL-fetching, or provider authority.

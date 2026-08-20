@@ -36,7 +36,7 @@ const (
 )
 
 var (
-	ErrInvalidRequest = errors.New("review inspection: invalid request")
+	ErrInvalidRequest = reviewinspectview.ErrInvalidRequest
 	ErrUnavailable    = errors.New("review inspection: unavailable")
 )
 
@@ -77,7 +77,17 @@ func newWithCursorKey(source storage.ReviewInspectionSource, policy config.Gate,
 	if source == nil || gate.ValidatePolicy(policy) != nil || review.DefaultPageSize == 0 || review.MaximumPageSize == 0 {
 		return nil, ErrInvalidRequest
 	}
-	return &Service{source: source, policy: policy, review: review, cursorMACKey: key}, nil
+	return &Service{source: source, policy: cloneGatePolicy(policy), review: review, cursorMACKey: key}, nil
+}
+
+func cloneGatePolicy(policy config.Gate) config.Gate {
+	policy.ExcludedLabels = slices.Clone(policy.ExcludedLabels)
+	policy.SuppressGmailCategories = slices.Clone(policy.SuppressGmailCategories)
+	policy.SenderAllowDomains = slices.Clone(policy.SenderAllowDomains)
+	policy.SenderBlockDomains = slices.Clone(policy.SenderBlockDomains)
+	policy.SubjectCandidateTerms = slices.Clone(policy.SubjectCandidateTerms)
+	policy.SubjectUrgentTerms = slices.Clone(policy.SubjectUrgentTerms)
+	return policy
 }
 
 func (service *Service) List(ctx context.Context, request ListRequest) (CandidatePage, error) {

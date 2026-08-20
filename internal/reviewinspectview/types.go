@@ -1,7 +1,10 @@
 // Package reviewinspectview defines authority-free candidate inspection inputs and outputs.
 package reviewinspectview
 
-import "slices"
+import (
+	"errors"
+	"slices"
+)
 
 const (
 	OutputVersion1             = 1
@@ -12,6 +15,8 @@ const (
 	UrgencyStandard            = "standard"
 	UrgencyUrgent              = "urgent"
 )
+
+var ErrInvalidRequest = errors.New("review inspection: invalid request")
 
 type ListRequest struct {
 	AccountIDs            []string `json:"account_ids,omitempty"`
