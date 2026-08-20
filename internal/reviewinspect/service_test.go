@@ -90,7 +90,10 @@ func reviewService(t *testing.T, source *reviewSourceStub, mutate ...func(*confi
 	for _, apply := range mutate {
 		apply(&configuration)
 	}
-	service, err := New(source, configuration.Gate, configuration.Review)
+	service, err := newWithCursorKey(source, configuration.Gate, configuration.Review, [32]byte{
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +147,7 @@ func TestListRequestRejectsSelectorUrgencyDatePageAndCursorBoundsBeforeSource(t 
 		{InternalDateMaxUnixMS: &overDate},
 		{PageSize: 11},
 		{Cursor: strings.Repeat("x", MaximumCursorBytes+1)},
-		{Cursor: "igrc1.="},
+		{Cursor: "igrc2.="},
 		{Cursor: "other.AA"},
 	}
 	for index, request := range tests {
@@ -233,7 +236,7 @@ func TestListFiltersDatesAndStalePolicyWithinOneHundredRowScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source.listCalls.Load() != 1 || page.Candidates == nil || len(page.Candidates) != 0 || page.NextCursor == nil || len(*page.NextCursor) > MaximumCursorBytes || !strings.HasPrefix(*page.NextCursor, "igrc1.") {
+	if source.listCalls.Load() != 1 || page.Candidates == nil || len(page.Candidates) != 0 || page.NextCursor == nil || len(*page.NextCursor) > MaximumCursorBytes || !strings.HasPrefix(*page.NextCursor, "igrc2.") {
 		t.Fatalf("filtered page = %#v", page)
 	}
 	continuationSource := &reviewSourceStub{}
@@ -273,7 +276,7 @@ func TestCursorIsCanonicalExclusiveAndBoundToEveryRequestAndPolicyField(t *testi
 	row := reviewRow(t, reviewAccountA, "thread", "message", 42)
 	service := reviewService(t, &reviewSourceStub{rows: []storage.ReviewCandidateRow{row}})
 	page, err := service.List(context.Background(), ListRequest{AccountIDs: []string{reviewAccountA}, Urgency: UrgencyStandard, PageSize: 1})
-	if err != nil || page.NextCursor == nil || len(*page.NextCursor) > MaximumCursorBytes || !strings.HasPrefix(*page.NextCursor, "igrc1.") || strings.Contains(*page.NextCursor, "=") {
+	if err != nil || page.NextCursor == nil || len(*page.NextCursor) > MaximumCursorBytes || !strings.HasPrefix(*page.NextCursor, "igrc2.") || strings.Contains(*page.NextCursor, "=") {
 		t.Fatalf("cursor = %#v error=%v", page.NextCursor, err)
 	}
 
@@ -407,7 +410,7 @@ func TestResultsAndSourceInputsAreDefensiveAndNoRetryOccurs(t *testing.T) {
 
 func FuzzListRequestAndCursorDecodingRemainClosedAndBounded(f *testing.F) {
 	f.Add(reviewAccountA, UrgencyAll, uint64(10), "")
-	f.Add("bad", "urgent", uint64(11), "igrc1.=")
+	f.Add("bad", "urgent", uint64(11), "igrc2.=")
 	f.Fuzz(func(t *testing.T, account, urgency string, pageSize uint64, cursor string) {
 		if len(account) > 64 || len(urgency) > 32 || len(cursor) > 500 {
 			return

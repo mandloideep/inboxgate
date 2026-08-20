@@ -191,11 +191,20 @@ func TestPreviewLiteralBoundaries(t *testing.T) {
 
 func TestCursorIsBoundToServiceInstance(t *testing.T) {
 	row := reviewRow(t, reviewAccountA, "thread", "message", 42)
-	first, err := reviewService(t, &reviewSourceStub{rows: []storage.ReviewCandidateRow{row}}).List(context.Background(), ListRequest{PageSize: 1})
+	configuration := config.Defaults()
+	firstService, err := New(&reviewSourceStub{rows: []storage.ReviewCandidateRow{row}}, configuration.Gate, configuration.Review)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := firstService.List(context.Background(), ListRequest{PageSize: 1})
 	if err != nil || first.NextCursor == nil {
 		t.Fatalf("first List() = %#v, %v", first, err)
 	}
-	second, err := reviewService(t, &reviewSourceStub{rows: []storage.ReviewCandidateRow{row}}).List(context.Background(), ListRequest{PageSize: 1})
+	secondService, err := New(&reviewSourceStub{rows: []storage.ReviewCandidateRow{row}}, configuration.Gate, configuration.Review)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := secondService.List(context.Background(), ListRequest{PageSize: 1})
 	if err != nil || second.NextCursor == nil {
 		t.Fatalf("second List() = %#v, %v", second, err)
 	}
@@ -204,9 +213,36 @@ func TestCursorIsBoundToServiceInstance(t *testing.T) {
 	}
 
 	continuedSource := &reviewSourceStub{}
-	continuedService := reviewService(t, continuedSource)
+	continuedService, err := New(continuedSource, configuration.Gate, configuration.Review)
+	if err != nil {
+		t.Fatal(err)
+	}
 	page, err := continuedService.List(context.Background(), ListRequest{PageSize: 1, Cursor: *first.NextCursor})
 	if !errors.Is(err, ErrInvalidRequest) || !reflect.DeepEqual(page, CandidatePage{}) || continuedSource.listCalls.Load() != 0 {
 		t.Fatalf("foreign cursor List() = %#v, %v, calls %d", page, err, continuedSource.listCalls.Load())
+	}
+}
+
+type failingCursorEntropy struct {
+	short bool
+}
+
+func (entropy failingCursorEntropy) Read(destination []byte) (int, error) {
+	if entropy.short {
+		if len(destination) > 0 {
+			destination[0] = 1
+		}
+		return 1, nil
+	}
+	return 0, errors.New("synthetic entropy detail")
+}
+
+func TestReviewServiceConstructionFailsClosedOnEntropyFailure(t *testing.T) {
+	configuration := config.Defaults()
+	for _, entropy := range []failingCursorEntropy{{}, {short: true}} {
+		service, err := newWithCursorEntropy(&reviewSourceStub{}, configuration.Gate, configuration.Review, entropy)
+		if !errors.Is(err, ErrUnavailable) || service != nil || strings.Contains(err.Error(), "synthetic") {
+			t.Fatalf("New() = %#v, %v", service, err)
+		}
 	}
 }

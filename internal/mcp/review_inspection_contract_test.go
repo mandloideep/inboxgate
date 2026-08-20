@@ -217,7 +217,7 @@ func TestReviewAuthenticationAndInvalidInputsFinishBeforeSource(t *testing.T) {
 		reviewToolRequest(t, listReviewCandidatesTool, `[]`),
 		reviewToolRequest(t, listReviewCandidatesTool, `{"account_ids":[]}`),
 		reviewToolRequest(t, listReviewCandidatesTool, `{"page_size":11}`),
-		reviewToolRequest(t, listReviewCandidatesTool, `{"cursor":"igrc1.="}`),
+		reviewToolRequest(t, listReviewCandidatesTool, `{"cursor":"igrc2.="}`),
 		reviewToolRequest(t, getGateReasonTool, `{}`),
 		reviewToolRequest(t, getGateReasonTool, `{"account_id":"0000000000000000000000000000000a","gmail_message_id":"m","gmail_thread_id":"t"}`),
 		reviewToolRequest(t, "sql_query", `{}`),
@@ -234,7 +234,7 @@ func TestReviewAuthenticationAndInvalidInputsFinishBeforeSource(t *testing.T) {
 }
 
 func TestCandidateGoldenIsBoundedUntrustedAndContentFree(t *testing.T) {
-	next := "igrc1.AA"
+	next := "igrc2.AA"
 	service := &reviewInspectionStub{page: reviewinspect.CandidatePage{
 		OutputVersion: 1,
 		Candidates: []reviewinspect.Candidate{{
@@ -251,7 +251,7 @@ func TestCandidateGoldenIsBoundedUntrustedAndContentFree(t *testing.T) {
 		t.Fatalf("response=%d bytes=%d calls=%d body=%q", response.Code, response.Body.Len(), service.listCalls.Load(), response.Body.String())
 	}
 	content := string(structuredResult(t, response.Body.Bytes()))
-	for _, required := range []string{"untrusted_email", "sender@example.test", "review_candidate", "igrc1."} {
+	for _, required := range []string{"untrusted_email", "sender@example.test", "review_candidate", "igrc2."} {
 		if !strings.Contains(content, required) {
 			t.Errorf("result misses %q: %s", required, content)
 		}
@@ -343,8 +343,8 @@ func TestReviewCancellationDeadlineAndCloseReachSource(t *testing.T) {
 func TestReviewAuditsUseOnlyFixedOperations(t *testing.T) {
 	listAccount := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	reasonAccount := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	inputCursor := "igrc1.AUDITCURSORCANARY"
-	outputCursor := "igrc1.OUTPUTCURSORCANARY"
+	inputCursor := "igrc2.AUDITCURSORCANARY"
+	outputCursor := "igrc2.OUTPUTCURSORCANARY"
 	tests := []struct {
 		name, operation, arguments, wantOutcome string
 		service                                 *reviewInspectionStub
