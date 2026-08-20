@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/mandloideep/inboxgate/internal/gate"
 	"github.com/mandloideep/inboxgate/internal/mail"
 	"github.com/mandloideep/inboxgate/internal/storage"
 )
@@ -65,6 +66,9 @@ func (h *handle) ListReviewCandidates(ctx context.Context, query storage.ReviewC
 		rowAccount, parseErr := storage.ParseAccountID(message.AccountID())
 		rowKey, keyErr := storage.NewReviewCursorKey(rowAccount, message.GmailThreadID(), message.GmailMessageID())
 		if parseErr != nil || keyErr != nil || !reviewQuerySelectsAccount(accounts, rowAccount) || after.Present && compareReviewCursorKeys(after, rowKey) >= 0 {
+			return nil, storage.ErrPersistenceInspect
+		}
+		if query.Urgency() == storage.ReviewUrgencyStandard && decision.Outcome() != gate.OutcomeReviewCandidate || query.Urgency() == storage.ReviewUrgencyUrgent && decision.Outcome() != gate.OutcomeUrgentReviewCandidate {
 			return nil, storage.ErrPersistenceInspect
 		}
 		row, decodeErr := storage.NewReviewCandidateRow(message, decision)

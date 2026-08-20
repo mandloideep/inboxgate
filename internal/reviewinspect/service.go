@@ -31,6 +31,7 @@ const (
 	UrgencyUrgent              = reviewinspectview.UrgencyUrgent
 	cursorPrefix               = "igrc2."
 	cursorMACDomain            = "inboxgate/review-cursor/v2"
+	cursorFormatVersion        = 2
 	cursorMACKeyBytes          = 32
 )
 
@@ -239,17 +240,18 @@ func (service *Service) normalizeList(request ListRequest) ([]storage.AccountID,
 
 func (service *Service) requestBinding(request ListRequest, urgency storage.ReviewUrgency, pageSize uint64) ([]byte, error) {
 	type digestInput struct {
-		Domain      string      `json:"domain"`
-		Version     int         `json:"version"`
-		AccountIDs  []string    `json:"account_ids"`
-		AllAccounts bool        `json:"all_accounts"`
-		Urgency     string      `json:"urgency"`
-		Minimum     *int64      `json:"minimum"`
-		Maximum     *int64      `json:"maximum"`
-		PageSize    uint64      `json:"page_size"`
-		Policy      config.Gate `json:"policy"`
+		Domain              string      `json:"domain"`
+		OutputVersion       int         `json:"output_version"`
+		CursorFormatVersion int         `json:"cursor_format_version"`
+		AccountIDs          []string    `json:"account_ids"`
+		AllAccounts         bool        `json:"all_accounts"`
+		Urgency             string      `json:"urgency"`
+		Minimum             *int64      `json:"minimum"`
+		Maximum             *int64      `json:"maximum"`
+		PageSize            uint64      `json:"page_size"`
+		Policy              config.Gate `json:"policy"`
 	}
-	encoded, err := json.Marshal(digestInput{Domain: cursorMACDomain, Version: 2, AccountIDs: request.AccountIDs, AllAccounts: request.AccountIDs == nil, Urgency: string(urgency), Minimum: request.InternalDateMinUnixMS, Maximum: request.InternalDateMaxUnixMS, PageSize: pageSize, Policy: service.policy})
+	encoded, err := json.Marshal(digestInput{Domain: cursorMACDomain, OutputVersion: OutputVersion1, CursorFormatVersion: cursorFormatVersion, AccountIDs: request.AccountIDs, AllAccounts: request.AccountIDs == nil, Urgency: string(urgency), Minimum: request.InternalDateMinUnixMS, Maximum: request.InternalDateMaxUnixMS, PageSize: pageSize, Policy: service.policy})
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +267,7 @@ func (service *Service) encodeCursor(binding []byte, key storage.ReviewCursorKey
 		return "", ErrUnavailable
 	}
 	payload := make([]byte, 0, 51+len(key.ThreadID())+len(key.MessageID()))
-	payload = append(payload, 2)
+	payload = append(payload, cursorFormatVersion)
 	payload = append(payload, accountBytes...)
 	payload = append(payload, byte(len(key.ThreadID())))
 	payload = append(payload, key.ThreadID()...)
@@ -285,7 +287,7 @@ func (service *Service) decodeCursor(value string, binding []byte) (storage.Revi
 	}
 	raw := value[len(cursorPrefix):]
 	payload, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != raw || len(payload) < 53 || payload[0] != 2 {
+	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != raw || len(payload) < 53 || payload[0] != cursorFormatVersion {
 		return storage.ReviewCursorKey{}, ErrInvalidRequest
 	}
 	tagStart := len(payload) - sha256.Size
