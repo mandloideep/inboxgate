@@ -38,6 +38,16 @@ It will also retain the upstream root `LICENSE.md` as local `LICENSE`, add one l
 No copied file other than `driver.go` and `session.go` may receive a semantic change.
 The manifest will record the module path, selected version, source commit, module and module-file checksums, deterministic upstream tree hash, local path, every upstream and local SHA-256, and the exact modified-file allowlist.
 
+### Accepted nonsemantic punctuation normalization
+
+The owner accepted one provenance amendment after the exact upstream copy revealed four prohibited em dash characters in copied documentation and test comments.
+The local fork will replace only those four punctuation characters with plain hyphens and will record the normalization separately from semantic production modifications.
+`README.md` changes from upstream SHA-256 `372c9e177a79aa9df94a4d31a4b6f70dfc644d59ecfe6e2d5012a4c81e276c28` to local SHA-256 `9288fad74312e0ea2cb617286b099d249671c75ffdcf87263c6b42ee8d2cdcb6`.
+`encryption_header_test.go` changes from upstream SHA-256 `8ca1300bb14acea96fbf307315d2a605b5919ad0626b99835094b821df1ef997` to local SHA-256 `04e6341e97807c3da3e82378b6df473b781fe6117f2fba5445c7f69bc449f390`.
+The manifest `normalized_files` allowlist will contain exactly those two paths.
+The semantic `modified_files` allowlist remains exactly `driver.go` and `session.go`.
+No executable token, assertion, fixture value, protocol behavior, or test behavior changes through this normalization.
+
 ### Driver close ownership
 
 `driver.go` will add an explicit connector constructor that accepts a positive bounded fallback close duration.
@@ -159,6 +169,7 @@ This remains a future option for closing all accepted Turso risks, but it is bro
 - Local replacement: `./third_party/tursogo-serverless` with unchanged module path.
 - Declared Go version: 1.24.0.
 - Transitive module impact: zero upstream required modules and no change to InboxGate's 16-module selected graph including the root module.
+- Root checksum-file impact: `go mod tidy` removes the two upstream Turso checksum lines because local replacements are not authenticated through `go.sum`, so the accepted proxy checksums remain pinned in this ADR, the provenance manifest, and release validation instead.
 - Runtime graph impact: Go standard library only for this driver.
 - CGO and native impact: none.
 - License: MIT, compatible with InboxGate's MIT distribution.
@@ -226,7 +237,7 @@ The combined focused red command exited 1 before this ADR because current close 
 After acceptance, validation must prove:
 
 - One stalled close returns fixed `ErrCloseFailed` within the adapter-owned deadline without a server release.
-- The synthetic server observes `request.Context().Done()` before `Handle.Close` returns.
+- The synthetic server observes propagated `request.Context().Done()` within a bounded scheduler allowance after local close completion.
 - Active close requests and registered terminal connections are zero at return.
 - Two idle streams close under one shared deadline with no timeout multiplication.
 - Success sends exactly one fixed close request per stream.
