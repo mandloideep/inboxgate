@@ -1,6 +1,6 @@
 # ADR 0015: Bound MCP account-status disclosure to one owner-approved principal
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-19
 - Issue: #40
 - Owners: @mandloideep
