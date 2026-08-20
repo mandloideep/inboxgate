@@ -113,7 +113,7 @@ func TestListNormalizesClosedFiltersAndUsesOneFixedBoundedQuery(t *testing.T) {
 		t.Fatalf("calls = list %d reason %d queries %d", source.listCalls.Load(), source.reasonCalls.Load(), len(source.queries))
 	}
 	query := source.queries[0]
-	if query.Limit != 101 || query.Urgency != storage.ReviewUrgencyAll || len(query.AccountIDs) != 2 || query.After.Present {
+	if query.Limit() != 101 || query.Urgency() != storage.ReviewUrgencyAll || len(query.AccountIDs()) != 2 || query.After().Present {
 		t.Fatalf("query = %#v", query)
 	}
 	if page.OutputVersion != OutputVersion1 || page.Candidates == nil || len(page.Candidates) != 0 || page.NextCursor != nil {
@@ -183,8 +183,8 @@ func TestListDefaultsPageSizeToTenAndCapsConfiguredValues(t *testing.T) {
 		if _, err := service.List(context.Background(), ListRequest{}); err != nil {
 			t.Fatal(err)
 		}
-		if source.queries[0].RequestedPageSize != test.want {
-			t.Fatalf("defaults=%d maximum=%d requested=%d want=%d", test.defaults, test.maximum, source.queries[0].RequestedPageSize, test.want)
+		if source.queries[0].RequestedPageSize() != test.want {
+			t.Fatalf("defaults=%d maximum=%d requested=%d want=%d", test.defaults, test.maximum, source.queries[0].RequestedPageSize(), test.want)
 		}
 	}
 }
