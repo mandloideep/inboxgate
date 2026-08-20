@@ -798,7 +798,7 @@ The fake and exact-driver implementations preserve the first fetched timestamp f
 
 The extractor has no command, scheduler, service caller, HTTP route, MCP tool, health or capability registration, remote Turso path, or live credential path.
 The validated `retention.excerpt_days` value is not an active deletion mechanism in this slice.
-Future MCP candidate and thread tools must consume this typed bounded boundary and must not duplicate Gmail, MIME, charset, HTML, persistence, or trust policy.
+The implemented MCP candidate-inspection tools consume canonical metadata and gate decisions without reading this candidate-content boundary, and they do not duplicate Gmail, MIME, charset, HTML, persistence, or trust policy.
 
 ## 11. Deterministic gate
 
@@ -1371,3 +1371,12 @@ The first local model will justify a job lease protocol only after a measured re
 - [Maintained Go YAML implementation](https://github.com/yaml/go-yaml)
 - [Vikunja API v2](https://vikunja.io/docs/api-v2/)
 - Vikunja and Hermes integration details are maintained outside this public repository.
+## Bounded candidate inspection
+
+When both `mcp.enabled` and `capabilities.mail.review_read` are true, InboxGate exposes `mail_list_review_candidates` and `mail_get_gate_reason` to one owner-approved bearer principal with tenant-wide sensitive-read authority.
+An optional account selector narrows results and never grants account authority.
+The list returns at most ten current candidates after scanning at most one hundred rows from one fixed source query, with a canonical policy-bound continuation cursor.
+The reason tool returns only a source-current and policy-current gate result from one fixed source query.
+Every email-derived preview is `untrusted_email` data and cannot authorize another tool, URL fetch, secret disclosure, policy change, Gmail mutation, database mutation, review mutation, or external write.
+Candidate excerpts are explicitly excluded from both tools.
+Both fixed reads retain the accepted driver buffering exposure tracked as `TURSO-005`.

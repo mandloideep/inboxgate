@@ -61,14 +61,15 @@
     },
     {
       "name": "mail.review_read",
-      "implementation_status": "not_implemented",
+      "implementation_status": "implemented",
       "configuration_status": "disabled",
       "enabled": false,
       "required_secret_names": [
+        "INBOXGATE_MCP_TOKEN",
         "TURSO_AUTH_TOKEN",
         "TURSO_DATABASE_URL"
       ],
-      "required_database_migration": null,
+      "required_database_migration": "0006_gate_decisions.sql",
       "security_classification": "sensitive_read"
     },
     {

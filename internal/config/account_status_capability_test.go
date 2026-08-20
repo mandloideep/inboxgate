@@ -53,6 +53,12 @@ func TestAccountStatusCapabilityAddsNoConfigurationKeyOrOtherActivation(t *testi
 		if capability.Name == CapabilitySystemAccountStatus || capability.Name == CapabilitySystemCapabilities {
 			continue
 		}
+		if capability.Name == CapabilityMailReviewRead {
+			if capability.Enabled {
+				t.Fatalf("operator gate activated review read capability %#v", capability)
+			}
+			continue
+		}
 		if capability.ImplementationStatus == ImplementationStatusImplemented || capability.Enabled {
 			t.Fatalf("operator gate activated unrelated capability %#v", capability)
 		}

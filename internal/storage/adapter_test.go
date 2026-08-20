@@ -83,6 +83,12 @@ func (h *fakeHandle) GetGateDecision(context.Context, storage.AccountID, string)
 func (h *fakeHandle) CommitGateDecision(context.Context, storage.GateDecisionCommit) error {
 	return nil
 }
+func (h *fakeHandle) ListReviewCandidates(context.Context, storage.ReviewCandidateQuery) ([]storage.ReviewCandidateRow, error) {
+	return nil, nil
+}
+func (h *fakeHandle) GetCurrentGateInspection(context.Context, storage.AccountID, string) (storage.CurrentGateInspection, error) {
+	return storage.CurrentGateInspection{}, nil
+}
 func (h *fakeHandle) GetCandidateContent(context.Context, storage.AccountID, string, int) (storage.CandidateContentState, error) {
 	return storage.CandidateContentState{}, nil
 }

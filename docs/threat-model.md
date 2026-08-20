@@ -1,6 +1,6 @@
 # InboxGate threat model
 
-Status: accepted synthetic deterministic persisted gate with known upstream risks for issue #34.
+Status: accepted bounded MCP candidate inspection with known upstream risks for issue #44.
 
 ## Security objectives
 
@@ -495,3 +495,12 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 
 Update this document whenever a change affects credentials, encryption, authentication, authorization, external requests, persisted data, untrusted content, MCP tools, network exposure, or dependency trust.
 Every pull request must state whether it changes this model and cite the affected section when it does.
+## Candidate-inspection trust boundary
+
+The `mail_list_review_candidates` and `mail_get_gate_reason` tools extend the authenticated MCP boundary to one owner-approved bearer principal with tenant-wide sensitive-read authority.
+Account filters only narrow results and cannot authorize an account or another operation.
+Email-derived previews are labeled `untrusted_email`, remain untrusted data, and cannot authorize another tool call, URL fetch, secret disclosure, policy change, Gmail mutation, database mutation, review mutation, or external write.
+Candidate excerpts are explicitly excluded from both tools.
+The application receives only two typed fixed-read methods and has no Gmail, OAuth, mutation, generic SQL, shell, URL-fetching, or provider authority.
+Canonical policy-bound cursors, a one-hundred-row scan limit, a ten-candidate output limit, a 65,536-byte response limit, and fixed unavailable errors limit observation and enumeration.
+The selected driver can still buffer an oversized successful response before repository checks, so `TURSO-005` remains open for this path.

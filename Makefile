@@ -58,7 +58,15 @@ test-fuzz:
 	printf '%s\n' 'Running bounded FuzzSnapshotCompositionIsBoundedAndDeterministic'; \
 	$(GO) test -run='^$$' -fuzz='^FuzzSnapshotCompositionIsBoundedAndDeterministic$$' -fuzztime=2s -parallel=1 ./internal/accountstatus; \
 	printf '%s\n' 'Running bounded FuzzOperatorSummaryRenderingIsBoundedAndClosedWorld'; \
-	$(GO) test -run='^$$' -fuzz='^FuzzOperatorSummaryRenderingIsBoundedAndClosedWorld$$' -fuzztime=2s -parallel=1 ./internal/mcp
+	$(GO) test -run='^$$' -fuzz='^FuzzOperatorSummaryRenderingIsBoundedAndClosedWorld$$' -fuzztime=2s -parallel=1 ./internal/mcp; \
+	for target in FuzzListRequestAndCursorDecodingRemainClosedAndBounded FuzzPreviewTruncationNeverSplitsUTF8OrExceedsLimit; do \
+		printf '%s\n' "Running bounded $$target"; \
+		$(GO) test -run='^$$' -fuzz="^$$target$$" -fuzztime=2s -parallel=1 ./internal/reviewinspect; \
+	done; \
+	printf '%s\n' 'Running bounded FuzzReviewStorageRowDecoding'; \
+	$(GO) test -run='^$$' -fuzz='^FuzzReviewStorageRowDecoding$$' -fuzztime=2s -parallel=1 ./internal/storage; \
+	printf '%s\n' 'Running bounded FuzzReviewToolEnvelopesRemainBoundedAndClosed'; \
+	$(GO) test -run='^$$' -fuzz='^FuzzReviewToolEnvelopesRemainBoundedAndClosed$$' -fuzztime=2s -parallel=1 ./internal/mcp
 
 test-race:
 	$(GO) test -race ./...

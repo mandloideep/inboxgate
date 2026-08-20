@@ -281,6 +281,14 @@ func (message Message) CanonicalJSON() []byte   { return bytes.Clone(message.can
 func (message Message) MetadataHash() string    { return message.metadataHash }
 func (message Message) DiscoverySource() string { return message.metadata.DiscoverySource }
 func (message Message) Untrusted() bool         { return message.metadata.Version == MetadataVersion1 }
+func (message Message) InternalDateUnixMS() int64 {
+	value, _ := strconv.ParseInt(message.metadata.InternalDateMS, 10, 64)
+	return value
+}
+func (message Message) SenderDisplay() string { return message.metadata.SenderDisplay }
+func (message Message) SenderAddress() string { return message.metadata.SenderAddress }
+func (message Message) Subject() string       { return message.metadata.Subject }
+func (message Message) HasAttachments() bool  { return message.metadata.HasAttachments }
 
 // Equal reports exact canonical identity and metadata equality.
 func (message Message) Equal(other Message) bool {

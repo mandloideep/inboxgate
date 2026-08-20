@@ -42,6 +42,8 @@ type Handle interface {
 	GetDiscoveredMessage(context.Context, AccountID, string) (mail.Message, error)
 	GetGateDecision(context.Context, AccountID, string) (GateDecisionState, error)
 	CommitGateDecision(context.Context, GateDecisionCommit) error
+	ListReviewCandidates(context.Context, ReviewCandidateQuery) ([]ReviewCandidateRow, error)
+	GetCurrentGateInspection(context.Context, AccountID, string) (CurrentGateInspection, error)
 	GetCandidateContent(context.Context, AccountID, string, int) (CandidateContentState, error)
 	CommitCandidateContent(context.Context, CandidateContentCommit) error
 	Close() error

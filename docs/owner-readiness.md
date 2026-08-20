@@ -19,6 +19,7 @@ No owner credential or provider setup is required to implement, review, merge, o
 [ADR 0014](adr/0014-authenticated-stateless-mcp.md) adds authenticated stateless MCP `2026-07-28` capability inspection with one exact `system_capabilities` tool and synthetic loopback validation.
 [ADR 0015](adr/0015-bound-mcp-account-status-disclosure.md) adds operator-gated bounded `accounts_list` and `mail_sync_status` reads for the one approved Hermes principal through credential-free literal-loopback storage.
 [ADR 0016](adr/0016-own-bounded-turso-stream-close-lifecycle.md) replaces only the selected driver's stream-close lifecycle with a provenance-pinned local fork that uses caller-owned cancellation, a two-worker join, fixed adapter errors, and no new dependency or capability.
+[ADR 0017](adr/0017-bound-mcp-candidate-gate-inspection.md) adds two dual-gated bounded candidate-inspection tools over one credential-free literal-loopback source without excerpts, writes, dependencies, or migrations.
 The adapter is connected to one-shot account enrollment, lifecycle commands, and the operator-gated account-status MCP source only after a credential-free literal-loopback endpoint check.
 The current-discovery use case, gate evaluator, and candidate-content extractor remain inert and have no command, scheduler, service, health, capability, HTTP, or MCP caller.
 They remain disconnected from service startup, health, configuration inspection, capabilities, doctor, executable synchronization, the implemented bounded MCP route, remote database endpoints, and production credentials.
@@ -351,3 +352,14 @@ Proceed only with the credential-free checks defined by issue <number>.
 
 If an implementation genuinely requires a live check, the issue must first define the exact command, redaction behavior, least privilege, cleanup, and owner approval boundary.
 The owner enters values directly into the controlled runtime environment and the agent still does not receive or print them.
+## OWNER ACTION: candidate-inspection activation
+
+The `mail_list_review_candidates` and `mail_get_gate_reason` tools are implemented for synthetic credential-free validation but are not approved for deployment.
+Candidate excerpts are explicitly excluded, and returned previews are labeled `untrusted_email`.
+Before activation, the owner must approve one owner-approved Hermes service principal for tenant-wide sensitive reads and accept that account filters narrow results but cannot authorize accounts.
+In the approved private deployment secret manager, generate and store the MCP bearer under the YAML-selected environment-variable name, whose default is `INBOXGATE_MCP_TOKEN`.
+In the approved deployment environment, place the literal-loopback Turso URL under the YAML-selected name whose default is `TURSO_DATABASE_URL`, and leave the YAML-selected `TURSO_AUTH_TOKEN` environment variable unset for this credential-free path.
+Enable both `mcp.enabled` and `capabilities.mail.review_read` only after confirming migration `0006_gate_decisions.sql`, private TLS and network routing, exact MCP protocol revision `2026-07-28`, and the expected three-tool inventory.
+Validate that invalid tokens, account selectors, cursors, stale policies, and missing rows reveal no private detail, and validate that results stay below 65,536 bytes.
+Review and accept the broadened `TURSO-005` exposure before activation.
+Never paste the bearer token, database token, OAuth material, email data, account identifiers, cursors, provider URLs, or source errors into issues, pull requests, logs, or chat.

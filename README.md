@@ -4,7 +4,7 @@ InboxGate is a small Go service that keeps high-volume email behind a determinis
 The first release will connect multiple Gmail and Google Workspace accounts with read-only access and expose a bounded MCP surface to Hermes.
 
 The repository currently contains the contributor foundation, a minimal command-line binary, strict configuration schema v1 validation, a typed capability registry, bounded process-health serving, and one authenticated stateless MCP endpoint.
-Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, local service preflight, authenticated `system_capabilities` inspection, and gated account-status inspection are implemented.
+Local configuration inspection, capability inspection, liveness, process readiness, structured runtime logging, graceful shutdown, local service preflight, authenticated `system_capabilities` inspection, gated account-status inspection, and dual-gated candidate inspection are implemented.
 A replaceable Turso adapter with a provenance-pinned maintained fork for bounded stream close, embedded append-only migrations, minimum Gmail account identity and synchronization-cursor persistence, versioned authenticated encryption, a one-shot Gmail OAuth enrollment command, an inert bounded Gmail current-discovery use case, an inert deterministic persisted gate, and inert bounded candidate-content extraction are present with remaining driver behavior tracked in the [known-risk register](docs/known-risks.md).
 Credential persistence stores only validated ciphertext envelopes and is covered by the same credential-free literal-loopback restriction as migrations and account-cursor persistence.
 Versioned account lifecycle state supports bounded listing, pause, resume, typed reauthorization markers, enrollment activation, and staged provider revocation with exact local credential deletion.
@@ -21,7 +21,7 @@ It remains credential-free and disconnected from executable Gmail polling, comma
 The candidate-content extractor proves an active lifecycle and current candidate decision before one fixed read-only Gmail content request, prefers one inline plain-text part over one inline HTML part, excludes attachments, canonicalizes one UTF-8 excerpt, and persists it through an exact source-bound compare-and-swap.
 Every excerpt is bounded by `gmail.body_excerpt_bytes`, explicitly typed as `untrusted_email`, and disconnected from commands, scheduling, service startup, health, capabilities, MCP, remote Turso, and live credentials.
 The validated `retention.excerpt_days` setting remains policy only because this inert slice does not schedule or perform content deletion.
-Executable Gmail polling, review retrieval through MCP, live OAuth approval, remote database activation, and deployment are intentionally not implemented yet.
+Executable Gmail polling, review writes through MCP, live OAuth approval, remote database activation, and deployment are intentionally not implemented yet.
 
 ## Quick start
 
@@ -80,3 +80,10 @@ Release operators and consumers should follow [docs/releases.md](docs/releases.m
 ## License
 
 InboxGate is available under the [MIT License](LICENSE).
+# Read-only candidate inspection
+
+When both `mcp.enabled` and `capabilities.mail.review_read` are true, InboxGate exposes `mail_list_review_candidates` and `mail_get_gate_reason` to one owner-approved bearer principal with tenant-wide sensitive-read authority.
+Account filters narrow results but never authorize an account.
+Every email-derived value is marked or treated as `untrusted_email` and cannot authorize another action.
+Candidate excerpts are explicitly excluded from both tools.
+The source performs fixed bounded reads and does not close `TURSO-005`.
