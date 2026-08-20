@@ -431,7 +431,11 @@ func TestOperatorToolsEnforceExactAccountCardinalityAndSharedOrdering(t *testing
 					var output struct {
 						OutputVersion int `json:"output_version"`
 						Accounts      []struct {
-							AccountID string `json:"account_id"`
+							AccountID   string `json:"account_id"`
+							State       string `json:"state"`
+							CurrentSync struct {
+								CursorStatus string `json:"cursor_status"`
+							} `json:"current_sync"`
 						} `json:"accounts"`
 					}
 					if err := json.Unmarshal(structured, &output); err != nil {
@@ -450,14 +454,15 @@ func TestOperatorToolsEnforceExactAccountCardinalityAndSharedOrdering(t *testing
 						}
 					}
 					if count == 2 {
-						required := []string{`"state":"active"`, `"state":"paused"`}
-						if name == mailSyncStatusTool {
-							required = []string{`"cursor_status":"uninitialized"`, `"cursor_status":"initialized"`}
+						first, second := output.Accounts[0], output.Accounts[1]
+						if first.AccountID != wantIDs[0] || second.AccountID != wantIDs[1] {
+							t.Fatalf("%s two-account association order = (%q,%q), want (%q,%q)", name, first.AccountID, second.AccountID, wantIDs[0], wantIDs[1])
 						}
-						for _, fragment := range required {
-							if !strings.Contains(string(structured), fragment) {
-								t.Fatalf("%s two-account result missing %s: %s", name, fragment, structured)
-							}
+						if name == accountsListTool && (first.State != "active" || second.State != "paused") {
+							t.Fatalf("%s state associations = (%q:%q,%q:%q)", name, first.AccountID, first.State, second.AccountID, second.State)
+						}
+						if name == mailSyncStatusTool && (first.CurrentSync.CursorStatus != "uninitialized" || second.CurrentSync.CursorStatus != "initialized") {
+							t.Fatalf("%s cursor associations = (%q:%q,%q:%q)", name, first.AccountID, first.CurrentSync.CursorStatus, second.AccountID, second.CurrentSync.CursorStatus)
 						}
 					}
 					if count == 100 && response.Body.Len() > MaximumResponseBytes {
