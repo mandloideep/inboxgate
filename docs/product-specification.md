@@ -189,12 +189,14 @@ inboxgate migrate
 ```
 
 The completed first-release `serve` command will run the private MCP endpoint, health endpoints, OAuth callback endpoint, and internal poll scheduler.
-The current service slice always registers fixed process-health endpoints and, only when `mcp.enabled` is true, registers one exact authenticated stateless MCP route for capability inspection.
-It deliberately does not register OAuth, scheduler, database, Gmail, review, backfill, or provider behavior.
+The current service slice always registers fixed process-health endpoints and, only when `mcp.enabled` is true, registers one exact authenticated stateless MCP route.
+That route always exposes capability inspection and conditionally exposes bounded account lifecycle and synchronization-status reads when `mcp.enable_operator_tools` is true.
+It deliberately does not register OAuth, scheduler, Gmail, review, backfill execution, provider behavior, or database mutation.
 The other subcommands are operator surfaces and reuse the same application use cases.
 The local `capabilities` command is available before `serve` and loads inert validated policy without starting any runtime component.
 The local `doctor` command validates configuration and constructs the logger, readiness state, health handler, and bounded HTTP server without binding a listener.
 The implemented MCP `system_capabilities` tool adapts the same typed registry.
+The implemented `accounts_list` and `mail_sync_status` tools adapt one narrow account-list application service and are executable only with credential-free literal-loopback storage.
 
 Do not create separate server and worker binaries in the first release.
 Do not add a distributed worker until current synchronization and backfill cannot meet measured requirements inside one process.
@@ -842,18 +844,20 @@ JSON-RPC semantic errors are audit failures even when the HTTP status is `200`.
 The official Go SDK v1.7.0 is a protocol decoder and dispatcher inside these InboxGate-owned controls and does not define authorization policy.
 
 The first tool set is intentionally small.
-Only `system_capabilities` is implemented in the current slice.
+`system_capabilities`, `accounts_list`, and `mail_sync_status` are implemented in the current slice.
 The remaining tools below require later approved issues and are not registered.
 
 ### 12.1 Read tools
 
 `accounts_list`
 
-Returns account IDs, display names, states, last synchronization times, backfill status, and safe error summaries.
+Returns zero through 100 bytewise-sorted opaque account IDs with the fixed `gmail` provider and exact persisted lifecycle state.
+It excludes display names, addresses, credential and cursor presence, cursor values, synchronization times, provider subjects, and error details.
 
 `mail_sync_status`
 
-Returns per-account current synchronization and backfill progress.
+Returns the same bounded account snapshot with current-sync and backfill implementation and configuration status from the exact capability registry.
+Cursor presence maps only to `initialized` or `uninitialized`, while execution is `not_available`, durable stale and checkpoint state are `not_persisted`, and unpersisted times, errors, and progress are null.
 
 `mail_list_review_candidates`
 
@@ -972,7 +976,7 @@ The initial registry slice has these surface decisions.
 | Configuration | Five false-by-default gates and strict rejection of unknown or unimplemented enablement |
 | Storage and migration | Not applicable |
 | Gmail and OAuth | Not applicable |
-| MCP | Authenticated `2026-07-28` transport exposes only typed `system_capabilities` |
+| MCP | Authenticated `2026-07-28` transport always exposes typed `system_capabilities` and conditionally exposes bounded tenant-wide `accounts_list` and `mail_sync_status` under the operator gate |
 | Operator CLI | Local deterministic JSON inspection only |
 | Audit, metrics, and health | Fixed redacted MCP audit events and unchanged process-health bodies; no metrics |
 | Tests | Unit, parser, renderer, and real-process coverage |
@@ -992,7 +996,8 @@ Migration, account-cursor, ciphertext-credential, lifecycle, current-discovery, 
 The one-shot `account add` command connects configuration-selected runtime values, OAuth enrollment, and typed persistence operations.
 The `account list`, `account pause`, `account resume`, and confirmed `account revoke` commands connect only the minimum selected database and encryption values required for their operation.
 Live Turso credentials and remote database activation remain prohibited.
-The health service, optional capability-only MCP route, capability inspection, configuration inspection, and doctor do not activate this persistence boundary.
+The health service, capability inspection, configuration inspection, and doctor do not activate this persistence boundary.
+The optional operator-gated MCP account-status tools activate only one bounded account-list read through credential-free literal-loopback storage.
 
 The owner accepts the unresolved `base_url` authority, raw remote diagnostic, transaction completion, close context, terminal acknowledgement, private HTTP client and redirect policy, and successful-response bound risks recorded in the [known-risk register](known-risks.md).
 That acceptance permits focused storage implementation to continue but does not describe the risks as fixed.

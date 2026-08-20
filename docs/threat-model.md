@@ -77,7 +77,8 @@ Operators are warned to review capability output before sharing it publicly.
 
 The process-health runtime introduces the first inbound network listener and operational log stream.
 The listener always registers exact liveness and process-readiness paths with fixed bounded JSON documents.
-It conditionally registers only the authenticated MCP capability route described below and has no Gmail, OAuth, database, scheduler, provider, mutation, operator, URL-fetching, SQL, shell, or static-content route.
+It conditionally registers only the authenticated MCP route described below and has no Gmail, OAuth, scheduler, provider, mutation, URL-fetching, SQL, shell, or static-content route.
+The operator gate can add one bounded typed database read source to that route only for credential-free literal-loopback storage.
 Configuration validation and runtime construction reserve both health paths against MCP overlap whether MCP is enabled or disabled.
 Unknown paths, unsupported methods, and request bodies receive fixed errors that never echo request data.
 Percent-encoded alternate spellings of a health path remain unmatched and are logged only as the bounded `unmatched` operation.
@@ -102,7 +103,8 @@ The local `doctor` command constructs the runtime without binding a socket, read
 
 The enabled MCP route is the first authenticated application endpoint and creates an inbound authentication, protocol-parser, SDK, and capability-disclosure boundary from the approved Hermes service identity to InboxGate.
 The route is absent and its selected environment variable is not read when `mcp.enabled` is false.
-Enabled `serve` resolves only the environment variable named by `mcp.bearer_token_env`, requires a canonical unpadded base64url encoding of exactly 32 bytes, and fails before bind through one fixed diagnostic when construction fails.
+Enabled `serve` resolves the environment variable named by `mcp.bearer_token_env`, requires a canonical unpadded base64url encoding of exactly 32 bytes, and fails before bind through one fixed diagnostic when construction fails.
+When operator tools are enabled, it then resolves only the selected database URL and optional token names, requires a credential-free literal IPv4 or IPv6 loopback HTTP endpoint, and constructs no source when either gate is disabled.
 The repository clears its temporary encoded byte slice and the handler-owned decoded token on close where practical, but Go strings, compiler copies, garbage-collected memory, and the process environment prevent a complete zeroization guarantee.
 
 The bearer token authenticates one approved Hermes service identity and does not provide per-account or per-tool authorization.
@@ -116,7 +118,7 @@ These controls reduce browser credential abuse and DNS-rebinding ambiguity but d
 The deployment boundary must reject unapproved hostnames and routes before traffic reaches InboxGate.
 
 The wrapper requires exact protocol revision `2026-07-28` in both the routing header and self-describing request metadata.
-It rejects legacy initialization, initialized notifications, session identifiers, event identifiers, SSE, resumability, older revisions, conflicting method or tool routing, unexpected named components, and every method outside discovery, tools/list, and tools/call for `system_capabilities`.
+It rejects legacy initialization, initialized notifications, session identifiers, event identifiers, SSE, resumability, older revisions, conflicting method or tool routing, unexpected named components, and every method outside discovery, tools/list, and tools/call for the three compiled tool names.
 The official Go SDK v1.7.0 remains inside this wrapper and cannot independently broaden the exposed authority.
 Tests start isolated processes with each of the eleven documented `MCPGODEBUG` compatibility parameters and all parameters together to prove that sessions, legacy behavior, weak media handling, Origin acceptance, broader methods, broader tools, and unbounded bodies remain unavailable.
 
@@ -134,10 +136,21 @@ The repository parser independently rejects invalid UTF-8, duplicate fields, NUL
 Authenticated JSON-RPC errors use fixed categories without a data field, decoder text, SDK diagnostics, request fragments, or reflected values.
 The SDK is still a supply-chain and parser risk, so the exact v1.7.0 module and full resolved graph are pinned, licensed in third-party notices, checked against published advisories, included in release build metadata and each canonical SBOM binary-location inventory, and covered by an accepted removal plan in ADR 0014.
 
-The only registered tool is `system_capabilities` with an empty closed input schema and read-only, idempotent, non-destructive, closed-world annotations.
+The always-registered tool is `system_capabilities` with an empty closed input schema and read-only, idempotent, non-destructive, closed-world annotations.
 It adapts the typed capability registry and cannot reach Gmail, OAuth, Turso, storage, review, backfill, shell, SQL, URL fetching, Vikunja, provider connectivity, or arbitrary JSON-RPC behavior.
 Its result can reveal compiled capability names and validated secret environment-variable names, which are operational metadata and must remain authenticated and reviewed before sharing.
 It never inspects or reveals secret values or presence, account state, database state, migration state, provider state, hostname, time, or process state.
+
+When both MCP and operator tools are enabled, the same one-principal bearer authorizes tenant-wide `accounts_list` and `mail_sync_status` reads for every enrolled account.
+Neither tool accepts arguments, selectors, pagination, roles, tenants, or account filters, and both use the same closed annotations and complete response bound.
+Authentication and structural validation finish before exactly one `ListAccounts` call, while disabled, unauthorized, malformed, and unknown requests make no storage call.
+The application service receives only that narrow read interface and an authority-free snapshot model, so MCP cannot reach a storage handle, SQL, mutation, Gmail, OAuth, provider, synchronization, or backfill executor.
+Rows are limited to 100 and must contain sorted unique opaque identifiers, fixed Gmail provider values, and valid lifecycle shapes.
+The account-list result excludes provider subjects, display names, addresses, credential and cursor presence, cursor values, endpoints, and secrets.
+The synchronization result discloses only initialized or uninitialized cursor status and uses explicit unavailable, not-persisted, and null values for facts that are not durable.
+Every source, decoding, deadline, cancellation, or size failure becomes fixed JSON-RPC `-32603` without partial output or upstream diagnostics.
+The fixed audits use `mcp.accounts_list` or `mcp.mail_sync_status` and contain no account data.
+This tenant-wide authorization is valid only for the single owner-approved Hermes principal and must be replaced before multiple principals, tenants, delegation, or roles are introduced.
 
 Each request emits exactly one bounded structured audit event at every valid configured log level containing only a fixed operation, method class, numeric status, bounded duration, and outcome.
 JSON-RPC semantic failures retain a failure outcome independently of their HTTP `200` transport status.
@@ -338,7 +351,8 @@ The validated `retention.excerpt_days` setting is policy only because this inert
 [ADR 0004](adr/0004-turso-serverless-adapter.md) accepts `tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4 behind a repository-owned adapter.
 The adapter is reachable from `account add`, `account list`, `account pause`, `account resume`, and confirmed `account revoke` after environment-selector separation and a credential-free literal-loopback endpoint check.
 The internal current-discovery use case can call its typed operations when supplied a handle, but no executable path constructs that composition.
-The adapter remains unreachable from service startup, health endpoints, doctor, configuration inspection, capability inspection, executable Gmail synchronization, and MCP.
+The adapter remains unreachable from health endpoints, doctor, configuration inspection, capability inspection, and executable Gmail synchronization.
+Service startup and MCP reach only bounded `ListAccounts` through the operator-gated credential-free literal-loopback composition.
 [ADR 0005](adr/0005-append-only-migration-protocol.md) adds an embedded migration ledger and runner that can execute only against a credential-free literal-loopback endpoint.
 [ADR 0006](adr/0006-minimum-account-cursor-persistence.md) appends minimum account identity and synchronization-cursor tables and exposes only typed account and cursor operations under the same restriction.
 [ADR 0007](adr/0007-versioned-provider-credential-encryption.md) appends a ciphertext-only provider-credential table and exposes only typed credential lookup and compare-and-swap under the same restriction.
@@ -473,7 +487,7 @@ Release binaries and archives are byte-reproducible, and artifacts are rejected 
 - The host, Go toolchain, GitHub, Google, Turso, and private network are administered independently and may fail.
 - Hermes is authenticated but still receives least privilege because its model and email inputs are not trusted to choose authority.
 - Production deployment, OAuth consent, secret creation, live account access, and production database writes require explicit owner approval.
-- The current foundation has a health service plus one authenticated stateless MCP capability route, a one-shot OAuth enrollment command, an inert internal current-discovery use case, an inert deterministic persisted gate, and an inert bounded candidate-content extractor restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, mail-data MCP tool, scheduler, executable Gmail synchronization, or active excerpt retention.
+- The current foundation has a health service plus one authenticated stateless MCP route with capability inspection and conditionally gated lifecycle and synchronization-status reads, a one-shot OAuth enrollment command, an inert internal current-discovery use case, an inert deterministic persisted gate, and an inert bounded candidate-content extractor restricted to synthetic providers and credential-free literal-loopback persistence until owner approval, but no remote database activation, live OAuth approval, mail-content MCP tool, scheduler, executable Gmail synchronization, or active excerpt retention.
 - Immutable releases are enabled and enforced by GitHub before an owner attempts publication.
 - A completed release run is still reviewed as an owner operation and is not a deployment authorization.
 

@@ -9,15 +9,16 @@ import (
 type CapabilityName string
 
 const (
-	CapabilityGmailBackfill      CapabilityName = "gmail.backfill"
-	CapabilityGmailCurrentSync   CapabilityName = "gmail.current_sync"
-	CapabilityGmailModify        CapabilityName = "gmail.modify"
-	CapabilityGmailRead          CapabilityName = "gmail.read"
-	CapabilityMailReviewRead     CapabilityName = "mail.review_read"
-	CapabilityMailReviewWrite    CapabilityName = "mail.review_write"
-	CapabilitySystemCapabilities CapabilityName = "system.capabilities"
-	CapabilityVikunjaWrite       CapabilityName = "vikunja.write"
-	CapabilityZohoRead           CapabilityName = "zoho.read"
+	CapabilityGmailBackfill       CapabilityName = "gmail.backfill"
+	CapabilityGmailCurrentSync    CapabilityName = "gmail.current_sync"
+	CapabilityGmailModify         CapabilityName = "gmail.modify"
+	CapabilityGmailRead           CapabilityName = "gmail.read"
+	CapabilityMailReviewRead      CapabilityName = "mail.review_read"
+	CapabilityMailReviewWrite     CapabilityName = "mail.review_write"
+	CapabilitySystemAccountStatus CapabilityName = "system.account_status"
+	CapabilitySystemCapabilities  CapabilityName = "system.capabilities"
+	CapabilityVikunjaWrite        CapabilityName = "vikunja.write"
+	CapabilityZohoRead            CapabilityName = "zoho.read"
 )
 
 type ImplementationStatus string
@@ -63,6 +64,7 @@ const (
 	capabilityConfigGmailRead
 	capabilityConfigMailReviewRead
 	capabilityConfigMailReviewWrite
+	capabilityConfigMCPOperator
 )
 
 type capabilityPrerequisites uint8
@@ -71,14 +73,16 @@ const (
 	capabilityPrerequisitesNone capabilityPrerequisites = iota
 	capabilityPrerequisitesGmail
 	capabilityPrerequisitesDatabase
+	capabilityPrerequisitesAccountStatus
 )
 
 type capabilityDefinition struct {
-	Name                   CapabilityName
-	ConfigBinding          capabilityConfigBinding
-	ImplementationStatus   ImplementationStatus
-	Prerequisites          capabilityPrerequisites
-	SecurityClassification SecurityClassification
+	Name                      CapabilityName
+	ConfigBinding             capabilityConfigBinding
+	ImplementationStatus      ImplementationStatus
+	Prerequisites             capabilityPrerequisites
+	SecurityClassification    SecurityClassification
+	RequiredDatabaseMigration string
 }
 
 var capabilityDefinitions = []capabilityDefinition{
@@ -88,6 +92,7 @@ var capabilityDefinitions = []capabilityDefinition{
 	{Name: CapabilityGmailRead, ConfigBinding: capabilityConfigGmailRead, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesGmail, SecurityClassification: SecuritySensitiveRead},
 	{Name: CapabilityMailReviewRead, ConfigBinding: capabilityConfigMailReviewRead, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesDatabase, SecurityClassification: SecuritySensitiveRead},
 	{Name: CapabilityMailReviewWrite, ConfigBinding: capabilityConfigMailReviewWrite, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesDatabase, SecurityClassification: SecuritySensitiveWrite},
+	{Name: CapabilitySystemAccountStatus, ConfigBinding: capabilityConfigMCPOperator, ImplementationStatus: ImplementationStatusImplemented, Prerequisites: capabilityPrerequisitesAccountStatus, SecurityClassification: SecuritySensitiveRead, RequiredDatabaseMigration: "0004_account_lifecycle.sql"},
 	{Name: CapabilitySystemCapabilities, ConfigBinding: capabilityConfigNone, ImplementationStatus: ImplementationStatusImplemented, Prerequisites: capabilityPrerequisitesNone, SecurityClassification: SecurityOperationalMetadata},
 	{Name: CapabilityVikunjaWrite, ConfigBinding: capabilityConfigNone, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesNone, SecurityClassification: SecuritySensitiveWrite},
 	{Name: CapabilityZohoRead, ConfigBinding: capabilityConfigNone, ImplementationStatus: ImplementationStatusNotImplemented, Prerequisites: capabilityPrerequisitesNone, SecurityClassification: SecuritySensitiveRead},
@@ -108,9 +113,14 @@ func capabilityRegistryFromDefinitions(configuration Config, definitions []capab
 	for _, definition := range definitions {
 		configurationStatus := configurationStatus(configuration, definition.ConfigBinding)
 		enabled := definition.ImplementationStatus == ImplementationStatusImplemented && (configurationStatus == ConfigurationStatusEnabled || configurationStatus == ConfigurationStatusNotConfigurable)
+		var migration *string
+		if definition.RequiredDatabaseMigration != "" {
+			value := definition.RequiredDatabaseMigration
+			migration = &value
+		}
 		registry = append(registry, Capability{
 			Name: definition.Name, ImplementationStatus: definition.ImplementationStatus, ConfigurationStatus: configurationStatus, Enabled: enabled,
-			RequiredSecretNames: requiredSecretNames(configuration, definition.Prerequisites), RequiredDatabaseMigration: nil,
+			RequiredSecretNames: requiredSecretNames(configuration, definition.Prerequisites), RequiredDatabaseMigration: migration,
 			SecurityClassification: definition.SecurityClassification,
 		})
 	}
@@ -121,25 +131,27 @@ func configurationStatus(configuration Config, binding capabilityConfigBinding) 
 	if binding == capabilityConfigNone {
 		return ConfigurationStatusNotConfigurable
 	}
-	enabled := capabilityConfigured(configuration.Capabilities, binding)
+	enabled := capabilityConfigured(configuration, binding)
 	if enabled {
 		return ConfigurationStatusEnabled
 	}
 	return ConfigurationStatusDisabled
 }
 
-func capabilityConfigured(configuration Capabilities, binding capabilityConfigBinding) bool {
+func capabilityConfigured(configuration Config, binding capabilityConfigBinding) bool {
 	switch binding {
 	case capabilityConfigGmailBackfill:
-		return configuration.GmailBackfill
+		return configuration.Capabilities.GmailBackfill
 	case capabilityConfigGmailCurrentSync:
-		return configuration.GmailCurrentSync
+		return configuration.Capabilities.GmailCurrentSync
 	case capabilityConfigGmailRead:
-		return configuration.GmailRead
+		return configuration.Capabilities.GmailRead
 	case capabilityConfigMailReviewRead:
-		return configuration.MailReviewRead
+		return configuration.Capabilities.MailReviewRead
 	case capabilityConfigMailReviewWrite:
-		return configuration.MailReviewWrite
+		return configuration.Capabilities.MailReviewWrite
+	case capabilityConfigMCPOperator:
+		return configuration.MCP.Enabled && configuration.MCP.EnableOperatorTools
 	default:
 		return false
 	}
@@ -158,6 +170,8 @@ func requiredSecretNames(configuration Config, prerequisites capabilityPrerequis
 		)
 	case capabilityPrerequisitesDatabase:
 		return sortedSecretNames(configuration.Database.AuthTokenEnv, configuration.Database.URLEnv)
+	case capabilityPrerequisitesAccountStatus:
+		return sortedSecretNames(configuration.Database.AuthTokenEnv, configuration.Database.URLEnv, configuration.MCP.BearerTokenEnv)
 	default:
 		return []string{}
 	}
@@ -165,7 +179,7 @@ func requiredSecretNames(configuration Config, prerequisites capabilityPrerequis
 
 func validateCapabilityDefinitions(configuration Config, definitions []capabilityDefinition, problems *[]Problem) {
 	for _, definition := range definitions {
-		if definition.ConfigBinding != capabilityConfigNone && capabilityConfigured(configuration.Capabilities, definition.ConfigBinding) && definition.ImplementationStatus != ImplementationStatusImplemented {
+		if definition.ConfigBinding != capabilityConfigNone && capabilityConfigured(configuration, definition.ConfigBinding) && definition.ImplementationStatus != ImplementationStatusImplemented {
 			problem(problems, "capabilities."+string(definition.Name), "cannot enable a capability not implemented by this binary")
 		}
 	}

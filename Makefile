@@ -54,7 +54,11 @@ test-fuzz:
 	for target in FuzzParseBearerToken FuzzParseAuthorization FuzzRoutingHeaders FuzzStructuralEnvelope FuzzCapabilityRendering; do \
 		printf '%s\n' "Running bounded $$target"; \
 		$(GO) test -run='^$$' -fuzz="^$$target$$" -fuzztime=2s -parallel=1 ./internal/mcp; \
-	done
+	done; \
+	printf '%s\n' 'Running bounded FuzzSnapshotCompositionIsBoundedAndDeterministic'; \
+	$(GO) test -run='^$$' -fuzz='^FuzzSnapshotCompositionIsBoundedAndDeterministic$$' -fuzztime=2s -parallel=1 ./internal/accountstatus; \
+	printf '%s\n' 'Running bounded FuzzOperatorSummaryRenderingIsBoundedAndClosedWorld'; \
+	$(GO) test -run='^$$' -fuzz='^FuzzOperatorSummaryRenderingIsBoundedAndClosedWorld$$' -fuzztime=2s -parallel=1 ./internal/mcp
 
 test-race:
 	$(GO) test -race ./...

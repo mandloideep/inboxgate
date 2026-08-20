@@ -17,10 +17,11 @@ No owner credential or provider setup is required to implement, review, merge, o
 [ADR 0012](adr/0012-deterministic-persisted-gate.md) adds one pure deterministic classifier, a strict append-only gate-decision table, typed fake and Turso persistence, and an inert evaluator under the same credential-free restriction.
 [ADR 0013](adr/0013-bounded-candidate-content.md) adds one bounded read-only Gmail content projection, fail-closed MIME, charset, and HTML processing, strict append-only candidate-content persistence, and an inert extractor under the same credential-free restriction.
 [ADR 0014](adr/0014-authenticated-stateless-mcp.md) adds authenticated stateless MCP `2026-07-28` capability inspection with one exact `system_capabilities` tool and synthetic loopback validation.
+[ADR 0015](adr/0015-bound-mcp-account-status-disclosure.md) adds operator-gated bounded `accounts_list` and `mail_sync_status` reads for the one approved Hermes principal through credential-free literal-loopback storage.
 [ADR 0016](adr/0016-own-bounded-turso-stream-close-lifecycle.md) replaces only the selected driver's stream-close lifecycle with a provenance-pinned local fork that uses caller-owned cancellation, a two-worker join, fixed adapter errors, and no new dependency or capability.
-The adapter is connected only to one-shot account enrollment and lifecycle commands after a credential-free literal-loopback endpoint check.
+The adapter is connected to one-shot account enrollment, lifecycle commands, and the operator-gated account-status MCP source only after a credential-free literal-loopback endpoint check.
 The current-discovery use case, gate evaluator, and candidate-content extractor remain inert and have no command, scheduler, service, health, capability, HTTP, or MCP caller.
-They remain disconnected from service startup, health, configuration inspection, capabilities, doctor, executable synchronization, the implemented capability-only MCP route, remote database endpoints, and production credentials.
+They remain disconnected from service startup, health, configuration inspection, capabilities, doctor, executable synchronization, the implemented bounded MCP route, remote database endpoints, and production credentials.
 
 The owner accepts five unresolved driver risks for the exact selected version.
 
@@ -41,7 +42,7 @@ The deterministic gate slice uses synthetic canonical messages, compiled policy 
 The candidate-content slice uses synthetic message bodies and HTML, fake provider transports, fake storage, and credential-free literal-loopback exact-driver storage and requires no owner action.
 It does not access live Gmail, fetch attachments, activate remote Turso, expose content through MCP, or enforce `retention.excerpt_days` deletion.
 No owner should create, inject, reveal, or test a Google, Gmail, Turso, encryption, private-endpoint, or production value for these slices.
-The authenticated MCP implementation uses only generated synthetic in-memory tokens and literal loopback tests, so it also requires no owner secret for implementation, review, merge, or validation.
+The authenticated MCP implementation and bounded account-status tools use only generated synthetic in-memory tokens and credential-free literal loopback tests, so they require no owner secret for implementation, review, merge, or validation.
 Its reserved health paths, body-read cancellation, one-deadline shutdown, complete response cap, audit semantics, exact SBOM inventory, and required bounded fuzz gate add no new owner input.
 The model does not execute a Turso Database engine and does not prove the 514-parameter statement, strict tables, trigger rollback, writer serialization, or concurrent finalization.
 A supplementary credential-free local SQLite execution proves commitment mismatch rollback with an unchanged cursor, no canonical insert, and retained sealed recovery state, but it does not replace Turso Database engine evidence.
@@ -131,7 +132,8 @@ InboxGate YAML contains environment-variable names only, never their values.
 `inboxgate account revoke` resolves the selected encryption key only after it has won and separately observed a durable revoked-attempting claim and a fresh read proves an encrypted credential is present.
 Live remote Turso endpoints and bearer tokens remain rejected, so these command paths are for credential-free literal-loopback validation only until a later activation decision and explicit owner approval.
 Configuration validation and effective output, capabilities, and doctor do not resolve those values.
-MCP-disabled `serve` also performs no lookup, while MCP-enabled `serve` resolves only the selected MCP token name before bind and emits no value or presence detail.
+MCP-disabled `serve` performs no lookup, while MCP-enabled `serve` resolves the selected MCP token name before bind and emits no value or presence detail.
+When operator tools are enabled, it additionally resolves the selected Turso URL and optional token names, rejects every token value and every non-loopback or non-HTTP endpoint, and constructs no source when either gate is disabled.
 It reads only `INBOXGATE_CONFIG` for configuration-path selection when that variable is explicitly set.
 
 The `_env` names below are compiled defaults, not fixed schema names.
@@ -234,7 +236,7 @@ Exposure of this key could compromise every stored provider credential encrypted
 
 ## Step-by-step MCP and Hermes preparation
 
-The authenticated streamable HTTP transport and its sole `system_capabilities` contract are implemented, but this is not approval to create a live token, connect Hermes, expose a route, or deploy.
+The authenticated streamable HTTP transport, `system_capabilities`, and operator-gated `accounts_list` and `mail_sync_status` contracts are implemented, but this is not approval to create a live token, connect Hermes, expose a route, activate remote Turso, or deploy.
 
 1. OWNER ACTION: select an approved secret-manager product that can generate cryptographically random bytes and inject one secret into both the InboxGate and Hermes runtime secret stores without displaying it.
 2. OWNER ACTION: record the product name and exact cryptographic-generator navigation path in the private deployment runbook because no provider UI can be named safely until the owner chooses that product.
@@ -245,14 +247,16 @@ The authenticated streamable HTTP transport and its sole `system_capabilities` c
 7. Do not reuse a Google token, Turso token, encryption key, network enrollment key, session cookie, or Vikunja credential.
 8. OWNER ACTION: select a private network path between Hermes and InboxGate, an approved private hostname, a TLS termination owner, a certificate source, a firewall owner, and a proxy policy.
 9. Keep the endpoint off the public internet and configure the exact HTTPS endpoint using the validated `mcp.path` through the approved Hermes non-secret runtime configuration store.
-10. Configure Hermes for MCP protocol revision `2026-07-28`, JSON responses, POST, and only `system_capabilities`.
-11. Validate from the approved Hermes runtime that discovery advertises only tools, tools/list contains exactly `system_capabilities`, and the call returns the expected non-secret binary and configuration schema versions.
-12. Record only pass or fail, the non-secret binary version, the full public source commit, protocol revision, and the fact that exactly one tool was present.
-13. Confirm that sessions, SSE, older revisions, arbitrary Gmail requests, raw SQL, shell execution, URL fetching, OAuth enrollment, storage access, review operations, and direct Vikunja operations are unavailable.
-14. Never record the token, Authorization header, secret presence, environment dump, private hostname, private URL, client identity, or returned environment-variable names in public evidence.
-15. Define a bounded maintenance window and incident owner for rotation before activation.
-16. Rotate by generating a new independent value through the same approved UI, replacing both secret-store copies, restarting InboxGate, revalidating the sanitized capability check, and revoking the old copies without an overlap claim.
-17. A later approved issue must define overlap or zero-downtime rotation if operations require it.
+10. Configure Hermes for MCP protocol revision `2026-07-28`, JSON responses, POST, and only the owner-approved tools.
+11. Keep `mcp.enable_operator_tools` false until the deployment issue separately approves the database endpoint and tenant-wide account-status disclosure.
+12. Validate from the approved Hermes runtime that discovery advertises only tools, tools/list contains exactly `system_capabilities` while operator tools are disabled, and the call returns the expected non-secret binary and configuration schema versions.
+13. If a later deployment approval enables operator tools, validate that tools/list contains exactly `accounts_list`, `mail_sync_status`, and `system_capabilities` in bytewise order and that both account tools accept no arguments.
+14. Record only pass or fail, the non-secret binary version, the full public source commit, protocol revision, and the expected tool count.
+15. Confirm that sessions, SSE, older revisions, arbitrary Gmail requests, raw SQL, shell execution, URL fetching, OAuth enrollment, storage mutation, review operations, and direct Vikunja operations are unavailable.
+16. Never record the token, Authorization header, secret presence, environment dump, private hostname, private URL, client identity, returned environment-variable names, account identifiers, lifecycle values, or synchronization status in public evidence.
+17. Define a bounded maintenance window and incident owner for rotation before activation.
+18. Rotate by generating a new independent value through the same approved UI, replacing both secret-store copies, restarting InboxGate, revalidating the sanitized capability check, and revoking the old copies without an overlap claim.
+19. A later approved issue must define overlap or zero-downtime rotation if operations require it.
 
 The exact required server environment-variable name is the value of `mcp.bearer_token_env` in the privately validated YAML, not necessarily the compiled default.
 Tracked configuration contains only that name and the exact route policy, never the token or private endpoint.

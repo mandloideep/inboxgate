@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	accountlife "github.com/mandloideep/inboxgate/internal/account"
+	"github.com/mandloideep/inboxgate/internal/accountstatus"
 	"github.com/mandloideep/inboxgate/internal/buildmeta"
 	"github.com/mandloideep/inboxgate/internal/config"
 	"github.com/mandloideep/inboxgate/internal/cryptobox"
@@ -460,6 +461,23 @@ func resolvedOptionalAccountSecretEnvironment(name string, maximum int) ([]byte,
 var doctorResult = []byte("{\n  \"output_version\": 1,\n  \"status\": \"ok\",\n  \"checks\": [\n    {\n      \"name\": \"configuration\",\n      \"status\": \"pass\"\n    },\n    {\n      \"name\": \"service_runtime\",\n      \"status\": \"pass\"\n    }\n  ]\n}\n")
 
 var lookupMCPEnvironment = os.LookupEnv
+var lookupOperatorDatabaseEnvironment = os.LookupEnv
+var openOperatorAccountStatusSource = func(ctx context.Context, endpoint storage.Endpoint) (storage.Handle, error) {
+	adapter, err := turso.New(turso.Options{})
+	if err != nil {
+		return nil, err
+	}
+	return adapter.Open(ctx, endpoint)
+}
+
+type accountStatusMCPCloser struct {
+	handler *inboxmcp.Handler
+	source  storage.Handle
+}
+
+func (closer *accountStatusMCPCloser) Close() error {
+	return errors.Join(closer.handler.Close(), closer.source.Close())
+}
 
 func runServe(args []string, configPath string, explicitConfig bool, stdout, stderr io.Writer) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
@@ -475,6 +493,7 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 	}
 	var runtimeOptions []server.Option
 	var mcpHandler *inboxmcp.Handler
+	var mcpCloser interface{ Close() error }
 	if configuration.MCP.Enabled {
 		value, found := lookupMCPEnvironment(configuration.MCP.BearerTokenEnv)
 		if !found {
@@ -482,6 +501,46 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 			return 1
 		}
 		encodedToken := []byte(value)
+		decodedToken, tokenErr := inboxmcp.ParseBearerToken(value)
+		clear(decodedToken)
+		if tokenErr != nil {
+			clear(encodedToken)
+			fmt.Fprintln(stderr, "cannot construct MCP runtime")
+			return 1
+		}
+		var accountStatus *accountstatus.Service
+		var accountSource storage.Handle
+		if configuration.MCP.EnableOperatorTools {
+			if configuration.Database.URLEnv == configuration.Database.AuthTokenEnv ||
+				configuration.Database.URLEnv == configuration.MCP.BearerTokenEnv ||
+				configuration.Database.AuthTokenEnv == configuration.MCP.BearerTokenEnv {
+				clear(encodedToken)
+				fmt.Fprintln(stderr, "cannot construct MCP runtime")
+				return 1
+			}
+			databaseURL, urlSet := lookupOperatorDatabaseEnvironment(configuration.Database.URLEnv)
+			databaseToken, tokenSet := lookupOperatorDatabaseEnvironment(configuration.Database.AuthTokenEnv)
+			if !urlSet || len(databaseURL) < 1 || len(databaseURL) > 2048 || len(databaseToken) > 4096 || tokenSet ||
+				!accountEnrollmentStorageAllowed(databaseURL, []byte(databaseToken)) {
+				clear(encodedToken)
+				fmt.Fprintln(stderr, "cannot construct MCP runtime")
+				return 1
+			}
+			var adapterErr error
+			accountSource, adapterErr = openOperatorAccountStatusSource(context.Background(), storage.Endpoint{URL: databaseURL})
+			if adapterErr != nil {
+				clear(encodedToken)
+				fmt.Fprintln(stderr, "cannot construct MCP runtime")
+				return 1
+			}
+			accountStatus, adapterErr = accountstatus.New(accountSource, config.CapabilityRegistry(configuration))
+			if adapterErr != nil {
+				_ = accountSource.Close()
+				clear(encodedToken)
+				fmt.Fprintln(stderr, "cannot construct MCP runtime")
+				return 1
+			}
+		}
 		var err error
 		mcpHandler, err = inboxmcp.New(inboxmcp.Options{
 			Configuration: configuration,
@@ -489,24 +548,32 @@ func runServe(args []string, configPath string, explicitConfig bool, stdout, std
 			BinaryCommit:  commit,
 			BearerToken:   encodedToken,
 			AuditOutput:   stderr,
+			AccountStatus: accountStatus,
 		})
 		clear(encodedToken)
 		if err != nil {
+			if accountSource != nil {
+				_ = accountSource.Close()
+			}
 			fmt.Fprintln(stderr, "cannot construct MCP runtime")
 			return 1
 		}
-		runtimeOptions = append(runtimeOptions, server.WithMCP(mcpHandler, mcpHandler))
+		mcpCloser = mcpHandler
+		if accountSource != nil {
+			mcpCloser = &accountStatusMCPCloser{handler: mcpHandler, source: accountSource}
+		}
+		runtimeOptions = append(runtimeOptions, server.WithMCP(mcpHandler, mcpCloser))
 	}
 	runtime, err := server.New(configuration, stderr, runtimeOptions...)
 	if err != nil {
 		if mcpHandler != nil {
-			_ = mcpHandler.Close()
+			_ = mcpCloser.Close()
 		}
 		fmt.Fprintln(stderr, "cannot construct service runtime")
 		return 1
 	}
-	if mcpHandler != nil {
-		defer mcpHandler.Close()
+	if mcpCloser != nil {
+		defer mcpCloser.Close()
 	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)

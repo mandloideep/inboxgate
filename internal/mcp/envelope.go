@@ -95,7 +95,7 @@ func classifyEnvelope(data []byte) envelopeClassification {
 	case "server/discover", "tools/list":
 		return classification
 	case "tools/call":
-		if classification.Name != systemCapabilitiesTool {
+		if classification.Name != toolAccountsList && classification.Name != toolMailSyncStatus && classification.Name != systemCapabilitiesTool {
 			return classification.withError(-32601)
 		}
 		return classification
