@@ -1,6 +1,6 @@
 # ADR 0016: Own the bounded Turso stream-close lifecycle
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-19
 - Issue: #41
 - Owners: @mandloideep
