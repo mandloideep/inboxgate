@@ -213,25 +213,37 @@ func TestListAcceptsZeroOneTenOneHundredAndOneHundredOneAndRejectsOneHundredTwoR
 }
 
 func TestListFiltersDatesAndStalePolicyWithinOneHundredRowScan(t *testing.T) {
-	policy := config.Defaults().Gate
-	stalePolicy := policy
-	stalePolicy.DirectRecipientIsCandidate = false
-	rows := make([]storage.ReviewCandidateRow, 0, 100)
-	for index := 0; index < 100; index++ {
+	stalePolicy := config.Defaults().Gate
+	currentPolicy := stalePolicy
+	currentPolicy.DirectRecipientIsCandidate = false
+	currentPolicy.SubjectCandidateTerms = []string{"subject"}
+	rows := make([]storage.ReviewCandidateRow, 0, 101)
+	for index := 0; index < 101; index++ {
 		message := reviewMessage(t, reviewAccountA, "t"+byteHex(index), "m"+byteHex(index), "Sender", "Subject", int64(index), 0)
-		decisionPolicy := policy
+		decisionPolicy := currentPolicy
 		if index%2 == 0 {
 			decisionPolicy = stalePolicy
 		}
 		rows = append(rows, storage.ReviewCandidateRow{Message: message, Decision: reviewDecision(t, message, decisionPolicy, 1000)})
 	}
 	minimum := int64(200)
-	page, err := reviewService(t, &reviewSourceStub{rows: rows}).List(context.Background(), ListRequest{InternalDateMinUnixMS: &minimum, PageSize: 10})
+	source := &reviewSourceStub{rows: rows}
+	service := reviewService(t, source, func(configuration *config.Config) { configuration.Gate = currentPolicy })
+	page, err := service.List(context.Background(), ListRequest{InternalDateMinUnixMS: &minimum, PageSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Candidates) != 0 || page.NextCursor == nil {
+	if source.listCalls.Load() != 1 || page.Candidates == nil || len(page.Candidates) != 0 || page.NextCursor == nil || len(*page.NextCursor) > MaximumCursorBytes || !strings.HasPrefix(*page.NextCursor, "igrc1.") {
 		t.Fatalf("filtered page = %#v", page)
+	}
+	continuationSource := &reviewSourceStub{}
+	continuationService := reviewService(t, continuationSource, func(configuration *config.Config) { configuration.Gate = currentPolicy })
+	if _, err := continuationService.List(context.Background(), ListRequest{InternalDateMinUnixMS: &minimum, PageSize: 10, Cursor: *page.NextCursor}); err != nil {
+		t.Fatal(err)
+	}
+	after := continuationSource.queries[0].After()
+	if continuationSource.listCalls.Load() != 1 || !after.Present || after.ThreadID() != "t"+byteHex(99) || after.MessageID() != "m"+byteHex(99) {
+		t.Fatalf("continuation after = %#v", after)
 	}
 }
 
