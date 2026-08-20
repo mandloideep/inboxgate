@@ -92,7 +92,7 @@ func TestCanonicalLinuxReleaseContractRunsPinnedSyftOverAllBinaries(t *testing.T
 	}
 	contract := string(contents)
 	for _, required := range []string{
-		"check: fmt-check tidy-check verify vet test test-fuzz test-race vuln actionlint storage-cross-build release-contract build",
+		"check: fmt-check tidy-check verify vet test test-fuzz test-race vuln actionlint turso-fork-tidy-check turso-fork-verify turso-fork-vet turso-fork-test turso-fork-test-race storage-cross-build release-contract build",
 		`if [ "$$($(GO) env GOOS)/$$($(GO) env GOARCH)" != "linux/amd64" ]`,
 		"$(GO) run ./cmd/release build-binaries",
 		"$(GO) run ./cmd/release acquire-syft",
@@ -161,6 +161,11 @@ func TestSBOMValidationRequiresCompleteExactLinkedRuntimeInventory(t *testing.T)
 		}},
 		{name: "wrong stdlib", mutate: func(document map[string]any) {
 			forEachSBOMPackage(document, "stdlib", func(pkg map[string]any) { pkg["versionInfo"] = "go1.26.5" })
+		}},
+		{name: "local replacement masquerades as upstream module", mutate: func(document map[string]any) {
+			forEachSBOMPackage(document, "turso.tech/database/tursogo-serverless", func(pkg map[string]any) {
+				pkg["versionInfo"] = "v0.0.0-20260817122138-24adc316cdc4"
+			})
 		}},
 		{name: "duplicate expected location", mutate: func(document map[string]any) {
 			duplicateFirstSBOMPackage(document, "golang.org/x/sync", nil)

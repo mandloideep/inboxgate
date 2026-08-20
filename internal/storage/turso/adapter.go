@@ -28,6 +28,7 @@ const (
 	maximumCleanupTimeout     = 10 * time.Second
 	defaultPersistenceTimeout = 30 * time.Second
 	maximumPersistenceTimeout = 2 * time.Minute
+	maximumIdleConnections    = 2
 )
 
 var (
@@ -71,8 +72,18 @@ type Adapter struct {
 // durations above thirty seconds are rejected so every ping has a short owned
 // upper bound.
 func New(options Options) (*Adapter, error) {
+	cleanupTimeout := options.CleanupTimeout
+	if cleanupTimeout == 0 {
+		cleanupTimeout = defaultCleanupTimeout
+	}
 	return newAdapter(options, func(databaseURL, token string) databaseHandle {
-		return sql.OpenDB(tursodriver.NewConnector(databaseURL, token))
+		connector, err := tursodriver.NewConnectorWithCloseTimeout(databaseURL, token, cleanupTimeout)
+		if err != nil {
+			return nil
+		}
+		database := sql.OpenDB(connector)
+		database.SetMaxIdleConns(maximumIdleConnections)
+		return &connectorDatabase{DB: database, connector: connector}
 	})
 }
 
@@ -191,6 +202,19 @@ type databaseHandle interface {
 
 type databaseFactory func(databaseURL, token string) databaseHandle
 
+type connectorDatabase struct {
+	*sql.DB
+	connector *tursodriver.Connector
+}
+
+func (d *connectorDatabase) CloseContext(ctx context.Context) error {
+	return d.connector.CloseContext(ctx)
+}
+
+func (d *connectorDatabase) sqlDatabase() *sql.DB {
+	return d.DB
+}
+
 type handle struct {
 	database           databaseHandle
 	pingTimeout        time.Duration
@@ -220,6 +244,13 @@ func (h *handle) Ping(ctx context.Context) error {
 
 func (h *handle) Close() error {
 	h.closeOnce.Do(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), h.cleanupTimeout)
+		defer cancel()
+		if database, ok := h.database.(interface{ CloseContext(context.Context) error }); ok {
+			if err := database.CloseContext(closeCtx); err != nil {
+				h.closeErr = ErrCloseFailed
+			}
+		}
 		if err := h.database.Close(); err != nil {
 			h.closeErr = ErrCloseFailed
 		}

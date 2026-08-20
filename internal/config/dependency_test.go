@@ -33,7 +33,7 @@ func TestModuleGraphContainsOnlyReviewedDirectDependencies(t *testing.T) {
 		"golang.org/x/sys v0.41.0",
 		"golang.org/x/time v0.15.0",
 		"golang.org/x/tools v0.42.0",
-		"turso.tech/database/tursogo-serverless v0.0.0-20260817122138-24adc316cdc4",
+		"turso.tech/database/tursogo-serverless v0.0.0-20260817122138-24adc316cdc4 => ./third_party/tursogo-serverless",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("module graph = %q, want %q", got, want)

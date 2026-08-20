@@ -17,6 +17,7 @@ No owner credential or provider setup is required to implement, review, merge, o
 [ADR 0012](adr/0012-deterministic-persisted-gate.md) adds one pure deterministic classifier, a strict append-only gate-decision table, typed fake and Turso persistence, and an inert evaluator under the same credential-free restriction.
 [ADR 0013](adr/0013-bounded-candidate-content.md) adds one bounded read-only Gmail content projection, fail-closed MIME, charset, and HTML processing, strict append-only candidate-content persistence, and an inert extractor under the same credential-free restriction.
 [ADR 0014](adr/0014-authenticated-stateless-mcp.md) adds authenticated stateless MCP `2026-07-28` capability inspection with one exact `system_capabilities` tool and synthetic loopback validation.
+[ADR 0016](adr/0016-own-bounded-turso-stream-close-lifecycle.md) replaces only the selected driver's stream-close lifecycle with a provenance-pinned local fork that uses caller-owned cancellation, a two-worker join, fixed adapter errors, and no new dependency or capability.
 The adapter is connected only to one-shot account enrollment and lifecycle commands after a credential-free literal-loopback endpoint check.
 The current-discovery use case, gate evaluator, and candidate-content extractor remain inert and have no command, scheduler, service, health, capability, HTTP, or MCP caller.
 They remain disconnected from service startup, health, configuration inspection, capabilities, doctor, executable synchronization, the implemented capability-only MCP route, remote database endpoints, and production credentials.
@@ -25,12 +26,13 @@ The owner accepts five unresolved driver risks for the exact selected version.
 
 - A server-provided `base_url` can change authority before a later request carries the bearer token.
 - Valid remote error text can be reflected by the driver.
-- The driver's transaction helpers and stream close use background requests, a failed pipeline sequence has uncertain terminal state, a nil rollback response cannot prove cleanup completion, and the exact driver does not validate sequence payload type or require a true autocommit observation.
+- The driver's explicit transaction helpers still use background requests, a failed pipeline sequence has uncertain terminal state, a nil rollback response cannot prove cleanup completion, and the exact driver does not validate sequence payload type or require a true autocommit observation.
+- The local fork contains stream close only by giving each close request the one caller-owned cleanup context, propagating its result, joining at most two workers, and retaining the exact terminal result for repeated close.
 - Synthetic migrations therefore require locked exact-pair ledger-prefix validation with null rejection during both application and terminal repair, a regression-resistant same-session `user_version` probe, separate durable ledger and marker verification, and forced pool discard when session state is unproven.
 - The driver owns a private HTTP client without an injectable redirect, transport, or timeout policy.
 - Successful pipeline bodies, cursor lines, rows, and individual values lack repository-owned total limits.
 
-These items remain open in the [known-risk register](known-risks.md) and are not fixed by the adapter.
+These items remain open in the [known-risk register](known-risks.md), while stream close is partially contained and explicit transaction completion remains open under `TURSO-003`.
 The encryption and credential-persistence slice uses synthetic keys and ciphertext only and requires no owner action.
 The atomic current-discovery slice uses synthetic untrusted metadata and a credential-free loopback protocol model and requires no owner action.
 The bounded Gmail discovery slice uses synthetic refresh material, synthetic account and message data, fixed loopback provider transports, and fake or credential-free literal-loopback storage and requires no owner action.

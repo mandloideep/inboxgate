@@ -466,6 +466,7 @@ internal/httpserver/
 internal/cryptobox/
 migrations/
 testdata/
+third_party/tursogo-serverless/
 docs/adr/
 ```
 
@@ -1159,8 +1160,9 @@ Use `httptest.Server` for OAuth token, Google identity, and Gmail API behavior.
 Use synthetic fixtures for messages and history pages.
 The accepted Turso adapter contract uses a no-SQL fake replacement and a credential-free literal-loopback SQL over HTTP server.
 It verifies initial endpoint policy, URL and token separation, bounded operation cancellation, fixed diagnostics, idempotent close, exact fixed parameterized account-cursor and ciphertext-credential statements, durable uniqueness, typed compare-and-swap, separate physical visibility, uncertain outcomes, session discard, no replay, and fresh reconciliation.
-The literal-loopback server exercises the exact pinned HTTP driver but models SQL durability and does not execute SQLite.
-It does not prove Turso Cloud availability, quota, latency, recovery, engine-specific behavior, same-authority handling after `base_url`, redirect rejection, successful-response limits, or bounded transaction and stream close.
+The literal-loopback server exercises the exact provenance-pinned local HTTP-driver fork but models SQL durability and does not execute SQLite.
+It proves bounded, cancelable, error-propagating, joined stream close under the adapter-owned deadline.
+It does not prove Turso Cloud availability, quota, latency, recovery, engine-specific behavior, same-authority handling after `base_url`, redirect rejection, successful-response limits, or bounded explicit transaction commit and rollback.
 Those gaps remain in the [known-risk register](known-risks.md) and must be exercised when a later issue reaches the affected behavior.
 Do not mock SQL with a third-party SQL-mocking library.
 

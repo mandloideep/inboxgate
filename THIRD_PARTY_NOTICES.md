@@ -133,6 +133,10 @@ It is provided without warranties or conditions of any kind.
 ## Turso serverless Go driver
 
 InboxGate includes `turso.tech/database/tursogo-serverless` v0.0.0-20260817122138-24adc316cdc4.
+InboxGate distributes modified local source from upstream commit `24adc316cdc4ebf93d90b94dbfda727195540497` at `third_party/tursogo-serverless`.
+The semantic modifications are limited to `driver.go` and `session.go` and make stream close bounded, context-aware, error-propagating, idempotent, and joined.
+The copied `README.md` and `encryption_header_test.go` normalize exactly four prohibited punctuation characters to plain hyphens without changing executable or test behavior.
+The machine-readable provenance and exact file hashes are recorded in `third_party/tursogo-serverless/INBOXGATE_PROVENANCE.json`.
 The following MIT license applies to that upstream module.
 
 Copyright 2024 the Turso authors
