@@ -35,6 +35,7 @@ type reviewInspectionStub struct {
 	wait        bool
 	started     chan struct{}
 	observed    chan error
+	release     chan struct{}
 	once        sync.Once
 }
 
@@ -49,6 +50,9 @@ func (service *reviewInspectionStub) List(ctx context.Context, request reviewins
 		<-ctx.Done()
 		if service.observed != nil {
 			service.observed <- ctx.Err()
+		}
+		if service.release != nil {
+			<-service.release
 		}
 		return reviewinspect.CandidatePage{}, ctx.Err()
 	}
@@ -66,6 +70,9 @@ func (service *reviewInspectionStub) GateReason(ctx context.Context, request rev
 		<-ctx.Done()
 		if service.observed != nil {
 			service.observed <- ctx.Err()
+		}
+		if service.release != nil {
+			<-service.release
 		}
 		return reviewinspect.GateReason{}, ctx.Err()
 	}
@@ -369,7 +376,46 @@ func TestReviewCancellationDeadlineAndCloseReachSource(t *testing.T) {
 					t.Fatal("source did not start within bound")
 				}
 				if action == "close" {
-					_ = handler.Close()
+					service.release = make(chan struct{})
+					closeDone := make(chan error, 1)
+					go func() { closeDone <- handler.Close() }()
+					select {
+					case observed := <-service.observed:
+						if !errors.Is(observed, context.Canceled) {
+							t.Fatalf("source context = %v", observed)
+						}
+					case <-time.After(250 * time.Millisecond):
+						t.Fatal("source did not observe close cancellation")
+					}
+					select {
+					case closeErr := <-closeDone:
+						t.Fatalf("Close returned before active source release: %v", closeErr)
+					default:
+					}
+					close(service.release)
+					select {
+					case response := <-done:
+						want := `{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"internal error"}}`
+						if response.Code != http.StatusOK || response.Body.String() != want {
+							t.Fatalf("response = %d %q", response.Code, response.Body.String())
+						}
+					case <-time.After(time.Second):
+						t.Fatal("close did not drain active response")
+					}
+					select {
+					case closeErr := <-closeDone:
+						if closeErr != nil {
+							t.Fatalf("Close() = %v", closeErr)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("Close did not finish within bound")
+					}
+					service.wait = false
+					after := perform(t, handler, reviewToolRequest(t, name, arguments))
+					if after.Code != http.StatusServiceUnavailable || after.Body.String() != "service_unavailable\n" {
+						t.Fatalf("handler admitted after close: %d %q", after.Code, after.Body.String())
+					}
+					return
 				}
 				select {
 				case response := <-done:
@@ -394,8 +440,6 @@ func TestReviewCancellationDeadlineAndCloseReachSource(t *testing.T) {
 					if after.Code != http.StatusOK || !strings.Contains(after.Body.String(), `"result"`) {
 						t.Fatalf("handler did not remain open after deadline: %d %q", after.Code, after.Body.String())
 					}
-				} else if after.Code != http.StatusServiceUnavailable || after.Body.String() != "service_unavailable\n" {
-					t.Fatalf("handler admitted after close: %d %q", after.Code, after.Body.String())
 				}
 			})
 		}

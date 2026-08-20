@@ -38,6 +38,9 @@ func FuzzReviewInspectionTursoDecoder(f *testing.F) {
 		if len(text) > 1024 {
 			return
 		}
+		if field != 255 && field >= 12 {
+			return
+		}
 		accountID := "0000000000000000000000000000000a"
 		message, err := mail.Normalize(accountID, mail.MessageInput{
 			GmailMessageID: "message", GmailThreadID: "thread", InternalDateMS: 42,
@@ -76,8 +79,34 @@ func FuzzReviewInspectionTursoDecoder(f *testing.F) {
 			}
 			return
 		}
-		if decodeErr != nil && (!reflect.DeepEqual(decodedMessage, mail.Message{}) || !reflect.DeepEqual(decodedDecision, storage.GateDecision{})) {
-			t.Fatalf("failed decode returned partial message or decision: %v", decodeErr)
+		integerField := field == 3 || field == 6 || field == 11
+		guaranteedTypeMutation := integerField && kind%3 != 1 || !integerField && kind%3 != 0
+		if guaranteedTypeMutation {
+			if decodeErr != storage.ErrPersistenceInspect || !reflect.DeepEqual(decodedMessage, mail.Message{}) || !reflect.DeepEqual(decodedDecision, storage.GateDecision{}) {
+				t.Fatalf("type mutation returned %#v %#v %v", decodedMessage, decodedDecision, decodeErr)
+			}
+			return
+		}
+		if decodeErr != nil {
+			if decodeErr != storage.ErrPersistenceInspect || !reflect.DeepEqual(decodedMessage, mail.Message{}) || !reflect.DeepEqual(decodedDecision, storage.GateDecision{}) {
+				t.Fatalf("failed decode returned partial or non-fixed result: %#v %#v %v", decodedMessage, decodedDecision, decodeErr)
+			}
+			return
+		}
+		if !decodedMessage.Valid() || !decodedDecision.Valid() || decodedMessage.MetadataHash() != decodedDecision.SourceMetadataHash() {
+			t.Fatalf("successful decode is internally invalid: %#v %#v", decodedMessage, decodedDecision)
+		}
+		inspection, inspectionErr := storage.NewCurrentGateInspection(decodedMessage, decodedDecision)
+		if inspectionErr != nil || !inspection.Valid() {
+			t.Fatalf("successful decode cannot form inspection: %#v %v", inspection, inspectionErr)
+		}
+		row, rowErr := storage.NewReviewCandidateRow(decodedMessage, decodedDecision)
+		if decodedDecision.Outcome() == gate.OutcomeReviewCandidate || decodedDecision.Outcome() == gate.OutcomeUrgentReviewCandidate {
+			if rowErr != nil || !row.Valid() {
+				t.Fatalf("candidate decode cannot form row: %#v %v", row, rowErr)
+			}
+		} else if rowErr == nil {
+			t.Fatalf("noncandidate decode formed review row: %#v", row)
 		}
 	})
 }

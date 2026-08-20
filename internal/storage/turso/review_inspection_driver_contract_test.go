@@ -39,6 +39,10 @@ func compileReviewInspectionExactDriverContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	standardQuery, err := storage.NewReviewCandidateQuery([]storage.AccountID{accountID, secondAccountID}, storage.ReviewUrgencyStandard, 10, after, storage.MaximumReviewSourceRows)
+	if err != nil {
+		t.Fatal(err)
+	}
 	remote := &handle{migrationAllowed: false}
 	if _, err := remote.ListReviewCandidates(context.Background(), query); !errors.Is(err, storage.ErrPersistenceNotAllowed) {
 		t.Fatalf("credentialed remote list error = %v", err)
@@ -65,6 +69,17 @@ func compileReviewInspectionExactDriverContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision, err := storage.NewGateDecision(classification, 43)
+	if err != nil {
+		t.Fatal(err)
+	}
+	urgentPolicy := config.Defaults().Gate
+	urgentPolicy.SenderAllowDomains = []string{"example.test"}
+	urgentPolicy.SubjectUrgentTerms = []string{"subject"}
+	urgentClassification, err := gate.Classify(message, urgentPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	urgentDecision, err := storage.NewGateDecision(urgentClassification, 43)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +174,7 @@ func compileReviewInspectionExactDriverContract(t *testing.T) {
 		}
 		_ = encoder.Encode(map[string]any{"type": "step_begin", "step": 0, "cols": columns})
 		selectedMessage := message
-		selectedDecision := decision
+		selectedDecision := urgentDecision
 		if call == 2 {
 			selectedDecision = reasonDecision
 		} else if call == 3 {
@@ -171,6 +186,8 @@ func compileReviewInspectionExactDriverContract(t *testing.T) {
 		} else if call == 5 {
 			selectedMessage = differentReasonMessage
 			selectedDecision = differentReasonDecision
+		} else if call == 7 {
+			selectedDecision = decision
 		}
 		row := []any{
 			textProtocolValue(selectedMessage.AccountID()), textProtocolValue(selectedMessage.GmailMessageID()), textProtocolValue(selectedMessage.GmailThreadID()), integerProtocolValue(int(selectedMessage.MetadataVersion())),
@@ -209,7 +226,13 @@ func compileReviewInspectionExactDriverContract(t *testing.T) {
 	if inspection, err := handle.GetCurrentGateInspection(context.Background(), accountID, message.GmailMessageID()); !errors.Is(err, storage.ErrPersistenceInspect) || !reflect.DeepEqual(inspection, storage.CurrentGateInspection{}) {
 		t.Fatalf("mismatched-reason exact-driver inspection=%#v error=%v", inspection, err)
 	}
-	if cursorCalls.Load() != 5 {
+	if rows, err := handle.ListReviewCandidates(context.Background(), standardQuery); err != storage.ErrPersistenceInspect || rows != nil {
+		t.Fatalf("standard urgency mismatch rows=%#v error=%v", rows, err)
+	}
+	if rows, err := handle.ListReviewCandidates(context.Background(), query); err != storage.ErrPersistenceInspect || rows != nil {
+		t.Fatalf("urgent urgency mismatch rows=%#v error=%v", rows, err)
+	}
+	if cursorCalls.Load() != 7 {
 		t.Fatalf("exact-driver cursor calls = %d", cursorCalls.Load())
 	}
 }
@@ -267,12 +290,12 @@ func TestReviewInspectionReadsFailClosedWithoutRetryOnProtocolFailures(t *testin
 				}
 				if read == "list" {
 					rows, readErr := handle.ListReviewCandidates(context.Background(), query)
-					if !errors.Is(readErr, storage.ErrPersistenceInspect) || rows != nil {
+					if readErr != storage.ErrPersistenceInspect || rows != nil {
 						t.Errorf("ListReviewCandidates() = %#v, %v", rows, readErr)
 					}
 				} else {
 					inspection, readErr := handle.GetCurrentGateInspection(context.Background(), accountID, "message")
-					if !errors.Is(readErr, storage.ErrPersistenceInspect) || !reflect.DeepEqual(inspection, storage.CurrentGateInspection{}) {
+					if readErr != storage.ErrPersistenceInspect || !reflect.DeepEqual(inspection, storage.CurrentGateInspection{}) {
 						t.Errorf("GetCurrentGateInspection() = %#v, %v", inspection, readErr)
 					}
 				}

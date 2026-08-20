@@ -335,7 +335,8 @@ func TestCursorRejectsEveryPayloadMutationAndWrongKeyBeforeSource(t *testing.T) 
 
 func TestCursorVersionTwoBytesMatchIndependentLiteralVector(t *testing.T) {
 	row := reviewRow(t, reviewAccountA, "thread", "message", 42)
-	page, err := reviewService(t, &reviewSourceStub{rows: []storage.ReviewCandidateRow{row}}).List(context.Background(), ListRequest{PageSize: 1})
+	service := reviewService(t, &reviewSourceStub{rows: []storage.ReviewCandidateRow{row}})
+	page, err := service.List(context.Background(), ListRequest{PageSize: 1})
 	if err != nil || page.NextCursor == nil {
 		t.Fatalf("List() = %#v, %v", page, err)
 	}
@@ -343,7 +344,11 @@ func TestCursorVersionTwoBytesMatchIndependentLiteralVector(t *testing.T) {
 	prefix = append(prefix, "thread"...)
 	prefix = append(prefix, 7)
 	prefix = append(prefix, "message"...)
-	binding := `{"domain":"inboxgate/review-cursor/v2","version":2,"account_ids":null,"all_accounts":true,"urgency":"all","minimum":null,"maximum":null,"page_size":1,"policy":{"Version":1,"ExcludedLabels":["SPAM","TRASH"],"SuppressGmailCategories":["CATEGORY_PROMOTIONS","CATEGORY_SOCIAL"],"DirectRecipientIsCandidate":true,"MailingListIsBulkSignal":true,"SenderAllowDomains":[],"SenderBlockDomains":[],"SubjectCandidateTerms":[],"SubjectUrgentTerms":[]}}`
+	binding := `{"domain":"inboxgate/review-cursor/v2","output_version":1,"cursor_format_version":2,"account_ids":null,"all_accounts":true,"urgency":"all","minimum":null,"maximum":null,"page_size":1,"policy":{"Version":1,"ExcludedLabels":["SPAM","TRASH"],"SuppressGmailCategories":["CATEGORY_PROMOTIONS","CATEGORY_SOCIAL"],"DirectRecipientIsCandidate":true,"MailingListIsBulkSignal":true,"SenderAllowDomains":[],"SenderBlockDomains":[],"SubjectCandidateTerms":[],"SubjectUrgentTerms":[]}}`
+	actualBinding, err := service.requestBinding(ListRequest{PageSize: 1}, storage.ReviewUrgencyAll, 1)
+	if err != nil || string(actualBinding) != binding {
+		t.Fatalf("binding = %q, %v, want independent literal %q", actualBinding, err, binding)
+	}
 	key := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte("inboxgate/review-cursor/v2"))
@@ -355,6 +360,14 @@ func TestCursorVersionTwoBytesMatchIndependentLiteralVector(t *testing.T) {
 	want := "igrc2." + base64.RawURLEncoding.EncodeToString(wantPayload)
 	if *page.NextCursor != want {
 		t.Fatalf("cursor = %q, want independent literal %q", *page.NextCursor, want)
+	}
+	for _, mutation := range []string{
+		strings.Replace(binding, `"output_version":1`, `"output_version":2`, 1),
+		strings.Replace(binding, `"cursor_format_version":2`, `"cursor_format_version":3`, 1),
+	} {
+		if _, err := service.decodeCursor(*page.NextCursor, []byte(mutation)); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("mutated version binding error = %v", err)
+		}
 	}
 }
 
