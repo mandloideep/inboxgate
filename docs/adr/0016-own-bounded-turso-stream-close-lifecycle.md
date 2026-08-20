@@ -51,7 +51,7 @@ No executable token, assertion, fixture value, protocol behavior, or test behavi
 ### Accepted independent-review evidence amendment
 
 Independent correctness, security, and test review required additional evidence without changing the accepted dependency, capability boundary, or two-file semantic allowlist.
-The review-red commit is `f38eb7d77a78f9cf02a381a7a1459439e53cb2b1`.
+The review-red commit is `f38eb7ddd82f2c87a82b05be5c8586ccdda8663e`.
 It requires the nested fork fixture to bound and validate the exact close body before blocking, register cleanup-only release paths before server shutdown, positively observe request-context cancellation, preserve the exact terminal error through later database close, and prove no replay.
 It also requires 32 synchronized connector close callers plus a sequential repeat to converge on one terminal result, exact acceptance of the ten-second maximum, strict independently pinned provenance evidence, and mandatory nested-module tidy, verify, vet, test, and race gates.
 Nested fork tests must fail closed before running if either `TURSO_DATABASE_URL` or `TURSO_AUTH_TOKEN` is present, and every repository-owned invocation must explicitly remove both variables.
