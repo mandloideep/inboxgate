@@ -10,6 +10,8 @@ require (
 	turso.tech/database/tursogo-serverless v0.0.0-20260817122138-24adc316cdc4
 )
 
+replace turso.tech/database/tursogo-serverless => ./third_party/tursogo-serverless
+
 require golang.org/x/oauth2 v0.36.0
 
 require (

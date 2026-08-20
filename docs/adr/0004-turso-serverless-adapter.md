@@ -5,6 +5,7 @@
 - Issue: #18
 - Owners: @mandloideep
 - Supersedes: the persistence-blocking decision in [ADR 0003](0003-turso-serverless-driver-contract.md) for the newer version selected here
+- Superseded in part: [ADR 0016](0016-own-bounded-turso-stream-close-lifecycle.md) replaces only the accepted stream-close behavior with a provenance-pinned maintained local fork
 
 ## Context and need
 

@@ -9,7 +9,7 @@ BUILD_DIR := $(CURDIR)/.build
 
 export GOCACHE := $(CURDIR)/.cache/go-build
 
-.PHONY: actionlint build check fmt-check help release-contract storage-cross-build test test-fuzz test-race tidy-check verify vet vuln
+.PHONY: actionlint build check fmt-check help release-contract storage-cross-build test test-fuzz test-race tidy-check turso-fork-test turso-fork-test-race turso-fork-tidy-check turso-fork-verify turso-fork-vet verify vet vuln
 
 help:
 	@printf '%s\n' 'Targets:'
@@ -20,6 +20,8 @@ help:
 	@printf '%s\n' '  test-race   Run tests with the race detector'
 	@printf '%s\n' '  vuln        Scan reachable Go code for known vulnerabilities'
 	@printf '%s\n' '  actionlint  Validate every GitHub Actions workflow'
+	@printf '%s\n' '  turso-fork-test  Run the credential-free nested Turso fork tests'
+	@printf '%s\n' '  turso-fork-test-race  Run the credential-free nested Turso fork tests with the race detector'
 	@printf '%s\n' '  storage-cross-build  Compile the Turso adapter for every release target with CGO disabled'
 	@printf '%s\n' '  release-contract  Exercise pinned release construction and SBOM generation on Linux amd64'
 
@@ -71,6 +73,21 @@ $(ACTIONLINT):
 actionlint: $(ACTIONLINT)
 	$(ACTIONLINT) $$(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
 
+turso-fork-tidy-check:
+	@unset TURSO_DATABASE_URL TURSO_AUTH_TOKEN; $(GO) -C third_party/tursogo-serverless mod tidy -diff
+
+turso-fork-verify:
+	@unset TURSO_DATABASE_URL TURSO_AUTH_TOKEN; $(GO) -C third_party/tursogo-serverless mod verify
+
+turso-fork-vet:
+	@unset TURSO_DATABASE_URL TURSO_AUTH_TOKEN; $(GO) -C third_party/tursogo-serverless vet ./...
+
+turso-fork-test:
+	@unset TURSO_DATABASE_URL TURSO_AUTH_TOKEN; $(GO) -C third_party/tursogo-serverless test ./...
+
+turso-fork-test-race:
+	@unset TURSO_DATABASE_URL TURSO_AUTH_TOKEN; $(GO) -C third_party/tursogo-serverless test -race ./...
+
 storage-cross-build:
 	@set -eu; \
 	target_count=0; \
@@ -112,4 +129,4 @@ build:
 	mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(BUILD_DIR)/inboxgate ./cmd/inboxgate
 
-check: fmt-check tidy-check verify vet test test-fuzz test-race vuln actionlint storage-cross-build release-contract build
+check: fmt-check tidy-check verify vet test test-fuzz test-race vuln actionlint turso-fork-tidy-check turso-fork-verify turso-fork-vet turso-fork-test turso-fork-test-race storage-cross-build release-contract build

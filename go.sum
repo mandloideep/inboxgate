@@ -24,5 +24,3 @@ golang.org/x/time v0.15.0 h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U=
 golang.org/x/time v0.15.0/go.mod h1:Y4YMaQmXwGQZoFaVFk4YpCt4FLQMYKZe9oeV/f4MSno=
 golang.org/x/tools v0.42.0 h1:uNgphsn75Tdz5Ji2q36v/nsFSfR/9BRFvqhGBaJGd5k=
 golang.org/x/tools v0.42.0/go.mod h1:Ma6lCIwGZvHK6XtgbswSoWroEkhugApmsXyrUmBhfr0=
-turso.tech/database/tursogo-serverless v0.0.0-20260817122138-24adc316cdc4 h1:Fnxwfn492a+9kTegF2G7QUT1aF0Vfjz0dMrNO+HmthA=
-turso.tech/database/tursogo-serverless v0.0.0-20260817122138-24adc316cdc4/go.mod h1:KWrz0BzLKiXUkLmM5HXyr/gWA8ySNZexfW0NV0GGk0A=
