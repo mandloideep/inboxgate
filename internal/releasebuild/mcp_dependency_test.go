@@ -92,7 +92,7 @@ func TestCanonicalLinuxReleaseContractRunsPinnedSyftOverAllBinaries(t *testing.T
 	}
 	contract := string(contents)
 	for _, required := range []string{
-		"check: fmt-check tidy-check verify vet test test-fuzz test-race vuln actionlint storage-cross-build release-contract build",
+		"check: fmt-check tidy-check verify vet test test-fuzz test-race vuln actionlint turso-fork-tidy-check turso-fork-verify turso-fork-vet turso-fork-test turso-fork-test-race storage-cross-build release-contract build",
 		`if [ "$$($(GO) env GOOS)/$$($(GO) env GOARCH)" != "linux/amd64" ]`,
 		"$(GO) run ./cmd/release build-binaries",
 		"$(GO) run ./cmd/release acquire-syft",

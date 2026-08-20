@@ -71,6 +71,9 @@ func newSession(url, authToken, remoteEncryptionKey string) *session {
 }
 
 func newSessionTransport() *http.Transport {
+	if transport, ok := http.DefaultTransport.(*http.Transport); ok && transport != nil {
+		return transport.Clone()
+	}
 	dialer := &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,

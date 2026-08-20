@@ -57,7 +57,7 @@ It also requires 32 synchronized connector close callers plus a sequential repea
 Nested fork tests must fail closed before running if either `TURSO_DATABASE_URL` or `TURSO_AUTH_TOKEN` is present, and every repository-owned invocation must explicitly remove both variables.
 
 Review also found that calling `CloseIdleConnections` on a client with a nil transport can mutate the process-global default transport.
-Within the accepted `session.go` semantic scope, every session will instead construct and retain its own standard-library transport using the same proxy, dial, HTTP/2, idle, TLS-handshake, and expect-continue defaults previously inherited from `http.DefaultTransport`.
+Within the accepted `session.go` semantic scope, every session will instead clone and retain the current standard-library default transport, or construct the same standard defaults when the process default is not a standard-library transport.
 Stream close will close idle connections only on that owned transport.
 This does not add transport injection, redirect control, proxy selection, a new endpoint, or arbitrary network authority, and it does not close `TURSO-004`.
 
@@ -82,7 +82,7 @@ Repeated or concurrent closes will wait for or reuse the first terminal result a
 This bounds `database/sql` pool eviction even though `driver.Conn.Close` cannot accept a caller context.
 
 `session.go` will change only session transport ownership and `close()` to `close(context.Context) error`.
-Each session will use an owned standard-library transport with the same policy defaults previously inherited from the process-global default transport.
+Each session will use an owned standard-library transport cloned from the current standard-library default, with the same policy defaults as the fallback when the process default cannot be cloned.
 It will pass that context to the existing single fixed close pipeline, validate the one expected close result, return transport, status, decoding, or protocol failure, reset the stream exactly once, and close idle transport connections before returning.
 It will never replay a failed or uncertain close.
 It will send no request when the session has no baton.
