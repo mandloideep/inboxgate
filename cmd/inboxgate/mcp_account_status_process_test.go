@@ -79,12 +79,14 @@ func TestOperatorServeRequiresCredentialFreeLiteralLoopbackStorageBeforeBind(t *
 	t.Cleanup(func() { lookupMCPEnvironment = originalLookup })
 
 	invalid := []struct {
-		url, token string
-		setURL     bool
+		url, token    string
+		setURL        bool
+		setEmptyToken bool
 	}{
 		{setURL: false},
 		{url: "https://db.invalid", setURL: true},
 		{url: "http://127.0.0.1:8080", token: "synthetic-token", setURL: true},
+		{url: "http://127.0.0.1:8080", setURL: true, setEmptyToken: true},
 		{url: "http://localhost:8080", setURL: true},
 		{url: "http://192.0.2.10:8080", setURL: true},
 	}
@@ -95,7 +97,7 @@ func TestOperatorServeRequiresCredentialFreeLiteralLoopbackStorageBeforeBind(t *
 			} else {
 				_ = os.Unsetenv("SYNTHETIC_OPERATOR_DATABASE_URL")
 			}
-			if test.token == "" {
+			if test.token == "" && !test.setEmptyToken {
 				_ = os.Unsetenv("SYNTHETIC_OPERATOR_DATABASE_TOKEN")
 			} else {
 				t.Setenv("SYNTHETIC_OPERATOR_DATABASE_TOKEN", test.token)
